@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 
 use crate::{ApplyEvent, Event, Snapshot};
 
-use super::{Checkpoint, index_before, ContimeKey};
+use crate::{Checkpoint, index_before, ContimeKey};
 
 #[inline(always)]
 pub fn apply_event_in_place<S: Snapshot>(
@@ -11,11 +11,12 @@ pub fn apply_event_in_place<S: Snapshot>(
     ordered_checkpoints: &mut VecDeque<Checkpoint<S>>, 
     ordered_events: &mut VecDeque<S::Event>,
     checkpoint_interval: usize,
-){
+) -> isize {
+
     let event_insert_index = index_before(ordered_events, ContimeKey { id: new_event.id(), time: new_event.time() }, |event: &S::Event| ContimeKey::from_event(event)).map_or(0, |index| index + 1);
 
     if event_insert_index < ordered_events.len() && ordered_events[event_insert_index].id() == new_event.id() {
-        return;
+        return 0;
     }
 
     let mut checkpoint_index = index_before(ordered_checkpoints, ContimeKey { id: new_event.snapshot_id(), time: new_event.time() }, |checkpoint: &Checkpoint<S>| ContimeKey::from_snapshot(&checkpoint.snapshot)).unwrap_or(1);
@@ -31,18 +32,17 @@ pub fn apply_event_in_place<S: Snapshot>(
     let (first, second) = ordered_events.as_slices();
     let first_index = min(ordered_checkpoints[checkpoint_index].next_event_index, first.len());
     let second_index = ordered_checkpoints[checkpoint_index].next_event_index.saturating_sub(first.len());
-    
+
     for event in &first[first_index..] {
         if ordered_checkpoints[checkpoint_index].event_count >= checkpoint_interval {
             if checkpoint_index+1 == ordered_checkpoints.len() {
                 ordered_checkpoints.push_back(ordered_checkpoints[checkpoint_index].clone());    
-                checkpoint_index += 1;
-                ordered_checkpoints[checkpoint_index].event_count = 0;
             }else{
                 ordered_checkpoints[checkpoint_index+1] = ordered_checkpoints[checkpoint_index].clone(); 
-                checkpoint_index += 1;
-                ordered_checkpoints[checkpoint_index].event_count = 0;
             }
+
+            checkpoint_index += 1;
+            ordered_checkpoints[checkpoint_index].event_count = 0;
         }
 
         event.apply_to(&mut ordered_checkpoints[checkpoint_index].snapshot);
@@ -56,13 +56,12 @@ pub fn apply_event_in_place<S: Snapshot>(
         if ordered_checkpoints[checkpoint_index].event_count >= checkpoint_interval {
             if checkpoint_index+1 == ordered_checkpoints.len() {
                 ordered_checkpoints.push_back(ordered_checkpoints[checkpoint_index].clone());    
-                checkpoint_index += 1;
-                ordered_checkpoints[checkpoint_index].event_count = 0;
             }else{
                 ordered_checkpoints[checkpoint_index+1] = ordered_checkpoints[checkpoint_index].clone(); 
-                checkpoint_index += 1;
-                ordered_checkpoints[checkpoint_index].event_count = 0;
             }
+            
+            checkpoint_index += 1;
+            ordered_checkpoints[checkpoint_index].event_count = 0;
         }
 
         event.apply_to(&mut ordered_checkpoints[checkpoint_index].snapshot);
@@ -71,6 +70,8 @@ pub fn apply_event_in_place<S: Snapshot>(
         ordered_checkpoints[checkpoint_index].event_count += 1;
         ordered_checkpoints[checkpoint_index].next_event_index += 1;
     }    
+
+    0
 }
 
 #[cfg(test)]

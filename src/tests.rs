@@ -26,9 +26,13 @@ impl Snapshot for TestSnapshot {
     fn set_time(&mut self, time: i64) {
         self.time = time;
     }
+
+    fn conservative_size(&self) -> usize {
+        16 + 8 + 4 + (self.items.len() * 2)
+    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum TestEvent {
     Positive(EventId, Time, SnapshotId, u16),
     Negative(EventId, Time, SnapshotId, u16),
@@ -47,6 +51,10 @@ impl Event for TestEvent {
             Self::Negative(_snapshot_id, time, _event_id, _value) => *time,
         }
     }
+
+    fn conservative_size(&self) -> usize { 
+        16 + 8 + 16 + 2
+    }    
 }
 
 impl ApplyEvent<TestSnapshot> for TestEvent {
@@ -57,20 +65,27 @@ impl ApplyEvent<TestSnapshot> for TestEvent {
         }
     }
 
-    fn apply_to(&self, snapshot: &mut TestSnapshot) {
-        if self.snapshot_id() != snapshot.id {
-            return;
-        }
-
+    fn apply_to(&self, snapshot: &mut TestSnapshot) -> isize {
         match self {
             Self::Positive(_snapshot_id, _time, _event_id, value) => {
                 snapshot.items.push(*value as i16);
                 snapshot.sum += *value as i32;
+
+                2
             }
             Self::Negative(_snapshot_id, _time, _event_id, value) => {
                 snapshot.items.push(-(*value as i16));
                 snapshot.sum -= *value as i32;
+
+                2
             }
+        }
+    }
+    
+    fn conservative_apply_size_delta(&self) -> isize {
+        match self {
+            Self::Positive(..) => 2,
+            Self::Negative(..) => 2, 
         }
     }
 }

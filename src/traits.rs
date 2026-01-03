@@ -1,10 +1,9 @@
 use std::fmt::Debug;
 
-// we're going to create a composite ourselves, because that can be used for both snapshots and events
-// if we depend on a key provided by the user it won't work cleanly for snapshots
 pub trait Event: Send + Sync + Debug {
     fn id(&self) -> u128;
     fn time(&self) -> i64;
+    fn conservative_size(&self) -> usize;
 }
 
 pub trait ApplyEvent<S>: Event + Debug
@@ -12,7 +11,8 @@ where
     S: Snapshot,
 {
     fn snapshot_id(&self) -> u128;
-    fn apply_to(&self, snapshot: &mut S);
+    fn conservative_apply_size_delta(&self) -> isize;
+    fn apply_to(&self, snapshot: &mut S) -> isize;   
 }
 
 pub trait Snapshot: Default + Send + Sync + Clone + Debug + PartialEq + Eq {
@@ -21,4 +21,5 @@ pub trait Snapshot: Default + Send + Sync + Clone + Debug + PartialEq + Eq {
     fn id(&self) -> u128;
     fn time(&self) -> i64;
     fn set_time(&mut self, time: i64);
+    fn conservative_size(&self) -> usize;
 }
