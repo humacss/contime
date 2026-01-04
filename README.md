@@ -16,7 +16,7 @@ And you need to answer one question instantly, from any async task:
 
 ## Continuous Time Queries
 
-`contime` is a tiny (~450 LOC target), single-dependency engine that turns an unreliable stream of events + occasional snapshots into a true continuous-time query interface:
+`contime` is a tiny (~500 LOC target), single-dependency engine that turns an unreliable stream of events + occasional snapshots into a true continuous-time query interface:
 
 ```text
 let (snapshot, update_rx) = state.at(snapshot_id, time);
@@ -45,12 +45,6 @@ That’s it.
 ### Current status
 
 Work in progress — being extracted from a high-throughput game server.
-
-Aiming for only one dependency:
-
-```toml
-tokio = { version = "1.37", features = ["rt", "sync", "time"] }
-```
 
 ### License
 

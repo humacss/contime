@@ -3,7 +3,23 @@ name = "contime"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourname/contime"
+description = "Continuous-time reconciliation engine for unreliable event streams with O(log N) historical queries"
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime"
+readme = "README.md"
+categories = ["game-development", "concurrency"]
+keywords = ["reconciliation", "event-sourcing", "snapshot", "concurrency"]
+authors = ["humacss"]
 
 [dependencies]
-tokio = { version = "1.37", features = ["rt", "time", "sync"] }
+flume = "0.12.0"
+fxhash = "0.2.1"
+
+[dev-dependencies]
+rstest = "0.26.1"
+criterion = { version = "0.5", features = ["html_reports"] }
+pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
+
+[[bench]]
+name = "main"
+harness = false
