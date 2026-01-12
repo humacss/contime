@@ -52,6 +52,7 @@ impl<SL: SnapshotLanes, EL: EventLanes<SL>> Drop for Worker<SL, EL>
     }
 }
 
+
 impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static + std::marker::Send> Worker<SL, EL>
 {
     pub fn new(memory_budget: usize) -> Self {

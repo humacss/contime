@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 pub use crate::{Event, Snapshot};
 
 #[derive(Clone, PartialEq, PartialOrd)]
@@ -8,6 +9,7 @@ pub struct ContimeKey {
 }
 
 impl ContimeKey {
+
     pub fn from_event<E: Event>(event: &Arc<E>) -> ContimeKey{
         ContimeKey { id: event.id(), time: event.time() }
     }

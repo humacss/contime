@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 
-
 pub trait Snapshot: Send + Sync + Clone + Debug + PartialEq + Eq {
     type Event: Event + ApplyEvent<Self>;
 

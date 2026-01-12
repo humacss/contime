@@ -22,5 +22,5 @@ criterion = { version = "0.5", features = ["html_reports"] }
 pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
 
 [[bench]]
-name = "apply"
+name = "main"
 harness = false
