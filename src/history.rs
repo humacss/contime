@@ -1,18 +1,22 @@
+use std::cmp::{min};
+use std::sync::Arc;
 use std::collections::VecDeque;
 
-use crate::{ApplyEvent, Snapshot};
+use flume::{bounded, Sender, Receiver};
+
+use crate::{ApplyEvent, Snapshot, index_before, indexes_between, ContimeKey, Event};
 
 use super::{apply_event_in_place};
 
 pub trait Deps: Default {
-    fn apply_event_in_place<S: Snapshot>(&self, new_event: S::Event, ordered_checkpoints: &mut VecDeque<Checkpoint<S>>, ordered_events: &mut VecDeque<S::Event>,checkpoint_interval: usize) -> isize;
+    fn apply_event_in_place<S: Snapshot>(&self, new_event: Arc<S::Event>, ordered_checkpoints: &mut VecDeque<Checkpoint<S>>, ordered_events: &mut VecDeque<Arc<S::Event>>,checkpoint_interval: usize) -> isize;
 }
 
 #[derive(Default)]
 pub struct DefDeps;
 
 impl Deps for DefDeps {
-    fn apply_event_in_place<S: Snapshot>(&self, new_event: S::Event, ordered_checkpoints: &mut VecDeque<Checkpoint<S>>, ordered_events: &mut VecDeque<S::Event>,checkpoint_interval: usize) -> isize { 
+    fn apply_event_in_place<S: Snapshot>(&self, new_event: Arc<S::Event>, ordered_checkpoints: &mut VecDeque<Checkpoint<S>>, ordered_events: &mut VecDeque<Arc<S::Event>>,checkpoint_interval: usize) -> isize { 
         apply_event_in_place(new_event, ordered_checkpoints, ordered_events, checkpoint_interval) 
     }
 }
@@ -46,8 +50,11 @@ where
 {
     pub snapshot_id: SnapshotId,
     pub ordered_checkpoints: VecDeque<Checkpoint<S>>,
-    pub ordered_events: VecDeque<S::Event>,
+    pub ordered_events: VecDeque<Arc<S::Event>>,
     pub checkpoint_interval: usize,
+
+    snapshot_tx: Sender<S>,
+    snapshot_rx: Receiver<S>,
 
     deps: D,
 }
@@ -59,19 +66,26 @@ where
     S: Snapshot + 'static,
     D: Deps,
 {
-    pub fn new(snapshot_id: SnapshotId) -> Self {
+    pub fn new(snapshot: S) -> Self {
         let mut ordered_checkpoints = VecDeque::new();
         let ordered_events = VecDeque::new(); 
+        let (snapshot_tx, snapshot_rx) = bounded(1000);
 
-        ordered_checkpoints.push_back(Checkpoint { snapshot: S::default(), next_event_index: 0, event_count: CHECKPOINT_INTERVAL });
+        ordered_checkpoints.push_back(Checkpoint { snapshot: snapshot.clone(), next_event_index: 0, event_count: CHECKPOINT_INTERVAL });
         ordered_checkpoints[0].snapshot.set_time(0);
 
-        ordered_checkpoints.push_back(Checkpoint { snapshot: S::default(), next_event_index: 0, event_count: 0 });
+        ordered_checkpoints.push_back(Checkpoint { snapshot: snapshot.clone(), next_event_index: 0, event_count: 0 });
         
-        Self { snapshot_id, ordered_checkpoints, ordered_events, checkpoint_interval: CHECKPOINT_INTERVAL, deps: D::default() }
+        Self { snapshot_tx, snapshot_rx, snapshot_id: snapshot.id(), ordered_checkpoints, ordered_events, checkpoint_interval: CHECKPOINT_INTERVAL, deps: D::default() }
     }
 
-    pub fn apply_event(&mut self, event: S::Event) -> isize {
+    pub fn advance(&self, _time: i64) -> isize {
+        // drop old stuff
+        // notify subscribers
+        0
+    }
+
+    pub fn apply_event(&mut self, event: Arc<S::Event>) -> isize {
         if event.snapshot_id() != self.snapshot_id {
             return 0;
         }
@@ -82,6 +96,27 @@ where
             &mut self.ordered_events,
             self.checkpoint_interval,
         );
+    }
+
+    pub fn snapshot_at(&self, time: i64) -> (S, Receiver<S>) {
+        let checkpoint_index = index_before(&self.ordered_checkpoints, ContimeKey { id: self.snapshot_id, time }, |checkpoint: &Checkpoint<S>| ContimeKey::from_snapshot(&checkpoint.snapshot)).unwrap_or(1);
+
+        let mut snapshot = self.ordered_checkpoints[checkpoint_index].snapshot.clone();
+        let (start_event_index, end_event_index) = indexes_between(&self.ordered_events, ContimeKey { id: self.snapshot_id, time: snapshot.time() }, ContimeKey { id: self.snapshot_id, time }, |event| ContimeKey { id: event.id(), time: event.time() });
+
+        let (first, second) = self.ordered_events.as_slices();
+        let first_index = min(start_event_index, first.len());
+        let second_index = end_event_index.saturating_sub(first.len());
+
+        for event in &first[first_index..] {
+            event.apply_to(&mut snapshot);
+        }
+
+        for event in &second[..second_index] {
+            event.apply_to(&mut snapshot);
+        }
+
+        (snapshot, self.snapshot_rx.clone())
     }
 }
 
@@ -111,7 +146,7 @@ mod tests {
             new_event: TestEvent,
             snapshot_id: SnapshotId,
             ordered_checkpoints: VecDeque<Checkpoint<TestSnapshot>>,
-            ordered_events: VecDeque<TestEvent>,
+            ordered_events: VecDeque<Arc<TestEvent>>,
             checkpoint_interval: usize,
             bytes_delta: isize,
         }
@@ -131,7 +166,7 @@ mod tests {
 
         impl Deps for TestDeps
          {
-            fn apply_event_in_place<S: Snapshot>(&self, new_event: S::Event, ordered_checkpoints: &mut VecDeque<Checkpoint<S>>, ordered_events: &mut VecDeque<S::Event>,checkpoint_interval: usize) -> isize
+            fn apply_event_in_place<S: Snapshot>(&self, new_event: Arc<S::Event>, ordered_checkpoints: &mut VecDeque<Checkpoint<S>>, ordered_events: &mut VecDeque<Arc<S::Event>>,checkpoint_interval: usize) -> isize
             {
                 assert_eq!(self.new_event.id(), new_event.id(), "wrong new_event input");
 
@@ -153,9 +188,12 @@ mod tests {
             }
         }
 
-        let mut history = LocalSnapshotHistory::<TestSnapshot, TestDeps>::new(snapshot_id);
+        let mut snapshot = TestSnapshot::default();
+        snapshot.id = snapshot_id;
+
+        let mut history = LocalSnapshotHistory::<TestSnapshot, TestDeps>::new(snapshot);
         history.ordered_checkpoints = checkpoints.into_iter().map(|time| Checkpoint::<TestSnapshot>::new(TestSnapshot { id: snapshot_id, time, items: vec![], sum: 0 } )).collect();
-        history.ordered_events = events.into_iter().map(|(id, time)| TestEvent::Positive(id, time, snapshot_id, 1) ).collect();
+        history.ordered_events = events.into_iter().map(|(id, time)| Arc::new(TestEvent::Positive(id, time, snapshot_id, 1)) ).collect();
         history.checkpoint_interval = checkpoint_interval;
 
         let new_event = TestEvent::Positive(event.0, 0, event.1, 1);
@@ -167,7 +205,7 @@ mod tests {
         history.deps.checkpoint_interval = history.checkpoint_interval;
         history.deps.bytes_delta = bytes_delta;
         
-        let actual = history.apply_event(new_event);
+        let actual = history.apply_event(new_event.into());
 
         assert_eq!(expected, actual, "wrong bytes_delta output");
     }

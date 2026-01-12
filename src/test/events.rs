@@ -1,36 +1,4 @@
-use crate::{ApplyEvent, Event, Snapshot};
-
-type EventId = u128;
-type SnapshotId = u128;
-type Time = i64;
-
-#[derive(Clone, Default, Debug, PartialEq, Eq)]
-pub struct TestSnapshot {
-    pub id: u128,
-    pub time: i64,
-
-    pub items: Vec<i16>,
-    pub sum: i32,
-}
-
-impl Snapshot for TestSnapshot {
-    type Event = TestEvent;
-
-    fn id(&self) -> u128 {
-        self.id
-    }
-    fn time(&self) -> i64 {
-        self.time
-    }
-
-    fn set_time(&mut self, time: i64) {
-        self.time = time;
-    }
-
-    fn conservative_size(&self) -> usize {
-        16 + 8 + 4 + (self.items.len() * 2)
-    }
-}
+use crate::{EventId, Time, SnapshotId, Event, ApplyEvent, TestSnapshot};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum TestEvent {

@@ -12,8 +12,9 @@ keywords = ["reconciliation", "event-sourcing", "snapshot", "concurrency"]
 authors = ["humacss"]
 
 [dependencies]
+ahash = "0.8.12"
 flume = "0.12.0"
-fxhash = "0.2.1"
+memory-stats = { version = "1.2.0", features = ["always_use_statm"] }
 
 [dev-dependencies]
 rstest = "0.26.1"
@@ -21,5 +22,5 @@ criterion = { version = "0.5", features = ["html_reports"] }
 pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
 
 [[bench]]
-name = "main"
+name = "apply"
 harness = false
