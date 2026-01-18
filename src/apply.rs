@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::cmp::min;
 use std::collections::VecDeque;
 
@@ -7,13 +8,13 @@ use crate::{Checkpoint, index_before, ContimeKey};
 
 #[inline(always)]
 pub fn apply_event_in_place<S: Snapshot>(
-    new_event: S::Event, 
+    new_event: Arc<S::Event>, 
     ordered_checkpoints: &mut VecDeque<Checkpoint<S>>, 
-    ordered_events: &mut VecDeque<S::Event>,
+    ordered_events: &mut VecDeque<Arc<S::Event>>,
     checkpoint_interval: usize,
 ) -> isize {
 
-    let event_insert_index = index_before(ordered_events, ContimeKey { id: new_event.id(), time: new_event.time() }, |event: &S::Event| ContimeKey::from_event(event)).map_or(0, |index| index + 1);
+    let event_insert_index = index_before(ordered_events, ContimeKey { id: new_event.id(), time: new_event.time() }, |event: &Arc<S::Event>| ContimeKey::from_event(event)).map_or(0, |index| index + 1);
 
     if event_insert_index < ordered_events.len() && ordered_events[event_insert_index].id() == new_event.id() {
         return 0;
@@ -87,13 +88,13 @@ mod tests {
     type Items = Vec<i16>;
     const CHECKPOINT_EVENT_COUNT: usize = 2;
 
-    fn gen_event(time: Time, value: Value) -> TestEvent {
+    fn gen_event(time: Time, value: Value) -> Arc<TestEvent> {
         let snapshot_id = 0;
 
         if value >= 0 {
-            TestEvent::Positive(snapshot_id, time, time.try_into().unwrap(), value.abs() as u16)
+            Arc::new(TestEvent::Positive(snapshot_id, time, time.try_into().unwrap(), value.abs() as u16))
         }else{
-            TestEvent::Negative(snapshot_id, time, time.try_into().unwrap(), value.abs() as u16)
+            Arc::new(TestEvent::Negative(snapshot_id, time, time.try_into().unwrap(), value.abs() as u16))
         }
     }
 
@@ -151,15 +152,15 @@ mod tests {
         #[case] expected_checkpoints: Vec<(Time, Sum, usize, Items)>, 
         #[case] expected_events: Vec<(Time, Value)>,
     ) { 
-        let expected_events: VecDeque<TestEvent> = expected_events.into_iter().map(|(time, value)| gen_event(time, value)).collect();
+        let expected_events: VecDeque<Arc<TestEvent>> = expected_events.into_iter().map(|(time, value)| gen_event(time, value)).collect();
         let expected_checkpoints: VecDeque<Checkpoint<TestSnapshot>> = expected_checkpoints.into_iter().enumerate().map(|(i, (time, sum, next_event_index, items))| gen_checkpoint(i, time, sum, next_event_index, items)).collect();
 
         let new_event = gen_event(new_event.0, new_event.1);
-        let mut ordered_events: VecDeque<TestEvent> = ordered_events.into_iter().map(|(time, value)| gen_event(time, value)).collect();
+        let mut ordered_events: VecDeque<Arc<TestEvent>> = ordered_events.into_iter().map(|(time, value)| gen_event(time, value)).collect();
         let mut ordered_checkpoints: VecDeque<Checkpoint<TestSnapshot>> = ordered_checkpoints.into_iter().enumerate().map(|(i, (time, sum, next_event_index, items))| gen_checkpoint(i, time, sum, next_event_index, items)).collect();
 
         apply_event_in_place(
-            new_event, 
+            new_event.into(), 
             &mut ordered_checkpoints,
             &mut ordered_events,
             CHECKPOINT_EVENT_COUNT
