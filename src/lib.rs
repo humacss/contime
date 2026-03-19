@@ -1,28 +1,22 @@
 mod api;
 mod apply;
-mod flume_ext;
+mod handle;
 mod history;
-mod index;
 mod key;
 mod router;
 mod traits;
 mod worker;
+mod macros;
 
-use apply::{apply_event_in_place};
-use history::{Checkpoint, SnapshotHistory};
-use index::{index_before, indexes_between};
-use key::{ContimeKey};
+use apply::apply_event_in_place;
+use key::ContimeKey;
 use router::{Router, RouterError};
-use traits::{SnapshotLanes, EventLanes};
-use worker::{Worker, WorkerInbound, WorkerOutbound};
-use flume_ext::{SnapshotReceiver};
+use worker::{Worker, WorkerInbound};
 
+pub use history::{SnapshotHistory, Reconciliation};
 pub use api::{Contime, ContimeError};
-pub use traits::{Snapshot, Event, ApplyEvent};
+pub use traits::{Snapshot, Event, ApplyEvent, SnapshotLanes, EventLanes};
+pub use handle::{ApplyHandle, QueryHandle, QueryResult, AdvanceHandle, HandleError};
 
-// Enable this once we have the macro
-//#[cfg(test)]
 mod test;
-// Enable this once we have the macro
-//#[cfg(test)]
 pub use test::*;

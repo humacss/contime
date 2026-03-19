@@ -1,40 +1,31 @@
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::collections::hash_map::Entry;
 
 use ahash::AHashMap;
 use flume::{bounded, Sender, Receiver};
-use memory_stats::memory_stats;
 
 use crate::{SnapshotHistory, SnapshotLanes, EventLanes};
+use crate::handle::QueryResult;
 
 pub type SnapshotId = u128;
-pub type SnapshotLaneId = u32;
 
 pub enum WorkerInbound<SL: SnapshotLanes, EL: EventLanes<SL>>
 {
-    SetMemoryBudget(usize),
-    SnapshotAt(u128, i64),
-    AdvanceTime(i64), // send new snapshot clone to subscribers on advance
-    Snapshot(SL),
-    Event((u128, Arc<EL>)),
+    Event { snapshot_id: u128, event: EL, initial_snapshot: SL, reply: Sender<()> },
+    Snapshot { snapshot: SL, reply: Sender<()> },
+    SnapshotAt { snapshot_id: u128, time: i64, reply: Sender<QueryResult<SL>> },
+    AdvanceTime { time: i64, reply: Sender<()> },
     Shutdown,
-}
-
-pub enum WorkerOutbound<SL: SnapshotLanes, EL: EventLanes<SL>> {
-    SnapshotAt(SL, Receiver<SL>),
-    EventSkipped(Arc<EL>),
-    NotifyMemoryUsage(usize),
-    Error,
 }
 
 pub struct Worker<SL: SnapshotLanes, EL: EventLanes<SL>>
 {
     pub worker_inbound_tx: Sender<WorkerInbound<SL, EL>>,
-    pub worker_outbound_rx: Receiver<WorkerOutbound<SL, EL>>,
 
-    threads: Vec<JoinHandle<()>>, // we don't need multiple threads anymore
+    threads: Vec<JoinHandle<()>>,
     is_running: Arc<AtomicBool>,
 }
 
@@ -47,7 +38,9 @@ impl<SL: SnapshotLanes, EL: EventLanes<SL>> Drop for Worker<SL, EL>
         let _ = self.worker_inbound_tx.send(WorkerInbound::<SL, EL>::Shutdown);
 
         for thread in self.threads.drain(..) {
-            thread.join().unwrap();
+            if let Err(e) = thread.join() {
+                eprintln!("contime worker thread panicked: {:?}", e);
+            }
         }
     }
 }
@@ -55,23 +48,21 @@ impl<SL: SnapshotLanes, EL: EventLanes<SL>> Drop for Worker<SL, EL>
 
 impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static + std::marker::Send> Worker<SL, EL>
 {
-    pub fn new(memory_budget: usize) -> Self {
+    pub fn new(memory_usage: Arc<AtomicU64>) -> Self {
         let mut threads = Vec::with_capacity(1);
         let is_running = Arc::new(AtomicBool::new(true));
 
         let (worker_inbound_tx, worker_inbound_rx) = bounded::<WorkerInbound<SL, EL>>(1000);
-        let (worker_outbound_tx, worker_outbound_rx) = bounded::<WorkerOutbound<SL, EL>>(1000);
 
         {
             let is_running = Arc::clone(&is_running);
 
             threads.push(thread::spawn(move || {
-                handle_worker(is_running, worker_inbound_rx, worker_outbound_tx, memory_budget);
+                handle_worker(is_running, worker_inbound_rx, memory_usage);
             }));
         };
 
-        Self { 
-            worker_outbound_rx,
+        Self {
             worker_inbound_tx,
 
             is_running,
@@ -80,67 +71,81 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static + std
     }
 }
 
+fn fetch_saturating_add_signed(atomic: &Arc<AtomicU64>, delta: i64, order: Ordering) {
+    loop {
+        let current = atomic.load(order);
+        let new_val = if delta >= 0 {
+            current.saturating_add(delta as u64)
+        } else {
+            current.saturating_sub((-delta) as u64)
+        };
+        if atomic.compare_exchange_weak(current, new_val, order, Ordering::Relaxed).is_ok() {
+            break;
+        }
+    }
+}
+
 fn handle_worker<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL>> (
     is_running: Arc<AtomicBool>,
     worker_inbound_rx: Receiver<WorkerInbound<SL, EL>>,
-    worker_outbound_tx: Sender<WorkerOutbound<SL, EL>>,
-    mut memory_budget: usize,
+    memory_usage: Arc<AtomicU64>,
 ){
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
 
-    let interval = Duration::from_millis(100);
-    let mut last_execution = Instant::now();
-    let mut current_memory_usage: usize = 0;
-
     while is_running.load(Ordering::Relaxed) {
-        match worker_inbound_rx.recv_timeout(interval) {
+        match worker_inbound_rx.recv() {
             Ok(inbound) => {
                 match inbound {
-                    WorkerInbound::AdvanceTime(new_time) => {
-                        for (_snapshot_id, history) in &history_by_id {
-                            let _ = current_memory_usage.saturating_add_signed(history.advance(new_time));
+                    WorkerInbound::AdvanceTime { time: new_time, reply } => {
+                        for (_snapshot_id, history) in &mut history_by_id {
+                            fetch_saturating_add_signed(&memory_usage, history.advance(new_time), Ordering::Relaxed);
+                        }
+                        // Ignore SendError: caller may have dropped the handle, which is fine
+                        let _ = reply.send(());
+                    },
+                    WorkerInbound::Event { snapshot_id, event, initial_snapshot, reply } => {
+                        let history = match history_by_id.entry(snapshot_id) {
+                            Entry::Occupied(entry) => entry.into_mut(),
+                            Entry::Vacant(entry) => {
+                                let (history, base_delta) = SnapshotHistory::new(initial_snapshot, 0, 0);
+                                fetch_saturating_add_signed(&memory_usage, base_delta, Ordering::Relaxed);
+                                entry.insert(history)
+                            }
+                        };
+                        let delta = history.apply_event(event);
+                        fetch_saturating_add_signed(&memory_usage, delta, Ordering::Relaxed);
+                        let _ = reply.send(());
+                    }
+                    WorkerInbound::Snapshot { snapshot, reply } => {
+                        let snapshot_id = snapshot.id();
+
+                        let apply_delta = match history_by_id.entry(snapshot_id) {
+                            Entry::Occupied(mut entry) => {
+                                entry.get_mut().apply_snapshot(snapshot)
+                            },
+                            Entry::Vacant(entry) => {
+                                let (history, base_delta) = SnapshotHistory::new(snapshot, 0, 0);
+                                entry.insert(history);
+                                base_delta
+                            }
+                        };
+
+                        fetch_saturating_add_signed(&memory_usage, apply_delta, Ordering::Relaxed);
+                        let _ = reply.send(());
+                    },
+
+                    WorkerInbound::SnapshotAt { snapshot_id, time, reply } => {
+                        if let Some(history) = history_by_id.get(&snapshot_id) {
+                            let (snapshot, reconciliation_rx) = history.snapshot_at(time);
+                            let _ = reply.send(QueryResult::Found(snapshot, reconciliation_rx));
+                        } else {
+                            let _ = reply.send(QueryResult::NotFound);
                         }
                     },
-                    WorkerInbound::SetMemoryBudget(new_memory_budget) => {
-                        memory_budget = new_memory_budget;
-                    },
-                    WorkerInbound::Event((snapshot_id, event)) => {
-                        let conservative_delta_bytes = event.conservative_size().saturating_add_signed(event.conservative_apply_size_delta());
-                        if current_memory_usage +  conservative_delta_bytes < memory_budget {
-                            let _ = current_memory_usage.saturating_add_signed(history_by_id
-                                .entry(snapshot_id)
-                                .or_insert(SnapshotHistory::new(SL::from_event(&event)))
-                                .apply_event(event)
-                            );
-                        }else{
-                            let _ = worker_outbound_tx.send(WorkerOutbound::<SL, EL>::EventSkipped(event));
-                        }  
-                    }
                     WorkerInbound::Shutdown => return,
-                    WorkerInbound::Snapshot(_) => todo!(),
-                    WorkerInbound::SnapshotAt(snapshot_id, time) => {
-                        if let Some(history) = history_by_id.get(&snapshot_id) {
-                            let (snapshot, snapshot_rx) = history.snapshot_at(time);
-                            
-                            worker_outbound_tx.send(WorkerOutbound::<SL, EL>::SnapshotAt(snapshot, snapshot_rx));    
-                        }                        
-                    },
                 };
             }
-            Err(_err) => {
-                // does timeout also enter here?
-                let _ = worker_outbound_tx.send(WorkerOutbound::<SL, EL>::Error);
-                return;
-            }
-        }
-
-        if last_execution.elapsed() >= interval {
-            if let Some(stats) = memory_stats() {
-                 current_memory_usage = stats.physical_mem;
-                 let _ = worker_outbound_tx.send(WorkerOutbound::<SL, EL>::NotifyMemoryUsage(current_memory_usage));
-            }
-            
-            last_execution = Instant::now();
+            Err(_) => return,
         }
     }
 }
