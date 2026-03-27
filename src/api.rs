@@ -41,6 +41,20 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Cont
 		Self { router }
 	}
 
+	pub fn with_history_horizon(
+		worker_count: usize,
+		memory_budget_bytes: u64,
+		lower_time_horizon_delta: i64,
+	) -> Self {
+		let router = Router::<SL, EL>::with_history_horizon(
+			worker_count,
+			memory_budget_bytes,
+			lower_time_horizon_delta,
+		);
+
+		Self { router }
+	}
+
 	// Sync methods (blocking)
 
 	pub fn advance(&self, time: i64) -> Result<(), ContimeError> {

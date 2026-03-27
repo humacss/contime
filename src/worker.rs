@@ -49,6 +49,13 @@ impl<SL: SnapshotLanes, EL: EventLanes<SL>> Drop for Worker<SL, EL>
 impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static + std::marker::Send> Worker<SL, EL>
 {
     pub fn new(memory_usage: Arc<AtomicU64>) -> Self {
+        Self::with_history_horizon(memory_usage, 0)
+    }
+
+    pub fn with_history_horizon(
+        memory_usage: Arc<AtomicU64>,
+        lower_time_horizon_delta: i64,
+    ) -> Self {
         let mut threads = Vec::with_capacity(1);
         let is_running = Arc::new(AtomicBool::new(true));
 
@@ -56,9 +63,15 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static + std
 
         {
             let is_running = Arc::clone(&is_running);
+            let memory_usage = Arc::clone(&memory_usage);
 
             threads.push(thread::spawn(move || {
-                handle_worker(is_running, worker_inbound_rx, memory_usage);
+                handle_worker(
+                    is_running,
+                    worker_inbound_rx,
+                    memory_usage,
+                    lower_time_horizon_delta,
+                );
             }));
         };
 
@@ -89,6 +102,7 @@ fn handle_worker<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL>> (
     is_running: Arc<AtomicBool>,
     worker_inbound_rx: Receiver<WorkerInbound<SL, EL>>,
     memory_usage: Arc<AtomicU64>,
+    lower_time_horizon_delta: i64,
 ){
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
 
@@ -107,7 +121,11 @@ fn handle_worker<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL>> (
                         let history = match history_by_id.entry(snapshot_id) {
                             Entry::Occupied(entry) => entry.into_mut(),
                             Entry::Vacant(entry) => {
-                                let (history, base_delta) = SnapshotHistory::new(initial_snapshot, 0, 0);
+                                let (history, base_delta) = SnapshotHistory::new(
+                                    initial_snapshot,
+                                    0,
+                                    lower_time_horizon_delta,
+                                );
                                 fetch_saturating_add_signed(&memory_usage, base_delta, Ordering::Relaxed);
                                 entry.insert(history)
                             }
@@ -124,7 +142,11 @@ fn handle_worker<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL>> (
                                 entry.get_mut().apply_snapshot(snapshot)
                             },
                             Entry::Vacant(entry) => {
-                                let (history, base_delta) = SnapshotHistory::new(snapshot, 0, 0);
+                                let (history, base_delta) = SnapshotHistory::new(
+                                    snapshot,
+                                    0,
+                                    lower_time_horizon_delta,
+                                );
                                 entry.insert(history);
                                 base_delta
                             }

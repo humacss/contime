@@ -36,6 +36,32 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Rout
             workers.push(Worker::new(Arc::clone(&memory_usage)));
         }
 
+        Self {
+            hasher,
+            workers,
+            memory_budget,
+            memory_usage,
+        }
+    }
+
+    pub fn with_history_horizon(
+        worker_count: usize,
+        memory_budget_bytes: u64,
+        lower_time_horizon_delta: i64,
+    ) -> Self {
+        let hasher = RandomState::new();
+
+        let memory_budget = Arc::new(AtomicU64::new(memory_budget_bytes));
+        let memory_usage = Arc::new(AtomicU64::new(0));
+
+        let mut workers = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
+            workers.push(Worker::with_history_horizon(
+                Arc::clone(&memory_usage),
+                lower_time_horizon_delta,
+            ));
+        }
+
         Self { hasher, workers, memory_budget, memory_usage }
     }
 
