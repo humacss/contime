@@ -18,8 +18,11 @@
 //!
 //! # Where To Start
 //!
-//! The README includes a full custom-type setup. The example below uses the exported test
-//! fixtures to show the runtime flow end to end with the current public API.
+//! For a runnable custom-type setup, see `examples/ordered_values.rs` and run
+//! `cargo run --example ordered_values`.
+//!
+//! The quick doctest below uses the exported test fixtures to show the runtime flow end to end
+//! with the current public API.
 //!
 //! ```rust
 //! use contime::{TestEvent, TestSnapshot, TestSnapshotContime};
