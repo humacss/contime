@@ -1,4 +1,4 @@
-use contime::{ContimeError, TestSnapshotContime, TestEvent, TestSnapshot, Snapshot, QueryResult};
+use contime::{ContimeError, QueryResult, Snapshot, TestEvent, TestSnapshot, TestSnapshotContime};
 
 #[test]
 fn test_query_not_found() {
@@ -6,7 +6,7 @@ fn test_query_not_found() {
 
     let handle = c.query_at(0, 999).unwrap();
     match handle.wait().unwrap() {
-        QueryResult::NotFound => {},
+        QueryResult::NotFound => {}
         QueryResult::Found(_, _) => panic!("expected NotFound for unknown snapshot_id"),
     }
 }
@@ -16,7 +16,7 @@ fn test_query_not_found_via_at() {
     let c = TestSnapshotContime::new(1, 1000);
 
     match c.at::<TestSnapshot>(0, 999) {
-        Err(ContimeError::NotFound) => {},
+        Err(ContimeError::NotFound) => {}
         Ok(_) => panic!("expected NotFound error"),
         Err(err) => panic!("unexpected error: {:?}", err),
     }

@@ -1,28 +1,40 @@
+//! Unused internal helper kept for future API refactors.
+//!
+//! This module is not wired into the crate right now and is intentionally not part of the
+//! compiled public surface. We are keeping it because a future API may expose typed views
+//! over an existing `flume::Receiver` without introducing additional channels.
+
 use std::marker::PhantomData;
 
 use flume::Receiver;
 
-use crate::{SnapshotLanes, Snapshot};
+use crate::{Snapshot, SnapshotLanes};
 
 pub struct SnapshotReceiver<SL: SnapshotLanes, S: Snapshot> {
     inner: Receiver<SL>,
     _target: PhantomData<S>,
 }
 
-impl<SL: SnapshotLanes, S:Snapshot> SnapshotReceiver<SL, S>
-{
+impl<SL: SnapshotLanes, S: Snapshot> SnapshotReceiver<SL, S> {
     pub fn new(inner: Receiver<SL>) -> Self {
-        Self { inner, _target: PhantomData }
+        Self {
+            inner,
+            _target: PhantomData,
+        }
     }
 }
 
-impl<SL: SnapshotLanes, S: Snapshot + std::convert::From<SL>> IntoIterator for SnapshotReceiver<SL, S>
+impl<SL: SnapshotLanes, S: Snapshot + std::convert::From<SL>> IntoIterator
+    for SnapshotReceiver<SL, S>
 {
-	type Item = S;
-	type IntoIter = SnapshotIter<SL, S>;
+    type Item = S;
+    type IntoIter = SnapshotIter<SL, S>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Self::IntoIter { inner: self.inner, _target: PhantomData }
+        Self::IntoIter {
+            inner: self.inner,
+            _target: PhantomData,
+        }
     }
 }
 
@@ -31,13 +43,12 @@ pub struct SnapshotIter<SL, S> {
     _target: PhantomData<S>,
 }
 
-impl<SL: SnapshotLanes, S: Snapshot + std::convert::From<SL>> Iterator for SnapshotIter<SL, S>
-{
-	type Item = S;
+impl<SL: SnapshotLanes, S: Snapshot + std::convert::From<SL>> Iterator for SnapshotIter<SL, S> {
+    type Item = S;
 
     fn next(&mut self) -> Option<S> {
         let snapshot_lane = self.inner.recv().ok()?;
-        
+
         Some(snapshot_lane.into())
     }
 }

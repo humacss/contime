@@ -1,4 +1,4 @@
-use contime::{TestSnapshotContime, TestEvent, TestSnapshot, Snapshot};
+use contime::{Snapshot, TestEvent, TestSnapshot, TestSnapshotContime};
 
 #[test]
 fn test_negative_event_application() {

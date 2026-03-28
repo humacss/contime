@@ -347,13 +347,10 @@ macro_rules! contime {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __contime_first_from_event {
-    ($event:expr; $variant:ident; $first:ident $(, $rest:ident )* ) => {
-        {
-            let snapshot_event: <$first as $crate::Snapshot>::Event =
-                <_ as From<_>>::from(($event).clone());
-            SnapshotLanes::$first(<$first as $crate::Snapshot>::from_event(&snapshot_event))
-        }
-    };
+    ($event:expr; $variant:ident; $first:ident $(, $rest:ident )* ) => {{
+        let snapshot_event: <$first as $crate::Snapshot>::Event = <_ as From<_>>::from(($event).clone());
+        SnapshotLanes::$first(<$first as $crate::Snapshot>::from_event(&snapshot_event))
+    }};
 }
 
 /// Internal helper: returns snapshot_id from the first target.

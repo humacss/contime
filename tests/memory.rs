@@ -1,4 +1,4 @@
-use contime::{ContimeError, TestSnapshotContime, TestEvent, TestSnapshot};
+use contime::{ContimeError, TestEvent, TestSnapshot, TestSnapshotContime};
 
 #[test]
 fn test_memory_full() {
@@ -8,11 +8,11 @@ fn test_memory_full() {
     let mut hit_memory_full = false;
     for i in 0..1000u128 {
         match c.apply_event(TestEvent::Positive(1, i as i64, i, 1)) {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(ContimeError::MemoryFull) => {
                 hit_memory_full = true;
                 break;
-            },
+            }
             Err(err) => panic!("unexpected error: {:?}", err),
         }
     }
@@ -29,7 +29,9 @@ fn test_memory_full_then_advance_frees() {
     let mut last_applied = 0i64;
     for i in 0..1000u128 {
         match c.apply_event(TestEvent::Positive(1, i as i64, i, 1)) {
-            Ok(()) => { last_applied = i as i64; },
+            Ok(()) => {
+                last_applied = i as i64;
+            }
             Err(ContimeError::MemoryFull) => break,
             Err(err) => panic!("unexpected error: {:?}", err),
         }
@@ -60,7 +62,7 @@ fn test_memory_full_on_snapshot() {
     // Applying a snapshot should also fail when budget is exhausted
     let big_snapshot = TestSnapshot { id: 2, time: 0, sum: 0, items: vec![0; 1000] };
     match c.apply_snapshot(big_snapshot) {
-        Err(ContimeError::MemoryFull) => {},
+        Err(ContimeError::MemoryFull) => {}
         Ok(()) => panic!("expected MemoryFull when applying snapshot over budget"),
         Err(err) => panic!("unexpected error: {:?}", err),
     }

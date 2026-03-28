@@ -25,13 +25,13 @@ impl Snapshot for BenchSnapshot {
     fn set_time(&mut self, time: i64) {
         self.time = time;
     }
-    
+
     fn from_event(event: &<Self as Snapshot>::Event) -> Self {
         Self { id: event.snapshot_id(), ..Self::default() }
     }
-    
-    fn conservative_size(&self) -> u64 { 
-        16 + 8 + 4 
+
+    fn conservative_size(&self) -> u64 {
+        16 + 8 + 4
     }
 }
 
@@ -51,7 +51,7 @@ impl Event for BenchEvent {
             Self::Positive(_snapshot_id, time, _event_id, _value) => *time,
         }
     }
-    
+
     fn conservative_size(&self) -> u64 {
         16 + 8 + 16 + 2
     }
