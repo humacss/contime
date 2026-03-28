@@ -1,4 +1,4 @@
-use contime::{TestSnapshotContime, TestEvent, TestSnapshot, Snapshot};
+use contime::{Snapshot, TestEvent, TestSnapshot, TestSnapshotContime};
 
 #[test]
 fn test_apply_event_and_query() {
@@ -9,7 +9,7 @@ fn test_apply_event_and_query() {
     match c.at::<TestSnapshot>(0, 1) {
         Ok((snapshot, _reconciliation_rx)) => {
             assert_eq!(snapshot.id(), 1);
-        },
+        }
         Err(err) => panic!("{:?}", err),
     }
 }

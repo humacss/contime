@@ -1,4 +1,4 @@
-use crate::{Snapshot, TestEvent, ApplyEvent, Event};
+use crate::{ApplyEvent, Event, Snapshot, TestEvent};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct TestSnapshot {
@@ -26,8 +26,8 @@ impl Snapshot for TestSnapshot {
     fn conservative_size(&self) -> u64 {
         16 + 8 + 4 + (self.items.len() * 2) as u64
     }
-    
+
     fn from_event(event: &Self::Event) -> Self {
-        Self { id: event.snapshot_id(), time: event.time(), ..Self::default()}
+        Self { id: event.snapshot_id(), time: event.time(), ..Self::default() }
     }
 }

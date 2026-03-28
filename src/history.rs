@@ -1,14 +1,14 @@
-
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-use flume::{bounded, Sender, Receiver};
+use flume::{bounded, Receiver, Sender};
 
-use crate::{ApplyEvent, Snapshot, ContimeKey, Event};
+use crate::{ApplyEvent, ContimeKey, Event, Snapshot};
 
-use super::apply_event_in_place;
 use super::apply::replay_and_checkpoint;
+use super::apply_event_in_place;
 
+/// Dependency injection seam used by `SnapshotHistory` tests.
 pub trait Deps: Default {
     fn apply_event_in_place<S: Snapshot>(
         &self,
@@ -20,6 +20,7 @@ pub trait Deps: Default {
     ) -> i64;
 }
 
+/// Default dependency set for [`SnapshotHistory`].
 #[derive(Default)]
 pub struct DefDeps;
 
@@ -38,23 +39,36 @@ impl Deps for DefDeps {
 
 type SnapshotId = u128;
 
+/// Notification sent when previously queried history must be reconsidered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reconciliation {
+    /// Snapshot id whose historical state changed.
     pub snapshot_id: u128,
+    /// Earliest time that may have changed.
     pub from_time: i64,
+    /// Latest previously known event time affected by the change.
     pub to_time: i64,
 }
 
+/// Advanced per-snapshot history store used internally by `Contime`.
+///
+/// Most users should interact with [`crate::Contime`] instead. This type is useful when you
+/// want direct control over one snapshot timeline, for example in benchmarks or focused tests.
 #[derive(Debug, Clone)]
 pub struct LocalSnapshotHistory<S, D>
 where
     S: Snapshot,
     D: Deps,
 {
+    /// Snapshot id owned by this history.
     pub snapshot_id: SnapshotId,
+    /// Base snapshot used when replay starts before the first checkpoint.
     pub base_snapshot: S,
+    /// Materialized checkpoints keyed by event time and id.
     pub checkpoints: BTreeMap<ContimeKey, S>,
+    /// Applied events keyed by time and id.
     pub events: BTreeMap<ContimeKey, S::Event>,
+    /// Interval between generated checkpoints during replay.
     pub checkpoint_interval: usize,
 
     current_time: i64,
@@ -73,6 +87,7 @@ where
     S: Snapshot + 'static,
     D: Deps,
 {
+    /// Creates a history for one snapshot and returns it with its initial memory cost.
     pub fn new(snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
         let checkpoints = BTreeMap::new();
         let events = BTreeMap::new();
@@ -83,20 +98,24 @@ where
 
         let base_size = base_snapshot.conservative_size() as i64;
 
-        (Self {
-            current_time,
-            lower_time_horizon_delta,
-            reconciliation_tx,
-            reconciliation_rx,
-            snapshot_id: snapshot.id(),
-            base_snapshot,
-            checkpoints,
-            events,
-            checkpoint_interval: CHECKPOINT_INTERVAL,
-            deps: D::default(),
-        }, base_size)
+        (
+            Self {
+                current_time,
+                lower_time_horizon_delta,
+                reconciliation_tx,
+                reconciliation_rx,
+                snapshot_id: snapshot.id(),
+                base_snapshot,
+                checkpoints,
+                events,
+                checkpoint_interval: CHECKPOINT_INTERVAL,
+                deps: D::default(),
+            },
+            base_size,
+        )
     }
 
+    /// Advances the internal current time and prunes history outside the configured horizon.
     pub fn advance(&mut self, time: i64) -> i64 {
         self.current_time += time;
         let drop_time = self.current_time - self.lower_time_horizon_delta;
@@ -126,18 +145,14 @@ where
         bytes_delta
     }
 
+    /// Applies an event to this history and returns the memory delta.
     pub fn apply_event(&mut self, event: S::Event) -> i64 {
         // Check if this event is out-of-order before applying
         let event_time = event.time();
         let latest_event_time = self.events.keys().next_back().map(|k| k.time);
 
-        let bytes_delta = self.deps.apply_event_in_place(
-            event,
-            &self.base_snapshot,
-            &mut self.checkpoints,
-            &mut self.events,
-            self.checkpoint_interval,
-        );
+        let bytes_delta =
+            self.deps.apply_event_in_place(event, &self.base_snapshot, &mut self.checkpoints, &mut self.events, self.checkpoint_interval);
 
         // Send reconciliation if out-of-order (event is before the latest existing event)
         if let Some(latest_time) = latest_event_time {
@@ -153,6 +168,7 @@ where
         bytes_delta
     }
 
+    /// Applies an authoritative snapshot and replays later events on top of it.
     pub fn apply_snapshot(&mut self, snapshot: S) -> i64 {
         if snapshot.id() != self.snapshot_id {
             return 0;
@@ -163,10 +179,7 @@ where
         let mut bytes_delta: i64 = 0;
 
         // Remove all checkpoints at or after snapshot_key
-        let stale_keys: Vec<ContimeKey> = self.checkpoints
-            .range(snapshot_key.clone()..)
-            .map(|(k, _)| k.clone())
-            .collect();
+        let stale_keys: Vec<ContimeKey> = self.checkpoints.range(snapshot_key.clone()..).map(|(k, _)| k.clone()).collect();
         for key in &stale_keys {
             let removed = self.checkpoints.remove(key).expect("stale checkpoint key must exist");
             bytes_delta -= removed.conservative_size() as i64;
@@ -177,13 +190,8 @@ where
         self.checkpoints.insert(snapshot_key.clone(), snapshot.clone());
 
         // Replay events after snapshot_key to rebuild downstream checkpoints
-        bytes_delta += replay_and_checkpoint(
-            &snapshot,
-            Bound::Excluded(&snapshot_key),
-            &mut self.checkpoints,
-            &self.events,
-            self.checkpoint_interval,
-        );
+        bytes_delta +=
+            replay_and_checkpoint(&snapshot, Bound::Excluded(&snapshot_key), &mut self.checkpoints, &self.events, self.checkpoint_interval);
 
         // Send reconciliation notification
         let latest_event_time = self.events.keys().next_back().map(|k| k.time).unwrap_or(snapshot.time());
@@ -196,13 +204,14 @@ where
         bytes_delta
     }
 
+    /// Reconstructs the snapshot state at `time` and returns a reconciliation receiver.
+    ///
+    /// Events at exactly `time` are not included in the returned snapshot.
     pub fn snapshot_at(&self, time: i64) -> (S, Receiver<Reconciliation>) {
         let query_key = ContimeKey { time, id: self.snapshot_id };
 
         // Find the latest checkpoint at or before the query time
-        let checkpoint_entry = self.checkpoints
-            .range(..=&query_key)
-            .next_back();
+        let checkpoint_entry = self.checkpoints.range(..=&query_key).next_back();
 
         let (mut snapshot, replay_start) = match checkpoint_entry {
             Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
@@ -222,6 +231,7 @@ where
     }
 }
 
+/// Concrete per-snapshot history type used by the crate.
 pub type SnapshotHistory<S> = LocalSnapshotHistory<S, DefDeps>;
 
 #[cfg(test)]
@@ -301,18 +311,24 @@ mod tests {
         let (mut history, _base_delta) = LocalSnapshotHistory::<TestSnapshot, TestDeps>::new(snapshot, 0, 1000);
 
         // Set up checkpoints
-        history.checkpoints = checkpoints.into_iter().map(|time| {
-            let key = ContimeKey { time, id: snapshot_id };
-            let snap = TestSnapshot { id: snapshot_id, time, items: vec![], sum: 0 };
-            (key, snap)
-        }).collect();
+        history.checkpoints = checkpoints
+            .into_iter()
+            .map(|time| {
+                let key = ContimeKey { time, id: snapshot_id };
+                let snap = TestSnapshot { id: snapshot_id, time, items: vec![], sum: 0 };
+                (key, snap)
+            })
+            .collect();
 
         // Set up events
-        history.events = events.into_iter().map(|(id, time)| {
-            let key = ContimeKey { time, id };
-            let event = TestEvent::Positive(id, time, snapshot_id, 1);
-            (key, event)
-        }).collect();
+        history.events = events
+            .into_iter()
+            .map(|(id, time)| {
+                let key = ContimeKey { time, id };
+                let event = TestEvent::Positive(id, time, snapshot_id, 1);
+                (key, event)
+            })
+            .collect();
 
         history.checkpoint_interval = checkpoint_interval;
 

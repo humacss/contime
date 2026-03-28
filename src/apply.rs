@@ -1,8 +1,7 @@
-
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-use crate::{ApplyEvent, Event, Snapshot, ContimeKey};
+use crate::{ApplyEvent, ContimeKey, Event, Snapshot};
 
 /// Replays events from `start_snapshot` forward (starting after `start_bound`) and creates
 /// checkpoints at every `checkpoint_interval` events. Returns the bytes_delta from new checkpoints.
@@ -63,13 +62,15 @@ pub fn apply_event_in_place<S: Snapshot>(
         };
 
         // Count events from start_bound to determine checkpoint eligibility
-        let events_from_start: usize = events.range((
-            match &start_bound {
-                Bound::Excluded(k) => Bound::Excluded(k),
-                _ => Bound::Unbounded,
-            },
-            Bound::Unbounded,
-        )).count();
+        let events_from_start: usize = events
+            .range((
+                match &start_bound {
+                    Bound::Excluded(k) => Bound::Excluded(k),
+                    _ => Bound::Unbounded,
+                },
+                Bound::Unbounded,
+            ))
+            .count();
 
         // Only need to replay if we're at a checkpoint boundary
         if events_from_start % checkpoint_interval == 0 {
@@ -92,16 +93,10 @@ pub fn apply_event_in_place<S: Snapshot>(
         // Slow path: out-of-order event, need to invalidate and replay
 
         // Find last valid checkpoint: the latest checkpoint whose key is before the new event
-        let replay_start_key = checkpoints
-            .range(..&event_key)
-            .next_back()
-            .map(|(k, _)| k.clone());
+        let replay_start_key = checkpoints.range(..&event_key).next_back().map(|(k, _)| k.clone());
 
         // Remove stale checkpoints (at or after the new event key)
-        let stale_keys: Vec<ContimeKey> = checkpoints
-            .range(event_key..)
-            .map(|(k, _)| k.clone())
-            .collect();
+        let stale_keys: Vec<ContimeKey> = checkpoints.range(event_key..).map(|(k, _)| k.clone()).collect();
         for key in &stale_keys {
             let removed = checkpoints.remove(key).expect("stale checkpoint key must exist");
             bytes_delta -= removed.conservative_size() as i64;
@@ -118,18 +113,11 @@ pub fn apply_event_in_place<S: Snapshot>(
             None => Bound::Unbounded,
         };
 
-        bytes_delta += replay_and_checkpoint(
-            &snapshot,
-            start_bound,
-            checkpoints,
-            events,
-            checkpoint_interval,
-        );
+        bytes_delta += replay_and_checkpoint(&snapshot, start_bound, checkpoints, events, checkpoint_interval);
     }
 
     bytes_delta
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -225,13 +213,7 @@ mod tests {
 
         let new_event = gen_event(new_event.0, new_event.1);
 
-        apply_event_in_place::<TestSnapshot>(
-            new_event,
-            &base,
-            &mut checkpoints,
-            &mut events,
-            CHECKPOINT_INTERVAL,
-        );
+        apply_event_in_place::<TestSnapshot>(new_event, &base, &mut checkpoints, &mut events, CHECKPOINT_INTERVAL);
 
         assert_eq!(expected_events, events);
         assert_eq!(expected_checkpoints, checkpoints);

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use contime::{TestSnapshotContime, TestEvent, TestSnapshot};
+use contime::{TestEvent, TestSnapshot, TestSnapshotContime};
 
 #[test]
 fn test_reconciliation_from_out_of_order_event() {
@@ -55,10 +55,7 @@ fn test_no_reconciliation_in_order() {
     c.apply_event(TestEvent::Positive(1, 5, 5, 30)).unwrap();
 
     // No reconciliation should be sent
-    assert!(
-        reconciliation_rx.recv_timeout(Duration::from_millis(100)).is_err(),
-        "expected no reconciliation for in-order events"
-    );
+    assert!(reconciliation_rx.recv_timeout(Duration::from_millis(100)).is_err(), "expected no reconciliation for in-order events");
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use contime::{TestSnapshotContime, TestEvent, TestSnapshot, QueryResult};
+use contime::{QueryResult, TestEvent, TestSnapshot, TestSnapshotContime};
 
 #[test]
 fn test_apply_handle_try_recv() {

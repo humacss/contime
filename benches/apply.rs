@@ -1,10 +1,10 @@
-use std::hint::{black_box};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, BatchSize};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use std::hint::black_box;
 
-use contime::{SnapshotHistory};
+use contime::SnapshotHistory;
 
 mod helpers;
-use helpers::{BenchSnapshot, BenchEvent};
+use helpers::{BenchEvent, BenchSnapshot};
 
 fn new_event(event_id: u128, time: i64) -> BenchEvent {
     let snapshot_id = 0;
@@ -54,7 +54,7 @@ fn benchmark_apply_event(runner: &mut Criterion) {
                 },
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event(i, (i/2) as i64));
+                        history.apply_event(new_event(i, (i / 2) as i64));
                     }
 
                     black_box(&history);
@@ -72,8 +72,7 @@ fn benchmark_apply_event(runner: &mut Criterion) {
                 },
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event((size-1)-i, ((size-1)-i) as i64));
-
+                        history.apply_event(new_event((size - 1) - i, ((size - 1) - i) as i64));
                     }
                 },
                 BatchSize::SmallInput,

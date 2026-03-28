@@ -4,8 +4,8 @@ use std::sync::Arc;
 use ahash::RandomState;
 use flume::bounded;
 
-use crate::{Worker, SnapshotLanes, EventLanes, WorkerInbound};
-use crate::handle::{ApplyHandle, QueryHandle, QueryResult, AdvanceHandle};
+use crate::handle::{AdvanceHandle, ApplyHandle, QueryHandle, QueryResult};
+use crate::{EventLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
 pub enum RouterError {
@@ -13,8 +13,7 @@ pub enum RouterError {
     Error,
 }
 
-pub struct Router<SL: SnapshotLanes<Event = EL>, EL: EventLanes<SL>>
-{
+pub struct Router<SL: SnapshotLanes<Event = EL>, EL: EventLanes<SL>> {
     hasher: RandomState,
     workers: Vec<Worker<SL, EL>>,
     memory_budget: Arc<AtomicU64>,
@@ -22,10 +21,7 @@ pub struct Router<SL: SnapshotLanes<Event = EL>, EL: EventLanes<SL>>
 }
 
 impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Router<SL, EL> {
-    pub fn new(
-        worker_count: usize,
-        memory_budget_bytes: u64
-    ) -> Self {
+    pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
         let hasher = RandomState::new();
 
         let memory_budget = Arc::new(AtomicU64::new(memory_budget_bytes));
@@ -36,19 +32,10 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Rout
             workers.push(Worker::new(Arc::clone(&memory_usage)));
         }
 
-        Self {
-            hasher,
-            workers,
-            memory_budget,
-            memory_usage,
-        }
+        Self { hasher, workers, memory_budget, memory_usage }
     }
 
-    pub fn with_history_horizon(
-        worker_count: usize,
-        memory_budget_bytes: u64,
-        lower_time_horizon_delta: i64,
-    ) -> Self {
+    pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: i64) -> Self {
         let hasher = RandomState::new();
 
         let memory_budget = Arc::new(AtomicU64::new(memory_budget_bytes));
@@ -56,10 +43,7 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Rout
 
         let mut workers = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
-            workers.push(Worker::with_history_horizon(
-                Arc::clone(&memory_usage),
-                lower_time_horizon_delta,
-            ));
+            workers.push(Worker::with_history_horizon(Arc::clone(&memory_usage), lower_time_horizon_delta));
         }
 
         Self { hasher, workers, memory_budget, memory_usage }
@@ -77,9 +61,10 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Rout
             let snapshot_id = snapshot.id();
             let index = self.worker_index(snapshot_id);
             let (tx, rx) = bounded(1);
-            self.workers[index].worker_inbound_tx.send(
-                WorkerInbound::Event { snapshot_id, event: event_lane.clone(), initial_snapshot: snapshot, reply: tx }
-            ).map_err(|_| RouterError::Error)?;
+            self.workers[index]
+                .worker_inbound_tx
+                .send(WorkerInbound::Event { snapshot_id, event: event_lane.clone(), initial_snapshot: snapshot, reply: tx })
+                .map_err(|_| RouterError::Error)?;
             rxs.push(rx);
         }
 
@@ -99,9 +84,10 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Rout
 
         let index = self.worker_index(snapshot_lane.id());
         let (tx, rx) = bounded(1);
-        self.workers[index].worker_inbound_tx.send(
-            WorkerInbound::Snapshot { snapshot: snapshot_lane, reply: tx }
-        ).map_err(|_| RouterError::Error)?;
+        self.workers[index]
+            .worker_inbound_tx
+            .send(WorkerInbound::Snapshot { snapshot: snapshot_lane, reply: tx })
+            .map_err(|_| RouterError::Error)?;
 
         Ok(ApplyHandle::new(vec![rx]))
     }
@@ -113,9 +99,10 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Rout
     pub fn query_at(&self, time: i64, snapshot_id: u128) -> Result<QueryHandle<SL>, RouterError> {
         let index = self.worker_index(snapshot_id);
         let (tx, rx) = bounded(1);
-        self.workers[index].worker_inbound_tx.send(
-            WorkerInbound::SnapshotAt { snapshot_id, time, reply: tx }
-        ).map_err(|_| RouterError::Error)?;
+        self.workers[index]
+            .worker_inbound_tx
+            .send(WorkerInbound::SnapshotAt { snapshot_id, time, reply: tx })
+            .map_err(|_| RouterError::Error)?;
 
         Ok(QueryHandle::new(rx))
     }
@@ -128,9 +115,7 @@ impl<SL: SnapshotLanes<Event = EL> + 'static, EL: EventLanes<SL> + 'static> Rout
         let mut rxs = Vec::new();
         for worker in &self.workers {
             let (tx, rx) = bounded(1);
-            worker.worker_inbound_tx.send(
-                WorkerInbound::AdvanceTime { time, reply: tx }
-            ).map_err(|_| RouterError::Error)?;
+            worker.worker_inbound_tx.send(WorkerInbound::AdvanceTime { time, reply: tx }).map_err(|_| RouterError::Error)?;
             rxs.push(rx);
         }
 
