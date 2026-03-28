@@ -141,5 +141,9 @@ The current benchmarks are not up-to-date and accurate with the code changes ove
 - Delta-based checkpoints for larger snapshots
 - Refreshed crate-wide benchmarks and performance guidance
 
+## Real-World Usage
+
+Currently used in Arcanex, a multiplayer game engine, where all event streams are consumed using `contime`, with state derived from timestamped events and support for prediction, reconciliation, and querying across time.
+
 ## License
 MIT
