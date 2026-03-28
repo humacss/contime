@@ -6,7 +6,7 @@
 
 ## Current State
 
-This crate is currently in development. The only part of the crate that is tested properly is the apply function. Everything else is still a work in progress.
+This crate is currently in development. The API is not stable yet, but the core apply, query, reconciliation, memory-budget, and handle-based behavior is covered by tests. Documentation, benchmarks, and ergonomics are still being refined.
 
 ## Continuous Time?
 
@@ -65,6 +65,35 @@ The `Worker` applies the input to the continuous time state for that `snapshot_i
 
 This design lets `contime` scale across multiple threads and processors with zero lock contention.
 
+## Using `contime`
+
+The public API is small. In practice you do five things:
+
+1. Define a `Snapshot` type and one or more `Event` types.
+2. Implement `ApplyEvent` so events can mutate snapshots.
+3. Generate `SnapshotLanes`, `EventLanes`, and a typed `Contime` alias with `contime::contime!`.
+4. Create a `Contime` instance with a worker count and memory budget.
+5. Apply events or snapshots, then query state and react to reconciliation notifications.
+
+### Minimal usage flow
+
+The canonical onboarding example now lives in [`examples/ordered_values.rs`](examples/ordered_values.rs).
+
+Run it with:
+
+```bash
+cargo run --example ordered_values
+```
+
+The example defines one snapshot that stores each received value in event-time order. It then applies a late event on purpose so you can see two things clearly:
+
+- queries at different times return different ordered prefixes of the same history
+- a previously queried receiver gets a `Reconciliation` when late data changes historical state
+
+The snapshot logic in the example only appends values during replay. The ordered result comes from `contime` replaying events in chronological order, not from custom sorting in the example code.
+
+If you prefer handle-based integration instead of blocking calls, use `send_event`, `send_snapshot`, `query_at`, and `send_advance`, then wait, poll, or `await` the returned handles.
+
 ## `contime` is
 
 - A continuous-time state reconciliation engine  
@@ -85,17 +114,32 @@ In short: a high-performance, in-memory, continuous-time reconciliation engine.
 
 It sits in between other systems like persistence, scheduling, and event sourcing. It does not attempt to be a general solution for event processing. 
 
+## Current Constraints
+
+- `contime` is in-memory only. Persistence, replay from disk, and recovery belong in surrounding systems.
+- Memory usage is bounded by the configured budget and the amount of retained history.
+- History pruning is driven by `advance` together with the configured history horizon.
+- Queries currently include events with `event.time() < query_time`, not events exactly at `query_time`.
+- Checkpoints currently clone full snapshots, so the crate is best suited to relatively small snapshot payloads today.
+
 ## Current Status
 
-The crate is currently a work in progress. The API is not stable yet and some core features are still missing:
+The crate is currently a work in progress. The API is not stable yet and there are still some notable gaps:
 
-- Reconciliation notifications
 - Crate wide benchmarks
 - Early exits on apply
-- User provided Snapshots inputs
+- More examples and deeper documentation for multi-snapshot setups
 - Clones snapshots for checkpoints. This is fine for small snapshots <1KB. For supporting larger snapshots we need deltas.
 
-The current benchmarks are not up-to-date and accurate with the code changes over the last few weeks. The 10-100ns range is from old benchmarks run during development of the apply function.
+The current benchmarks are not up-to-date and accurate with the code changes over the last few weeks. 
+
+## TODO / Future Improvements
+
+- Builder-style configuration instead of positional constructor arguments
+- More ergonomic reconciliation subscription and query helpers
+- Compiled examples for more complex multi-snapshot topologies
+- Delta-based checkpoints for larger snapshots
+- Refreshed crate-wide benchmarks and performance guidance
 
 ## License
 MIT
