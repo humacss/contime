@@ -1,10 +1,10 @@
-use std::hint::{black_box};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, BatchSize};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use std::hint::black_box;
 
-use contime::{SnapshotHistory};
+use contime::SnapshotHistory;
 
 mod helpers;
-use helpers::{BenchSnapshot, BenchEvent};
+use helpers::{BenchEvent, BenchSnapshot};
 
 fn new_event(time: i64, value: i16) -> BenchEvent {
     let snapshot_id = 0;
@@ -12,7 +12,7 @@ fn new_event(time: i64, value: i16) -> BenchEvent {
 
     if value >= 0 {
         BenchEvent::Positive(snapshot_id, time, event_id, value.abs() as u16)
-    }else{
+    } else {
         BenchEvent::Negative(snapshot_id, time, event_id, value.abs() as u16)
     }
 }
@@ -26,9 +26,9 @@ fn benchmark_apply_event(runner: &mut Criterion) {
                 || SnapshotHistory::<BenchSnapshot>::new(0),
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event(i, i.try_into().unwrap()));    
+                        history.apply_event(new_event(i, i.try_into().unwrap()));
                     }
-                    
+
                     black_box(&history);
                 },
                 BatchSize::SmallInput,
@@ -44,11 +44,11 @@ fn benchmark_apply_event(runner: &mut Criterion) {
                 },
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event(i, i.try_into().unwrap()));    
+                        history.apply_event(new_event(i, i.try_into().unwrap()));
                     }
-                    
+
                     black_box(&history);
-                }, 
+                },
                 BatchSize::SmallInput,
             );
         });
@@ -62,11 +62,11 @@ fn benchmark_apply_event(runner: &mut Criterion) {
                 },
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event(i/2, i.try_into().unwrap()));    
+                        history.apply_event(new_event(i / 2, i.try_into().unwrap()));
                     }
-                    
+
                     black_box(&history);
-                }, 
+                },
                 BatchSize::SmallInput,
             );
         });
@@ -80,8 +80,7 @@ fn benchmark_apply_event(runner: &mut Criterion) {
                 },
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event(black_box(0), i.try_into().unwrap()));    
-                        
+                        history.apply_event(new_event(black_box(0), i.try_into().unwrap()));
                     }
 
                     black_box(&history);
