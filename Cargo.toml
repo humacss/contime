@@ -2,6 +2,7 @@
 name = "contime"
 version = "0.1.0"
 edition = "2021"
+autobenches = false
 license = "MIT"
 description = "Continuous-time reconciliation engine for unreliable event streams with O(log N) historical queries"
 repository = "https://github.com/humacss/contime"
@@ -14,12 +15,27 @@ authors = ["humacss"]
 [dependencies]
 ahash = "0.8.12"
 flume = "0.12.0"
+crossbeam-channel = "0.5"
+contime_macros = { path = "contime_macros" }
 
 [dev-dependencies]
 rstest = "0.26.1"
 criterion = { version = "0.5", features = ["html_reports"] }
 pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
+trybuild = "1.0.112"
 
 [[bench]]
 name = "apply"
+harness = false
+
+[[bench]]
+name = "query"
+harness = false
+
+[[bench]]
+name = "flume"
+harness = false
+
+[[bench]]
+name = "channels"
 harness = false

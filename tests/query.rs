@@ -75,6 +75,20 @@ fn test_query_at_exact_event_time() {
 }
 
 #[test]
+fn test_query_excludes_all_same_time_events_independent_of_event_id_ordering() {
+    let c = TestSnapshotContime::new(1, 100000);
+
+    c.apply_event(TestEvent::Positive(10, 5, 1, 40)).unwrap();
+    c.apply_event(TestEvent::Positive(10, 5, 20, 60)).unwrap();
+
+    let (snap, _) = c.at::<TestSnapshot>(5, 10).unwrap();
+    assert_eq!(snap.sum, 0);
+
+    let (snap, _) = c.at::<TestSnapshot>(6, 10).unwrap();
+    assert_eq!(snap.sum, 100);
+}
+
+#[test]
 fn test_query_handle_wait() {
     let c = TestSnapshotContime::new(1, 100000);
 
@@ -108,4 +122,26 @@ fn test_query_multiple_snapshot_ids() {
     assert_eq!(snap2.id(), 2);
     assert_eq!(snap3.sum, 30);
     assert_eq!(snap3.id(), 3);
+}
+
+#[test]
+fn test_many_at_returns_results_in_input_order_with_not_found_and_duplicates() {
+    let c = TestSnapshotContime::new(4, 100000);
+
+    c.apply_event(TestEvent::Positive(1, 1, 1, 10)).unwrap();
+    c.apply_event(TestEvent::Positive(2, 1, 2, 20)).unwrap();
+    c.apply_event(TestEvent::Positive(3, 1, 3, 30)).unwrap();
+
+    let results = c.many_at(2, &[3, 999, 1, 2, 1]).unwrap();
+    let sums = results
+        .into_iter()
+        .map(|lane| {
+            lane.map(|lane| {
+                let snapshot: TestSnapshot = lane.into();
+                snapshot.sum
+            })
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(sums, vec![Some(30), None, Some(10), Some(20), Some(10)]);
 }

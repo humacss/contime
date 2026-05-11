@@ -119,6 +119,49 @@ pub fn apply_event_in_place<S: Snapshot>(
     bytes_delta
 }
 
+pub fn apply_event_in_place_with_context<S: Snapshot, C>(
+    new_event: S::Event,
+    base_snapshot: &S,
+    checkpoints: &mut BTreeMap<ContimeKey, S>,
+    events: &mut BTreeMap<ContimeKey, S::Event>,
+    checkpoint_interval: usize,
+    context: &mut C,
+) -> i64
+where
+    S::Event: ApplyEvent<S, C>,
+{
+    let event_key = ContimeKey::from_event(&new_event);
+
+    if events.contains_key(&event_key) {
+        return 0;
+    }
+
+    let mut context_snapshot = snapshot_before_event(base_snapshot, checkpoints, events, &event_key);
+    new_event.apply_to_with_context(&mut context_snapshot, context);
+
+    apply_event_in_place(new_event, base_snapshot, checkpoints, events, checkpoint_interval)
+}
+
+fn snapshot_before_event<S: Snapshot>(
+    base_snapshot: &S,
+    checkpoints: &BTreeMap<ContimeKey, S>,
+    events: &BTreeMap<ContimeKey, S::Event>,
+    event_key: &ContimeKey,
+) -> S {
+    let checkpoint_entry = checkpoints.range(..event_key).next_back();
+    let (mut snapshot, replay_start) = match checkpoint_entry {
+        Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
+        None => (base_snapshot.clone(), Bound::Unbounded),
+    };
+
+    for (_key, event) in events.range((replay_start, Bound::Excluded(event_key.clone()))) {
+        event.apply_to(&mut snapshot);
+        snapshot.set_time(event.time());
+    }
+
+    snapshot
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

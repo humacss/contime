@@ -4,7 +4,9 @@ use std::hint::black_box;
 use contime::SnapshotHistory;
 
 mod helpers;
-use helpers::{BenchEvent, BenchSnapshot};
+use helpers::{BenchContime, BenchEvent, BenchSnapshot};
+
+const MEMORY_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 
 fn new_event(event_id: u128, time: i64) -> BenchEvent {
     let snapshot_id = 0;
@@ -133,12 +135,30 @@ fn benchmark_snapshot_at(runner: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_sync_apply_end_to_end(runner: &mut Criterion) {
+    let mut group = runner.benchmark_group("sync_apply_end_to_end");
+
+    group.bench_function("fresh_lane_single_event", |bencher| {
+        let contime = BenchContime::new(1, MEMORY_BUDGET_BYTES);
+        let mut next_snapshot_id = 1_u128;
+
+        bencher.iter(|| {
+            let snapshot_id = next_snapshot_id;
+            next_snapshot_id = next_snapshot_id.wrapping_add(1);
+
+            black_box(contime.apply_event(BenchEvent::Positive(snapshot_id, 0, snapshot_id, 1)).expect("single sync apply should succeed"));
+        });
+    });
+
+    group.finish();
+}
+
 use pprof::criterion::{Output, PProfProfiler};
 
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
-    targets = benchmark_apply_event, benchmark_apply_snapshot, benchmark_snapshot_at
+    targets = benchmark_apply_event, benchmark_apply_snapshot, benchmark_snapshot_at, benchmark_sync_apply_end_to_end
 }
 
 criterion_main!(benches);

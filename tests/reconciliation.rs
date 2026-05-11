@@ -80,3 +80,41 @@ fn test_multiple_reconciliations() {
 
     assert!(count >= 3, "expected at least 3 reconciliations, got {}", count);
 }
+
+#[test]
+fn test_apply_snapshot_only_replays_strictly_later_events() {
+    let c = TestSnapshotContime::new(1, 100000);
+
+    c.apply_event(TestEvent::Positive(10, 5, 1, 10)).unwrap();
+    c.apply_event(TestEvent::Positive(10, 5, 20, 20)).unwrap();
+    c.apply_event(TestEvent::Positive(10, 6, 30, 30)).unwrap();
+
+    let auth = TestSnapshot { id: 10, time: 5, sum: 100, items: vec![] };
+    c.apply_snapshot(auth).unwrap();
+
+    let (snap, _) = c.at::<TestSnapshot>(6, 10).unwrap();
+    assert_eq!(snap.sum, 100);
+
+    let (snap, _) = c.at::<TestSnapshot>(7, 10).unwrap();
+    assert_eq!(snap.sum, 130);
+}
+
+#[test]
+fn test_reconciliation_is_broadcast_to_multiple_queries() {
+    let c = TestSnapshotContime::new(1, 100000);
+
+    c.apply_event(TestEvent::Positive(1, 10, 10, 10)).unwrap();
+
+    let (_, rx_a) = c.at::<TestSnapshot>(11, 1).unwrap();
+    let (_, rx_b) = c.at::<TestSnapshot>(11, 1).unwrap();
+
+    c.apply_event(TestEvent::Positive(1, 5, 5, 20)).unwrap();
+
+    let recon_a = rx_a.recv_timeout(Duration::from_secs(2)).unwrap();
+    let recon_b = rx_b.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    assert_eq!(recon_a.snapshot_id, 1);
+    assert_eq!(recon_a.from_time, 5);
+    assert_eq!(recon_a.to_time, 10);
+    assert_eq!(recon_b, recon_a);
+}

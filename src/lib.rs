@@ -7,14 +7,17 @@
 //! # Workflow
 //!
 //! 1. Implement [`Snapshot`], [`Event`], and [`ApplyEvent`] for your domain types.
-//! 2. Generate lane enums with [`contime!`] or define compatible lane types manually.
+//! 2. Generate lane enums with [`contime!`], or assemble larger runtimes with
+//!    [`fragment!`] and [`lanes!`], or define compatible lane types manually.
 //! 3. Construct a [`Contime`] with a worker count and memory budget.
 //! 4. Apply events or authoritative snapshots.
-//! 5. Query state with [`Contime::at`] or [`Contime::query_at`] and listen for
+//! 5. Query state with [`Contime::at`] or [`Contime::query_at`], query retained
+//!    snapshot-scoped events with [`Contime::events_between`], and listen for
 //!    [`Reconciliation`] notifications when late data changes previously queried history.
 //!
 //! Queries currently replay events with `event.time() < query_time`, so query the first
-//! logical instant after the events you want included.
+//! logical instant after the events you want included. Event history range queries use
+//! half-open ranges: `from_time <= event.time() < to_time`.
 //!
 //! # Where To Start
 //!
@@ -51,15 +54,23 @@ mod router;
 mod traits;
 mod worker;
 
+extern crate self as contime;
+
 use apply::apply_event_in_place;
 use key::ContimeKey;
 use router::{Router, RouterError};
 use worker::{Worker, WorkerInbound};
 
 pub use api::{Contime, ContimeError};
-pub use handle::{AdvanceHandle, ApplyHandle, HandleError, QueryHandle, QueryResult};
-pub use history::{Reconciliation, SnapshotHistory};
-pub use traits::{ApplyEvent, Event, EventLanes, Snapshot, SnapshotLanes};
+#[doc(hidden)]
+pub use contime_macros::__lanes_merge;
+pub use contime_macros::fragment;
+pub use handle::{
+    AdvanceHandle, ApplyHandle, EventQueryHandle, HandleError, QueryEventsResult, QueryHandle, QueryResult, SnapshotWake, TimeAdvance,
+    TimeAdvanceSubscription, WakeSubscription,
+};
+pub use history::{ApplyOutcome, Reconciliation, SnapshotHistory, SnapshotWakeCause, SnapshotWakeWindow};
+pub use traits::{ApplyEvent, Event, EventLanes, SeedSnapshot, Snapshot, SnapshotLanes};
 
 mod test;
 pub use test::*;
