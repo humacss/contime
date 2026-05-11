@@ -21,7 +21,7 @@ fn test_send_event() {
     let handle = c.send_event(TestEvent::Positive(1, 0, 0, 5)).unwrap();
     handle.wait().unwrap();
 
-    let (snapshot, _rx) = c.at::<TestSnapshot>(0, 1).unwrap();
+    let (snapshot, _rx) = c.at::<TestSnapshot>(1, 1).unwrap();
     assert_eq!(snapshot.id(), 1);
     assert_eq!(snapshot.sum, 5);
 }

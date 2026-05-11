@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-use flume::{bounded, Receiver, Sender};
+use flume::{bounded, Receiver, Sender, TrySendError};
 
 use crate::{ApplyEvent, ContimeKey, Event, Snapshot};
 
@@ -18,6 +18,18 @@ pub trait Deps: Default {
         events: &mut BTreeMap<ContimeKey, S::Event>,
         checkpoint_interval: usize,
     ) -> i64;
+
+    fn apply_event_in_place_with_context<S: Snapshot, C>(
+        &self,
+        new_event: S::Event,
+        base_snapshot: &S,
+        checkpoints: &mut BTreeMap<ContimeKey, S>,
+        events: &mut BTreeMap<ContimeKey, S::Event>,
+        checkpoint_interval: usize,
+        context: &mut C,
+    ) -> i64
+    where
+        S::Event: crate::ApplyEvent<S, C>;
 }
 
 /// Default dependency set for [`SnapshotHistory`].
@@ -35,6 +47,21 @@ impl Deps for DefDeps {
     ) -> i64 {
         apply_event_in_place(new_event, base_snapshot, checkpoints, events, checkpoint_interval)
     }
+
+    fn apply_event_in_place_with_context<S: Snapshot, C>(
+        &self,
+        new_event: S::Event,
+        base_snapshot: &S,
+        checkpoints: &mut BTreeMap<ContimeKey, S>,
+        events: &mut BTreeMap<ContimeKey, S::Event>,
+        checkpoint_interval: usize,
+        context: &mut C,
+    ) -> i64
+    where
+        S::Event: crate::ApplyEvent<S, C>,
+    {
+        super::apply::apply_event_in_place_with_context(new_event, base_snapshot, checkpoints, events, checkpoint_interval, context)
+    }
 }
 
 type SnapshotId = u128;
@@ -48,6 +75,35 @@ pub struct Reconciliation {
     pub from_time: i64,
     /// Latest previously known event time affected by the change.
     pub to_time: i64,
+}
+
+/// Why one snapshot wake was emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotWakeCause {
+    /// The snapshot changed through a normal in-order state update.
+    Changed,
+    /// The snapshot changed because history was rewritten or backfilled.
+    Reconciled,
+}
+
+/// Inclusive logical time window whose state may have changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotWakeWindow {
+    /// Earliest logical time affected by the change.
+    pub from_time: i64,
+    /// Latest logical time affected by the change.
+    pub to_time: i64,
+    /// Why the wake was emitted.
+    pub cause: SnapshotWakeCause,
+}
+
+/// Outcome from applying an event or authoritative snapshot to one history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApplyOutcome {
+    /// Signed memory delta from the apply.
+    pub bytes_delta: i64,
+    /// Wake window for downstream snapshot listeners.
+    pub wake: Option<SnapshotWakeWindow>,
 }
 
 /// Advanced per-snapshot history store used internally by `Contime`.
@@ -74,8 +130,7 @@ where
     current_time: i64,
     lower_time_horizon_delta: i64,
 
-    reconciliation_tx: Sender<Reconciliation>,
-    reconciliation_rx: Receiver<Reconciliation>,
+    reconciliation_subscribers: Vec<Sender<Reconciliation>>,
 
     deps: D,
 }
@@ -91,8 +146,6 @@ where
     pub fn new(snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
         let checkpoints = BTreeMap::new();
         let events = BTreeMap::new();
-        let (reconciliation_tx, reconciliation_rx) = bounded(1000);
-
         let mut base_snapshot = snapshot.clone();
         base_snapshot.set_time(0);
 
@@ -102,8 +155,7 @@ where
             Self {
                 current_time,
                 lower_time_horizon_delta,
-                reconciliation_tx,
-                reconciliation_rx,
+                reconciliation_subscribers: vec![],
                 snapshot_id: snapshot.id(),
                 base_snapshot,
                 checkpoints,
@@ -146,40 +198,67 @@ where
     }
 
     /// Applies an event to this history and returns the memory delta.
-    pub fn apply_event(&mut self, event: S::Event) -> i64 {
+    pub fn apply_event(&mut self, event: S::Event) -> ApplyOutcome {
+        self.apply_event_with_context(event, &mut ())
+    }
+
+    /// Applies an event with an optional runtime context.
+    ///
+    /// Context effects are produced only while handling this explicit apply.
+    /// Replay and query materialization continue to use context-free state
+    /// application.
+    pub fn apply_event_with_context<C>(&mut self, event: S::Event, context: &mut C) -> ApplyOutcome
+    where
+        S::Event: crate::ApplyEvent<S, C>,
+    {
         // Check if this event is out-of-order before applying
         let event_time = event.time();
         let latest_event_time = self.events.keys().next_back().map(|k| k.time);
 
-        let bytes_delta =
-            self.deps.apply_event_in_place(event, &self.base_snapshot, &mut self.checkpoints, &mut self.events, self.checkpoint_interval);
+        let bytes_delta = self.deps.apply_event_in_place_with_context(
+            event,
+            &self.base_snapshot,
+            &mut self.checkpoints,
+            &mut self.events,
+            self.checkpoint_interval,
+            context,
+        );
 
         // Send reconciliation if out-of-order (event is before the latest existing event)
         if let Some(latest_time) = latest_event_time {
             if event_time < latest_time {
-                let _ = self.reconciliation_tx.try_send(Reconciliation {
-                    snapshot_id: self.snapshot_id,
-                    from_time: event_time,
-                    to_time: latest_time,
-                });
+                let reconciliation = Reconciliation { snapshot_id: self.snapshot_id, from_time: event_time, to_time: latest_time };
+                self.notify_reconciliation(reconciliation.clone());
+                return ApplyOutcome {
+                    bytes_delta,
+                    wake: Some(SnapshotWakeWindow {
+                        from_time: reconciliation.from_time,
+                        to_time: reconciliation.to_time,
+                        cause: SnapshotWakeCause::Reconciled,
+                    }),
+                };
             }
         }
 
-        bytes_delta
+        ApplyOutcome {
+            bytes_delta,
+            wake: Some(SnapshotWakeWindow { from_time: event_time, to_time: event_time, cause: SnapshotWakeCause::Changed }),
+        }
     }
 
     /// Applies an authoritative snapshot and replays later events on top of it.
-    pub fn apply_snapshot(&mut self, snapshot: S) -> i64 {
+    pub fn apply_snapshot(&mut self, snapshot: S) -> ApplyOutcome {
         if snapshot.id() != self.snapshot_id {
-            return 0;
+            return ApplyOutcome { bytes_delta: 0, wake: None };
         }
 
-        let snapshot_key = ContimeKey { time: snapshot.time(), id: self.snapshot_id };
+        let snapshot_key = last_key_at_time(snapshot.time());
+        let stale_boundary = first_key_at_time(snapshot.time());
 
         let mut bytes_delta: i64 = 0;
 
-        // Remove all checkpoints at or after snapshot_key
-        let stale_keys: Vec<ContimeKey> = self.checkpoints.range(snapshot_key.clone()..).map(|(k, _)| k.clone()).collect();
+        // Remove all checkpoints at or after the snapshot time.
+        let stale_keys: Vec<ContimeKey> = self.checkpoints.range(stale_boundary..).map(|(k, _)| k.clone()).collect();
         for key in &stale_keys {
             let removed = self.checkpoints.remove(key).expect("stale checkpoint key must exist");
             bytes_delta -= removed.conservative_size() as i64;
@@ -189,46 +268,112 @@ where
         bytes_delta += snapshot.conservative_size() as i64;
         self.checkpoints.insert(snapshot_key.clone(), snapshot.clone());
 
-        // Replay events after snapshot_key to rebuild downstream checkpoints
-        bytes_delta +=
-            replay_and_checkpoint(&snapshot, Bound::Excluded(&snapshot_key), &mut self.checkpoints, &self.events, self.checkpoint_interval);
+        // Replay only events strictly after the snapshot time to rebuild downstream checkpoints.
+        bytes_delta += replay_and_checkpoint(
+            &snapshot,
+            Bound::Excluded(&last_key_at_time(snapshot.time())),
+            &mut self.checkpoints,
+            &self.events,
+            self.checkpoint_interval,
+        );
 
         // Send reconciliation notification
-        let latest_event_time = self.events.keys().next_back().map(|k| k.time).unwrap_or(snapshot.time());
-        let _ = self.reconciliation_tx.try_send(Reconciliation {
-            snapshot_id: self.snapshot_id,
-            from_time: snapshot.time(),
-            to_time: latest_event_time,
-        });
+        let latest_event_time = self.events.keys().next_back().map(|k| k.time).unwrap_or(snapshot.time()).max(snapshot.time());
+        let reconciliation = Reconciliation { snapshot_id: self.snapshot_id, from_time: snapshot.time(), to_time: latest_event_time };
+        self.notify_reconciliation(reconciliation.clone());
 
-        bytes_delta
+        ApplyOutcome {
+            bytes_delta,
+            wake: Some(SnapshotWakeWindow {
+                from_time: reconciliation.from_time,
+                to_time: reconciliation.to_time,
+                cause: SnapshotWakeCause::Reconciled,
+            }),
+        }
     }
 
     /// Reconstructs the snapshot state at `time` and returns a reconciliation receiver.
     ///
     /// Events at exactly `time` are not included in the returned snapshot.
-    pub fn snapshot_at(&self, time: i64) -> (S, Receiver<Reconciliation>) {
-        let query_key = ContimeKey { time, id: self.snapshot_id };
+    pub fn snapshot_at(&mut self, time: i64) -> (S, Receiver<Reconciliation>) {
+        (self.materialize_snapshot_at(time), self.subscribe_reconciliation())
+    }
 
-        // Find the latest checkpoint at or before the query time
-        let checkpoint_entry = self.checkpoints.range(..=&query_key).next_back();
+    /// Reconstructs the snapshot state at `time` without creating a reconciliation receiver.
+    ///
+    /// Events at exactly `time` are not included in the returned snapshot.
+    pub fn snapshot_only_at(&self, time: i64) -> S {
+        self.materialize_snapshot_at(time)
+    }
+
+    /// Returns retained events where `from_time <= event.time() < to_time`.
+    ///
+    /// Results are sorted by `(time, event_id)`, matching the internal event
+    /// key order. Events already pruned by the configured history horizon are
+    /// not returned.
+    pub fn events_between(&self, from_time: i64, to_time: i64) -> Vec<S::Event>
+    where
+        S::Event: Clone,
+    {
+        if from_time >= to_time {
+            return Vec::new();
+        }
+
+        self.events.range(first_key_at_time(from_time)..first_key_at_time(to_time)).map(|(_key, event)| event.clone()).collect()
+    }
+
+    fn materialize_snapshot_at(&self, time: i64) -> S {
+        let checkpoint_boundary = first_key_at_time(time);
+
+        // Find the latest checkpoint strictly before the query time.
+        let checkpoint_entry = self.checkpoints.range(..checkpoint_boundary).next_back();
 
         let (mut snapshot, replay_start) = match checkpoint_entry {
             Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
             None => (self.base_snapshot.clone(), Bound::Unbounded),
         };
 
-        let end_key = ContimeKey { time, id: self.snapshot_id };
+        let end_key = first_key_at_time(time);
 
-        // Replay events from after the checkpoint up to the query time
+        // Replay events strictly before the query time.
         for (_key, event) in self.events.range((replay_start, Bound::Excluded(end_key))) {
             event.apply_to(&mut snapshot);
         }
 
         snapshot.set_time(time);
 
-        (snapshot, self.reconciliation_rx.clone())
+        snapshot
     }
+
+    fn subscribe_reconciliation(&mut self) -> Receiver<Reconciliation> {
+        self.reconciliation_subscribers.retain(|sender| !sender.is_disconnected());
+
+        let (tx, rx) = bounded(1000);
+        self.reconciliation_subscribers.push(tx);
+        rx
+    }
+
+    fn notify_reconciliation(&mut self, reconciliation: Reconciliation) {
+        let mut index = 0;
+        while index < self.reconciliation_subscribers.len() {
+            match self.reconciliation_subscribers[index].try_send(reconciliation.clone()) {
+                Ok(()) | Err(TrySendError::Full(_)) => {
+                    index += 1;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.reconciliation_subscribers.swap_remove(index);
+                }
+            }
+        }
+    }
+}
+
+fn first_key_at_time(time: i64) -> ContimeKey {
+    ContimeKey { time, id: u128::MIN }
+}
+
+fn last_key_at_time(time: i64) -> ContimeKey {
+    ContimeKey { time, id: u128::MAX }
 }
 
 /// Concrete per-snapshot history type used by the crate.
@@ -303,6 +448,21 @@ mod tests {
 
                 self.bytes_delta
             }
+
+            fn apply_event_in_place_with_context<S: Snapshot, C>(
+                &self,
+                new_event: S::Event,
+                base_snapshot: &S,
+                checkpoints: &mut BTreeMap<ContimeKey, S>,
+                events: &mut BTreeMap<ContimeKey, S::Event>,
+                checkpoint_interval: usize,
+                _context: &mut C,
+            ) -> i64
+            where
+                S::Event: crate::ApplyEvent<S, C>,
+            {
+                self.apply_event_in_place(new_event, base_snapshot, checkpoints, events, checkpoint_interval)
+            }
         }
 
         let mut snapshot = TestSnapshot::default();
@@ -343,7 +503,7 @@ mod tests {
 
         let actual = history.apply_event(new_event.into());
 
-        assert_eq!(expected, actual, "wrong bytes_delta output");
+        assert_eq!(expected, actual.bytes_delta, "wrong bytes_delta output");
     }
 
     // --- apply_snapshot tests ---
@@ -356,7 +516,7 @@ mod tests {
         let wrong_snapshot = TestSnapshot { id: 2, time: 5, sum: 10, items: vec![1, 2] };
         let delta = history.apply_snapshot(wrong_snapshot);
 
-        assert_eq!(delta, 0);
+        assert_eq!(delta.bytes_delta, 0);
         assert!(history.checkpoints.is_empty());
     }
 
@@ -369,8 +529,8 @@ mod tests {
         let expected_size = auth_snapshot.conservative_size() as i64;
         let delta = history.apply_snapshot(auth_snapshot.clone());
 
-        assert_eq!(delta, expected_size);
-        let key = ContimeKey { time: 5, id: 1 };
+        assert_eq!(delta.bytes_delta, expected_size);
+        let key = last_key_at_time(5);
         assert_eq!(history.checkpoints.get(&key), Some(&auth_snapshot));
     }
 
@@ -390,7 +550,7 @@ mod tests {
         history.apply_snapshot(auth_snapshot.clone());
 
         // Check that snapshot is stored as checkpoint
-        let snap_key = ContimeKey { time: 2, id: 1 };
+        let snap_key = last_key_at_time(2);
         assert_eq!(history.checkpoints.get(&snap_key), Some(&auth_snapshot));
 
         // Query at time 6 — should reflect snapshot + events at t=3, t=5
@@ -408,9 +568,9 @@ mod tests {
         let auth_snapshot = TestSnapshot { id: 1, time: 5, sum: 42, items: vec![1] };
         history.apply_snapshot(auth_snapshot);
 
-        let (result, _rx) = history.snapshot_at(5);
+        let (result, _rx) = history.snapshot_at(6);
         assert_eq!(result.sum, 42);
-        assert_eq!(result.time, 5);
+        assert_eq!(result.time, 6);
     }
 
     // --- advance tests ---
@@ -473,10 +633,11 @@ mod tests {
         let (mut history, _) = SnapshotHistory::new(base, 0, 1000);
 
         history.apply_event(TestEvent::Positive(1, 1, 1, 10));
-        history.apply_event(TestEvent::Positive(1, 2, 2, 20));
+        let (_snapshot, reconciliation_rx) = history.snapshot_at(2);
+        history.apply_event(TestEvent::Positive(1, 3, 3, 20));
 
         // No reconciliation should be sent for in-order events
-        assert!(history.reconciliation_rx.try_recv().is_err());
+        assert!(reconciliation_rx.try_recv().is_err());
     }
 
     #[test]
@@ -485,9 +646,10 @@ mod tests {
         let (mut history, _) = SnapshotHistory::new(base, 0, 1000);
 
         history.apply_event(TestEvent::Positive(1, 10, 10, 10));
+        let (_snapshot, reconciliation_rx) = history.snapshot_at(11);
         history.apply_event(TestEvent::Positive(1, 5, 5, 20)); // out-of-order
 
-        let recon = history.reconciliation_rx.try_recv().unwrap();
+        let recon = reconciliation_rx.try_recv().unwrap();
         assert_eq!(recon.snapshot_id, 1);
         assert_eq!(recon.from_time, 5);
         assert_eq!(recon.to_time, 10);
@@ -499,11 +661,12 @@ mod tests {
         let (mut history, _) = SnapshotHistory::new(base, 0, 1000);
 
         history.apply_event(TestEvent::Positive(1, 10, 10, 10));
+        let (_snapshot, reconciliation_rx) = history.snapshot_at(11);
 
         let auth_snapshot = TestSnapshot { id: 1, time: 5, sum: 42, items: vec![] };
         history.apply_snapshot(auth_snapshot);
 
-        let recon = history.reconciliation_rx.try_recv().unwrap();
+        let recon = reconciliation_rx.try_recv().unwrap();
         assert_eq!(recon.snapshot_id, 1);
         assert_eq!(recon.from_time, 5);
         assert_eq!(recon.to_time, 10);
@@ -516,8 +679,9 @@ mod tests {
 
         // Add an in-order event first
         history.apply_event(TestEvent::Positive(1, 100, 100, 1));
+        let (_snapshot, _reconciliation_rx) = history.snapshot_at(101);
 
-        // Fill the reconciliation channel (capacity 1000)
+        // Fill the reconciliation subscriber channel (capacity 1000)
         for i in 0..1001 {
             // Each out-of-order event tries to send a reconciliation
             history.apply_event(TestEvent::Positive(1, i, i as u128, 1));

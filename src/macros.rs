@@ -75,7 +75,7 @@ macro_rules! contime {
                 fn from_event(event: &Self::Event) -> Self {
                     match event {
                         EventLanes::$event(event) => {
-                            Self::$snapshot(<$snapshot as $crate::Snapshot>::from_event(event))
+                            Self::$snapshot(<$snapshot as $crate::SeedSnapshot<$event>>::seed_from_event(event))
                         }
                     }
                 }
@@ -118,11 +118,14 @@ macro_rules! contime {
                 }
             }
 
-            impl $crate::ApplyEvent<SnapshotLanes> for EventLanes {
+            impl<C> $crate::ApplyEvent<SnapshotLanes, C> for EventLanes
+            where
+                $event: $crate::ApplyEvent<$snapshot, C>,
+            {
                 fn snapshot_id(&self) -> u128 {
                     match self {
                         EventLanes::$event(event) => {
-                            <$event as $crate::ApplyEvent<$snapshot>>::snapshot_id(event)
+                            <$event as $crate::ApplyEvent<$snapshot, C>>::snapshot_id(event)
                         }
                     }
                 }
@@ -138,13 +141,28 @@ macro_rules! contime {
                         }
                     }
                 }
+
+                fn apply_to_with_context(&self, snapshot: &mut SnapshotLanes, context: &mut C) {
+                    match self {
+                        Self::$event(event) => {
+                            match snapshot {
+                                SnapshotLanes::$snapshot(s) => {
+                                    <$event as $crate::ApplyEvent<$snapshot, C>>::apply_to_with_context(event, s, context)
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
-            impl $crate::EventLanes<SnapshotLanes> for EventLanes {
+            impl<C> $crate::EventLanes<SnapshotLanes, C> for EventLanes
+            where
+                EventLanes: $crate::ApplyEvent<SnapshotLanes, C>,
+            {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
                     match self {
                         Self::$event(event) => {
-                            vec![<$snapshot as $crate::Snapshot>::from_event(event).into()]
+                            vec![<$snapshot as $crate::SeedSnapshot<$event>>::seed_from_event(event).into()]
                         }
                     }
                 }
@@ -217,9 +235,7 @@ macro_rules! contime {
                     match event {
                         $(
                             EventLanes::$variant(e) => {
-                                // Convert individual event into the first target's
-                                // event enum via From, then call from_event
-                                $crate::__contime_first_from_event!(e; $variant; $( $target ),+ )
+                                $crate::__contime_first_seed_from_event!(e; $evtype; $( $target ),+ )
                             }
                         )+
                     }
@@ -271,12 +287,19 @@ macro_rules! contime {
             }
 
             // ── ApplyEvent<SnapshotLanes> ──────────────────────────────
-            impl $crate::ApplyEvent<SnapshotLanes> for EventLanes {
+            impl<C> $crate::ApplyEvent<SnapshotLanes, C> for EventLanes
+            where
+                $(
+                    $(
+                        $evtype: $crate::ApplyEvent<$target, C>,
+                    )+
+                )+
+            {
                 fn snapshot_id(&self) -> u128 {
                     match self {
                         $(
                             Self::$variant(e) => {
-                                $crate::__contime_first_snapshot_id_typed!(e; $evtype; $( $target ),+ )
+                                $crate::__contime_first_snapshot_id_typed!(e; C; $evtype; $( $target ),+ )
                             }
                         )+
                     }
@@ -293,10 +316,25 @@ macro_rules! contime {
                         _ => {} // Event-snapshot combination not mapped
                     }
                 }
+
+                fn apply_to_with_context(&self, snapshot: &mut SnapshotLanes, context: &mut C) {
+                    match (self, snapshot) {
+                        $($(
+                            (Self::$variant(e), SnapshotLanes::$target(s)) => {
+                                <$evtype as $crate::ApplyEvent<$target, C>>::apply_to_with_context(e, s, context)
+                            }
+                        )+)+
+                        #[allow(unreachable_patterns)]
+                        _ => {} // Event-snapshot combination not mapped
+                    }
+                }
             }
 
             // ── EventLanes<SnapshotLanes> ──────────────────────────────
-            impl $crate::EventLanes<SnapshotLanes> for EventLanes {
+            impl<C> $crate::EventLanes<SnapshotLanes, C> for EventLanes
+            where
+                EventLanes: $crate::ApplyEvent<SnapshotLanes, C>,
+            {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
                     match self {
                         $(
@@ -304,10 +342,8 @@ macro_rules! contime {
                                 vec![
                                     $(
                                         {
-                                            let snapshot_event: <$target as $crate::Snapshot>::Event =
-                                                <_ as From<$evtype>>::from(e.clone());
                                             SnapshotLanes::$target(
-                                                <$target as $crate::Snapshot>::from_event(&snapshot_event)
+                                                <$target as $crate::SeedSnapshot<$evtype>>::seed_from_event(e)
                                             )
                                         },
                                     )+
@@ -326,30 +362,17 @@ macro_rules! contime {
                     }
                 }
             )+
-
-            // ── From<$evtype> for each target's Snapshot::Event ────────
-            // Uses the $variant ident as the enum variant name in the
-            // target's event enum.
-            $($(
-                impl From<$evtype> for <$target as $crate::Snapshot>::Event {
-                    fn from(e: $evtype) -> Self {
-                        Self::$variant(e)
-                    }
-                }
-            )+)+
-
             pub type Contime = $crate::Contime<SnapshotLanes, EventLanes>;
         }
     };
 }
 
-/// Internal helper: calls from_event on the first target snapshot type.
+/// Internal helper: seeds the first target snapshot type.
 #[macro_export]
 #[doc(hidden)]
-macro_rules! __contime_first_from_event {
-    ($event:expr; $variant:ident; $first:ident $(, $rest:ident )* ) => {{
-        let snapshot_event: <$first as $crate::Snapshot>::Event = <_ as From<_>>::from(($event).clone());
-        SnapshotLanes::$first(<$first as $crate::Snapshot>::from_event(&snapshot_event))
+macro_rules! __contime_first_seed_from_event {
+    ($event:expr; $event_ty:ty; $first:ident $(, $rest:ident )* ) => {{
+        SnapshotLanes::$first(<$first as $crate::SeedSnapshot<$event_ty>>::seed_from_event($event))
     }};
 }
 
@@ -357,7 +380,75 @@ macro_rules! __contime_first_from_event {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __contime_first_snapshot_id_typed {
-    ($event:expr; $evtype:ty; $first:ident $(, $rest:ident )* ) => {
-        <$evtype as $crate::ApplyEvent<$first>>::snapshot_id($event)
+    ($event:expr; $context_ty:ty; $evtype:ty; $first:ident $(, $rest:ident )* ) => {
+        <$evtype as $crate::ApplyEvent<$first, $context_ty>>::snapshot_id($event)
+    };
+}
+
+/// Merges multiple compile-time fragments into one final lane universe.
+///
+/// `lanes!` expands the listed fragment macros, merges the collected snapshot
+/// and route manifests, and generates one module-scoped `SnapshotLanes`,
+/// `EventLanes`, and `Contime` alias.
+///
+/// ```ignore
+/// use crate::snapshots::consumer_source_fragment;
+/// use crate::triggers::consumer_trigger_fragment;
+///
+/// contime::lanes! {
+///     mod example_contime;
+///     fragments [
+///         consumer_source_fragment,
+///         consumer_trigger_fragment,
+///     ];
+/// }
+/// ```
+#[macro_export]
+macro_rules! lanes {
+    (
+        mod $modname:ident;
+        fragments [ $( $fragment:ident ),+ $(,)? ];
+    ) => {
+        ::contime::__contime_collect_fragments! {
+            @collect
+            mod $modname;
+            snapshots {}
+            routes {}
+            fragments [ $( $fragment ),+ ]
+        }
+    };
+}
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __contime_collect_fragments {
+    (
+        @collect
+        mod $modname:ident;
+        snapshots { $( $snapshot:tt )* }
+        routes { $( $route:tt )* }
+        fragments [ ]
+    ) => {
+        ::contime::__lanes_merge! {
+            mod $modname;
+            snapshots { $( $snapshot )* }
+            routes { $( $route )* }
+        }
+    };
+
+    (
+        @collect
+        mod $modname:ident;
+        snapshots { $( $snapshot:tt )* }
+        routes { $( $route:tt )* }
+        fragments [ $next:ident $(, $rest:ident )* $(,)? ]
+    ) => {
+        $next! {
+            @append
+            mod $modname;
+            snapshots { $( $snapshot )* }
+            routes { $( $route )* }
+            fragments [ $( $rest ),* ]
+        }
     };
 }

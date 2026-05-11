@@ -35,7 +35,7 @@ impl Snapshot for BenchSnapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum BenchEvent {
     Positive(EventId, Time, SnapshotId, u16),
 }
@@ -76,3 +76,11 @@ impl ApplyEvent<BenchSnapshot> for BenchEvent {
         }
     }
 }
+
+contime::contime! {
+    mod bench_lanes;
+    BenchSnapshot { BenchEvent }
+}
+
+#[allow(dead_code)]
+pub type BenchContime = bench_lanes::Contime;

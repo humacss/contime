@@ -19,6 +19,29 @@ pub trait Snapshot: Send + Sync + Clone + Debug + PartialEq + Eq {
     fn from_event(event: &Self::Event) -> Self;
 }
 
+/// Seeds the first materialized snapshot state for a concrete routed event type.
+///
+/// This is separate from [`Snapshot::from_event`] so merged host lane enums can
+/// initialize foreign snapshots without needing foreign `From<E> for
+/// <Snapshot as Snapshot>::Event` impls, which violate Rust's orphan rules.
+pub trait SeedSnapshot<E>: Snapshot
+where
+    E: Event,
+{
+    /// Builds the initial snapshot state for a snapshot id from one routed event.
+    fn seed_from_event(event: &E) -> Self;
+}
+
+impl<S, E> SeedSnapshot<E> for S
+where
+    S: Snapshot<Event = E>,
+    E: Event + ApplyEvent<S>,
+{
+    fn seed_from_event(event: &E) -> Self {
+        S::from_event(event)
+    }
+}
+
 /// Marker trait for the generated or user-defined snapshot lane enum.
 pub trait SnapshotLanes: Snapshot {}
 
@@ -33,7 +56,7 @@ pub trait Event: Send + Sync + Debug {
 }
 
 /// Applies an event to a snapshot type.
-pub trait ApplyEvent<S>: Event
+pub trait ApplyEvent<S, C = ()>: Event
 where
     S: Snapshot,
 {
@@ -41,12 +64,20 @@ where
     fn snapshot_id(&self) -> u128;
     /// Mutates the snapshot in place.
     fn apply_to(&self, snapshot: &mut S);
+    /// Mutates the snapshot in place with an optional per-apply context.
+    ///
+    /// Context is runtime plumbing. Implementations that override this method
+    /// must leave `snapshot` in the same state as [`ApplyEvent::apply_to`]
+    /// would for deterministic replay.
+    fn apply_to_with_context(&self, snapshot: &mut S, _context: &mut C) {
+        self.apply_to(snapshot);
+    }
 }
 
 /// Marker trait for the generated or user-defined event lane enum.
 ///
 /// `snapshots()` returns the initial snapshots that should exist when this event creates
 /// history for a snapshot id for the first time.
-pub trait EventLanes<SL: SnapshotLanes>: Event + ApplyEvent<SL> + Clone {
+pub trait EventLanes<SL: SnapshotLanes, C = ()>: Event + ApplyEvent<SL, C> + Clone {
     fn snapshots(&self) -> Vec<SL>;
 }

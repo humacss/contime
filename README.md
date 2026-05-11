@@ -73,7 +73,8 @@ The public API is small. In practice you do five things:
 2. Implement `ApplyEvent` so events can mutate snapshots.
 3. Generate `SnapshotLanes`, `EventLanes`, and a typed `Contime` alias with `contime::contime!`.
 4. Create a `Contime` instance with a worker count and memory budget.
-5. Apply events or snapshots, then query state and react to reconciliation notifications.
+5. Apply events or snapshots, then query state, inspect retained snapshot-scoped
+   events, and react to reconciliation notifications.
 
 ### Minimal usage flow
 
@@ -93,6 +94,18 @@ The example defines one snapshot that stores each received value in event-time o
 The snapshot logic in the example only appends values during replay. The ordered result comes from `contime` replaying events in chronological order, not from custom sorting in the example code.
 
 If you prefer handle-based integration instead of blocking calls, use `send_event`, `send_snapshot`, `query_at`, and `send_advance`, then wait, poll, or `await` the returned handles.
+
+### Querying retained events
+
+`Contime::events_between(snapshot_id, from_time, to_time)` returns the retained
+events that affected one snapshot id. The range is half-open:
+`from_time <= event.time() < to_time`. Results are sorted deterministically by
+`(time, event_id)`.
+
+This is an in-memory retained-history query, not persistence. Events pruned by
+`advance` and the configured history horizon are gone from `contime` and are not
+returned. Use `query_events_between` when a handle-based query fits the host
+runtime better.
 
 ## `contime` is
 
@@ -120,7 +133,11 @@ It sits in between other systems like persistence, scheduling, and event sourcin
 - Memory usage is bounded by the configured budget and the amount of retained history.
 - History pruning is driven by `advance` together with the configured history horizon.
 - Queries currently include events with `event.time() < query_time`, not events exactly at `query_time`.
+- Event history queries are snapshot-scoped and use half-open time ranges.
 - Checkpoints currently clone full snapshots, so the crate is best suited to relatively small snapshot payloads today.
+- Known deferred issues:
+  - creating a brand-new history from an authoritative snapshot still treats that snapshot as the base state from time `0`
+  - memory-budget admission is still approximate and does not reserve replay/checkpoint growth up front
 
 ## Current Status
 
