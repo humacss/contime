@@ -171,21 +171,31 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                 .expect("merged route should always have at least one target");
             let target_ty = &target.path;
             quote! {
-                Self::#key(e) => <#event_ty as ::contime::ApplyEvent<#target_ty>>::snapshot_id(e),
+                Self::#key(e) => <#event_ty as ::contime::ApplyEvent<#target_ty, C>>::snapshot_id(e),
             }
         })
         .collect::<Vec<_>>();
 
     let mut apply_pairs = Vec::new();
+    let mut after_apply_pairs = Vec::new();
+    let mut apply_bounds = Vec::new();
     for route in &routes {
         let key = &route.key;
         let event_ty = &route.event_ty;
         for target in &route.targets {
             let target_variant = &target.variant;
             let target_ty = &target.path;
+            apply_bounds.push(quote! {
+                #event_ty: ::contime::ApplyEvent<#target_ty, C>
+            });
             apply_pairs.push(quote! {
                 (Self::#key(e), SnapshotLanes::#target_variant(s)) => {
                     <#event_ty as ::contime::ApplyEvent<#target_ty>>::apply_to(e, s)
+                }
+            });
+            after_apply_pairs.push(quote! {
+                (Self::#key(e), SnapshotLanes::#target_variant(s)) => {
+                    <#event_ty as ::contime::ApplyEvent<#target_ty, C>>::after_apply(e, s, context)
                 }
             });
         }
@@ -306,7 +316,11 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                 }
             }
 
-            impl ::contime::ApplyEvent<SnapshotLanes> for EventLanes {
+            impl<C> ::contime::ApplyEvent<SnapshotLanes, C> for EventLanes
+            where
+                C: 'static,
+                #( #apply_bounds, )*
+            {
                 fn snapshot_id(&self) -> u128 {
                     match self {
                         #( #event_snapshot_id_arms )*
@@ -320,9 +334,21 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                         _ => {}
                     }
                 }
+
+                fn after_apply(&self, snapshot: &SnapshotLanes, context: &mut C) {
+                    match (self, snapshot) {
+                        #( #after_apply_pairs, )*
+                        #[allow(unreachable_patterns)]
+                        _ => {}
+                    }
+                }
             }
 
-            impl ::contime::EventLanes<SnapshotLanes> for EventLanes {
+            impl<C> ::contime::EventLanes<SnapshotLanes, C> for EventLanes
+            where
+                C: 'static,
+                EventLanes: ::contime::ApplyEvent<SnapshotLanes, C>,
+            {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
                     match self {
                         #( #event_snapshots_arms )*

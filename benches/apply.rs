@@ -153,12 +153,145 @@ fn benchmark_sync_apply_end_to_end(runner: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_apply_orchestrator_callback(runner: &mut Criterion) {
+    let mut group = runner.benchmark_group("apply_orchestrator_callback");
+
+    group.bench_function("apply_event", |bencher| {
+        let mut next_event_id = 1_u128;
+
+        bencher.iter_batched_ref(
+            || SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0,
+            |history| {
+                next_event_id = next_event_id.wrapping_add(1);
+                black_box(history.apply_event(new_event(next_event_id, next_event_id as i64)));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("apply_event_with_unit_context", |bencher| {
+        let mut next_event_id = 1_u128;
+        let mut context = ();
+
+        bencher.iter_batched_ref(
+            || SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0,
+            |history| {
+                next_event_id = next_event_id.wrapping_add(1);
+                black_box(history.apply_event_with_context(new_event(next_event_id, next_event_id as i64), &mut context));
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("apply_event_with_callback_context", |bencher| {
+        let mut next_event_id = 1_u128;
+        let mut context = CallbackContext::default();
+
+        bencher.iter_batched_ref(
+            || SnapshotHistory::<CallbackSnapshot>::new(CallbackSnapshot::default(), 0, 10000).0,
+            |history| {
+                next_event_id = next_event_id.wrapping_add(1);
+                black_box(history.apply_event_with_context(
+                    CallbackEvent { event_id: next_event_id, time: next_event_id as i64, snapshot_id: 0, value: 1 },
+                    &mut context,
+                ));
+                black_box(context.sink);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+struct CallbackSnapshot {
+    id: u128,
+    time: i64,
+    sum: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CallbackEvent {
+    event_id: u128,
+    time: i64,
+    snapshot_id: u128,
+    value: u16,
+}
+
+#[derive(Default)]
+struct CallbackContext {
+    sink: u128,
+}
+
+impl contime::Snapshot for CallbackSnapshot {
+    type Event = CallbackEvent;
+
+    fn id(&self) -> u128 {
+        self.id
+    }
+
+    fn time(&self) -> i64 {
+        self.time
+    }
+
+    fn set_time(&mut self, time: i64) {
+        self.time = time;
+    }
+
+    fn from_event(event: &Self::Event) -> Self {
+        Self { id: event.snapshot_id, time: event.time, sum: 0 }
+    }
+
+    fn conservative_size(&self) -> u64 {
+        16 + 8 + 4
+    }
+}
+
+impl contime::Event for CallbackEvent {
+    fn id(&self) -> u128 {
+        self.event_id
+    }
+
+    fn time(&self) -> i64 {
+        self.time
+    }
+
+    fn conservative_size(&self) -> u64 {
+        16 + 8 + 16 + 2
+    }
+}
+
+impl contime::ApplyEvent<CallbackSnapshot> for CallbackEvent {
+    fn snapshot_id(&self) -> u128 {
+        self.snapshot_id
+    }
+
+    fn apply_to(&self, snapshot: &mut CallbackSnapshot) {
+        snapshot.sum += self.value as i32;
+    }
+}
+
+impl contime::ApplyEvent<CallbackSnapshot, CallbackContext> for CallbackEvent {
+    fn snapshot_id(&self) -> u128 {
+        self.snapshot_id
+    }
+
+    fn apply_to(&self, snapshot: &mut CallbackSnapshot) {
+        snapshot.sum += self.value as i32;
+    }
+
+    fn after_apply(&self, snapshot: &CallbackSnapshot, context: &mut CallbackContext) {
+        context.sink = context.sink.wrapping_add(self.event_id).wrapping_add(snapshot.sum as u128);
+    }
+}
+
 use pprof::criterion::{Output, PProfProfiler};
 
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
-    targets = benchmark_apply_event, benchmark_apply_snapshot, benchmark_snapshot_at, benchmark_sync_apply_end_to_end
+    targets = benchmark_apply_event, benchmark_apply_snapshot, benchmark_snapshot_at, benchmark_sync_apply_end_to_end, benchmark_apply_orchestrator_callback
 }
 
 criterion_main!(benches);
