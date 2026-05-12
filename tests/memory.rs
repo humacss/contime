@@ -93,5 +93,5 @@ fn test_advance_with_handle() {
     // Should still be able to query and apply events after advance
     c.apply_event(TestEvent::Positive(1, 200, 200, 5)).unwrap();
     let (snap, _) = c.at::<TestSnapshot>(201, 1).unwrap();
-    assert_eq!(snap.sum, 5); // old events dropped, only new one remains
+    assert_eq!(snap.sum, 15); // pruned history is carried by the promoted base snapshot
 }

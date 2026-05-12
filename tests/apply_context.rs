@@ -165,3 +165,50 @@ fn contime_workers_use_configured_apply_context() {
     let snapshot = contime.many_at(3, &[3]).unwrap().pop().flatten().unwrap();
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 3, value: 4 }));
 }
+
+#[test]
+fn out_of_order_apply_runs_after_apply_for_replayed_events() {
+    let (tx, rx) = flume::bounded(8);
+    let contime =
+        contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
+
+    contime.apply_event(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }).unwrap();
+    contime.apply_event(OnContextValueChanged { event_id: 30, time: 30, entity_id: 3, value: 30 }).unwrap();
+    assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
+    assert_eq!(rx.try_recv().unwrap(), (3, 30, 30, 30));
+
+    contime.apply_event(OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 }).unwrap();
+
+    assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
+    assert_eq!(rx.try_recv().unwrap(), (3, 20, 20, 20));
+    assert_eq!(rx.try_recv().unwrap(), (3, 30, 30, 30));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn duplicate_apply_does_not_run_after_apply() {
+    let (tx, rx) = flume::bounded(4);
+    let contime =
+        contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
+    let event = OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 };
+
+    contime.apply_event(event.clone()).unwrap();
+    contime.apply_event(event).unwrap();
+
+    assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn query_materialization_does_not_run_after_apply() {
+    let (tx, rx) = flume::bounded(4);
+    let contime =
+        contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
+
+    contime.apply_event(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }).unwrap();
+    assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
+
+    let snapshot = contime.many_at(11, &[3]).unwrap().pop().flatten().unwrap();
+    assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 11, value: 10 }));
+    assert!(rx.try_recv().is_err());
+}
