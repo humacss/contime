@@ -64,14 +64,12 @@ where
     fn snapshot_id(&self) -> u128;
     /// Mutates the snapshot in place.
     fn apply_to(&self, snapshot: &mut S);
-    /// Mutates the snapshot in place with an optional per-apply context.
+    /// Runs after [`ApplyEvent::apply_to`] against the actual post-apply
+    /// snapshot.
     ///
-    /// Context is runtime plumbing. Implementations that override this method
-    /// must leave `snapshot` in the same state as [`ApplyEvent::apply_to`]
-    /// would for deterministic replay.
-    fn apply_to_with_context(&self, snapshot: &mut S, _context: &mut C) {
-        self.apply_to(snapshot);
-    }
+    /// Context is runtime plumbing. Implementations must not mutate the
+    /// snapshot and must keep side effects deterministic and nonblocking.
+    fn after_apply(&self, _snapshot: &S, _context: &mut C) {}
 }
 
 /// Marker trait for the generated or user-defined event lane enum.

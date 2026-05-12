@@ -22,7 +22,7 @@ struct ApplyTrace {
 
 #[derive(Clone)]
 struct ApplyTraceSender {
-    tx: flume::Sender<(u128, i64, i32)>,
+    tx: flume::Sender<(u128, i64, i32, i32)>,
 }
 
 impl ContextValueAt {
@@ -90,9 +90,8 @@ impl ApplyEvent<ContextValueAt, ApplyTrace> for OnContextValueChanged {
         <Self as ApplyEvent<ContextValueAt>>::apply_to(self, snapshot);
     }
 
-    fn apply_to_with_context(&self, snapshot: &mut ContextValueAt, context: &mut ApplyTrace) {
-        <Self as ApplyEvent<ContextValueAt>>::apply_to(self, snapshot);
-        context.applied.push((self.entity_id, self.time, self.value));
+    fn after_apply(&self, snapshot: &ContextValueAt, context: &mut ApplyTrace) {
+        context.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
     }
 }
 
@@ -105,9 +104,8 @@ impl ApplyEvent<ContextValueAt, ApplyTraceSender> for OnContextValueChanged {
         <Self as ApplyEvent<ContextValueAt>>::apply_to(self, snapshot);
     }
 
-    fn apply_to_with_context(&self, snapshot: &mut ContextValueAt, context: &mut ApplyTraceSender) {
-        <Self as ApplyEvent<ContextValueAt>>::apply_to(self, snapshot);
-        context.tx.send((self.entity_id, self.time, self.value)).unwrap();
+    fn after_apply(&self, snapshot: &ContextValueAt, context: &mut ApplyTraceSender) {
+        context.tx.send((self.entity_id, self.time, self.value, snapshot.value)).unwrap();
     }
 }
 
@@ -130,24 +128,26 @@ fn context_free_apply_still_mutates_snapshot() {
 }
 
 #[test]
-fn context_aware_apply_receives_context_without_changing_snapshot_semantics() {
+fn after_apply_receives_post_apply_snapshot_without_changing_snapshot_semantics() {
     let event = OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 };
     let mut snapshot = ContextValueAt::default();
     let mut context = ApplyTrace::default();
 
-    event.apply_to_with_context(&mut snapshot, &mut context);
+    <OnContextValueChanged as ApplyEvent<ContextValueAt, ApplyTrace>>::apply_to(&event, &mut snapshot);
+    <OnContextValueChanged as ApplyEvent<ContextValueAt, ApplyTrace>>::after_apply(&event, &snapshot, &mut context);
 
     assert_eq!(snapshot, ContextValueAt { entity_id: 3, time: 2, value: 4 });
     assert_eq!(context.applied, vec![(3, 2, 4)]);
 }
 
 #[test]
-fn generated_lane_dispatch_passes_context_to_concrete_apply() {
+fn generated_lane_dispatch_passes_after_apply_to_concrete_event() {
     let event = EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 });
     let mut snapshot = SnapshotLanes::ContextValueAt(ContextValueAt::default());
     let mut context = ApplyTrace::default();
 
-    event.apply_to_with_context(&mut snapshot, &mut context);
+    <EventLanes as ApplyEvent<SnapshotLanes, ApplyTrace>>::apply_to(&event, &mut snapshot);
+    <EventLanes as ApplyEvent<SnapshotLanes, ApplyTrace>>::after_apply(&event, &snapshot, &mut context);
 
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 2, value: 4 }));
     assert_eq!(context.applied, vec![(3, 2, 4)]);
@@ -161,7 +161,7 @@ fn contime_workers_use_configured_apply_context() {
 
     contime.apply_event(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 }).unwrap();
 
-    assert_eq!(rx.try_recv().unwrap(), (3, 2, 4));
+    assert_eq!(rx.try_recv().unwrap(), (3, 2, 4, 4));
     let snapshot = contime.many_at(3, &[3]).unwrap().pop().flatten().unwrap();
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 3, value: 4 }));
 }

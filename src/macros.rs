@@ -120,6 +120,7 @@ macro_rules! contime {
 
             impl<C> $crate::ApplyEvent<SnapshotLanes, C> for EventLanes
             where
+                C: 'static,
                 $event: $crate::ApplyEvent<$snapshot, C>,
             {
                 fn snapshot_id(&self) -> u128 {
@@ -142,12 +143,12 @@ macro_rules! contime {
                     }
                 }
 
-                fn apply_to_with_context(&self, snapshot: &mut SnapshotLanes, context: &mut C) {
+                fn after_apply(&self, snapshot: &SnapshotLanes, context: &mut C) {
                     match self {
                         Self::$event(event) => {
                             match snapshot {
                                 SnapshotLanes::$snapshot(s) => {
-                                    <$event as $crate::ApplyEvent<$snapshot, C>>::apply_to_with_context(event, s, context)
+                                    <$event as $crate::ApplyEvent<$snapshot, C>>::after_apply(event, s, context)
                                 }
                             }
                         }
@@ -157,6 +158,7 @@ macro_rules! contime {
 
             impl<C> $crate::EventLanes<SnapshotLanes, C> for EventLanes
             where
+                C: 'static,
                 EventLanes: $crate::ApplyEvent<SnapshotLanes, C>,
             {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
@@ -289,6 +291,7 @@ macro_rules! contime {
             // ── ApplyEvent<SnapshotLanes> ──────────────────────────────
             impl<C> $crate::ApplyEvent<SnapshotLanes, C> for EventLanes
             where
+                C: 'static,
                 $(
                     $(
                         $evtype: $crate::ApplyEvent<$target, C>,
@@ -317,11 +320,11 @@ macro_rules! contime {
                     }
                 }
 
-                fn apply_to_with_context(&self, snapshot: &mut SnapshotLanes, context: &mut C) {
+                fn after_apply(&self, snapshot: &SnapshotLanes, context: &mut C) {
                     match (self, snapshot) {
                         $($(
                             (Self::$variant(e), SnapshotLanes::$target(s)) => {
-                                <$evtype as $crate::ApplyEvent<$target, C>>::apply_to_with_context(e, s, context)
+                                <$evtype as $crate::ApplyEvent<$target, C>>::after_apply(e, s, context)
                             }
                         )+)+
                         #[allow(unreachable_patterns)]
@@ -333,6 +336,7 @@ macro_rules! contime {
             // ── EventLanes<SnapshotLanes> ──────────────────────────────
             impl<C> $crate::EventLanes<SnapshotLanes, C> for EventLanes
             where
+                C: 'static,
                 EventLanes: $crate::ApplyEvent<SnapshotLanes, C>,
             {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {

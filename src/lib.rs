@@ -66,10 +66,10 @@ pub use api::{Contime, ContimeError};
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::fragment;
 pub use handle::{
-    AdvanceHandle, ApplyHandle, EventQueryHandle, HandleError, QueryEventsResult, QueryHandle, QueryResult, SnapshotWake, TimeAdvance,
-    TimeAdvanceSubscription, WakeSubscription,
+    AdvanceHandle, ApplyHandle, CancelScheduleHandle, EventQueryHandle, HandleError, QueryEventsResult, QueryHandle, QueryResult,
+    ScheduleHandle, TimeAdvance, TimeAdvanceSubscription,
 };
-pub use history::{ApplyOutcome, Reconciliation, SnapshotHistory, SnapshotWakeCause, SnapshotWakeWindow};
+pub use history::{ApplyOutcome, Reconciliation, SnapshotHistory};
 pub use traits::{ApplyEvent, Event, EventLanes, SeedSnapshot, Snapshot, SnapshotLanes};
 
 mod test;

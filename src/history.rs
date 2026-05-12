@@ -18,18 +18,6 @@ pub trait Deps: Default {
         events: &mut BTreeMap<ContimeKey, S::Event>,
         checkpoint_interval: usize,
     ) -> i64;
-
-    fn apply_event_in_place_with_context<S: Snapshot, C>(
-        &self,
-        new_event: S::Event,
-        base_snapshot: &S,
-        checkpoints: &mut BTreeMap<ContimeKey, S>,
-        events: &mut BTreeMap<ContimeKey, S::Event>,
-        checkpoint_interval: usize,
-        context: &mut C,
-    ) -> i64
-    where
-        S::Event: crate::ApplyEvent<S, C>;
 }
 
 /// Default dependency set for [`SnapshotHistory`].
@@ -47,21 +35,6 @@ impl Deps for DefDeps {
     ) -> i64 {
         apply_event_in_place(new_event, base_snapshot, checkpoints, events, checkpoint_interval)
     }
-
-    fn apply_event_in_place_with_context<S: Snapshot, C>(
-        &self,
-        new_event: S::Event,
-        base_snapshot: &S,
-        checkpoints: &mut BTreeMap<ContimeKey, S>,
-        events: &mut BTreeMap<ContimeKey, S::Event>,
-        checkpoint_interval: usize,
-        context: &mut C,
-    ) -> i64
-    where
-        S::Event: crate::ApplyEvent<S, C>,
-    {
-        super::apply::apply_event_in_place_with_context(new_event, base_snapshot, checkpoints, events, checkpoint_interval, context)
-    }
 }
 
 type SnapshotId = u128;
@@ -77,33 +50,11 @@ pub struct Reconciliation {
     pub to_time: i64,
 }
 
-/// Why one snapshot wake was emitted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SnapshotWakeCause {
-    /// The snapshot changed through a normal in-order state update.
-    Changed,
-    /// The snapshot changed because history was rewritten or backfilled.
-    Reconciled,
-}
-
-/// Inclusive logical time window whose state may have changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SnapshotWakeWindow {
-    /// Earliest logical time affected by the change.
-    pub from_time: i64,
-    /// Latest logical time affected by the change.
-    pub to_time: i64,
-    /// Why the wake was emitted.
-    pub cause: SnapshotWakeCause,
-}
-
 /// Outcome from applying an event or authoritative snapshot to one history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplyOutcome {
     /// Signed memory delta from the apply.
     pub bytes_delta: i64,
-    /// Wake window for downstream snapshot listeners.
-    pub wake: Option<SnapshotWakeWindow>,
 }
 
 /// Advanced per-snapshot history store used internally by `Contime`.
@@ -215,41 +166,50 @@ where
         let event_time = event.time();
         let latest_event_time = self.events.keys().next_back().map(|k| k.time);
 
-        let bytes_delta = self.deps.apply_event_in_place_with_context(
-            event,
-            &self.base_snapshot,
-            &mut self.checkpoints,
-            &mut self.events,
-            self.checkpoint_interval,
-            context,
-        );
+        let event_key = ContimeKey::from_event(&event);
+        if self.events.contains_key(&event_key) {
+            return ApplyOutcome { bytes_delta: 0 };
+        }
+
+        let mut post_apply_snapshot = self.snapshot_before_event(&event_key);
+        event.apply_to(&mut post_apply_snapshot);
+        post_apply_snapshot.set_time(event.time());
+        event.after_apply(&post_apply_snapshot, context);
+
+        let bytes_delta =
+            self.deps.apply_event_in_place(event, &self.base_snapshot, &mut self.checkpoints, &mut self.events, self.checkpoint_interval);
 
         // Send reconciliation if out-of-order (event is before the latest existing event)
         if let Some(latest_time) = latest_event_time {
             if event_time < latest_time {
                 let reconciliation = Reconciliation { snapshot_id: self.snapshot_id, from_time: event_time, to_time: latest_time };
                 self.notify_reconciliation(reconciliation.clone());
-                return ApplyOutcome {
-                    bytes_delta,
-                    wake: Some(SnapshotWakeWindow {
-                        from_time: reconciliation.from_time,
-                        to_time: reconciliation.to_time,
-                        cause: SnapshotWakeCause::Reconciled,
-                    }),
-                };
+                return ApplyOutcome { bytes_delta };
             }
         }
 
-        ApplyOutcome {
-            bytes_delta,
-            wake: Some(SnapshotWakeWindow { from_time: event_time, to_time: event_time, cause: SnapshotWakeCause::Changed }),
+        ApplyOutcome { bytes_delta }
+    }
+
+    fn snapshot_before_event(&self, event_key: &ContimeKey) -> S {
+        let checkpoint_entry = self.checkpoints.range(..event_key).next_back();
+        let (mut snapshot, replay_start) = match checkpoint_entry {
+            Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
+            None => (self.base_snapshot.clone(), Bound::Unbounded),
+        };
+
+        for (_key, event) in self.events.range((replay_start, Bound::Excluded(event_key.clone()))) {
+            event.apply_to(&mut snapshot);
+            snapshot.set_time(event.time());
         }
+
+        snapshot
     }
 
     /// Applies an authoritative snapshot and replays later events on top of it.
     pub fn apply_snapshot(&mut self, snapshot: S) -> ApplyOutcome {
         if snapshot.id() != self.snapshot_id {
-            return ApplyOutcome { bytes_delta: 0, wake: None };
+            return ApplyOutcome { bytes_delta: 0 };
         }
 
         let snapshot_key = last_key_at_time(snapshot.time());
@@ -282,14 +242,7 @@ where
         let reconciliation = Reconciliation { snapshot_id: self.snapshot_id, from_time: snapshot.time(), to_time: latest_event_time };
         self.notify_reconciliation(reconciliation.clone());
 
-        ApplyOutcome {
-            bytes_delta,
-            wake: Some(SnapshotWakeWindow {
-                from_time: reconciliation.from_time,
-                to_time: reconciliation.to_time,
-                cause: SnapshotWakeCause::Reconciled,
-            }),
-        }
+        ApplyOutcome { bytes_delta }
     }
 
     /// Reconstructs the snapshot state at `time` and returns a reconciliation receiver.
@@ -447,21 +400,6 @@ mod tests {
                 assert_eq!(self.checkpoint_interval, checkpoint_interval, "wrong checkpoint interval input");
 
                 self.bytes_delta
-            }
-
-            fn apply_event_in_place_with_context<S: Snapshot, C>(
-                &self,
-                new_event: S::Event,
-                base_snapshot: &S,
-                checkpoints: &mut BTreeMap<ContimeKey, S>,
-                events: &mut BTreeMap<ContimeKey, S::Event>,
-                checkpoint_interval: usize,
-                _context: &mut C,
-            ) -> i64
-            where
-                S::Event: crate::ApplyEvent<S, C>,
-            {
-                self.apply_event_in_place(new_event, base_snapshot, checkpoints, events, checkpoint_interval)
             }
         }
 

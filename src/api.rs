@@ -2,8 +2,8 @@ use flume::Receiver;
 use std::marker::PhantomData;
 
 use crate::handle::{
-    AdvanceHandle, ApplyHandle, EventQueryHandle, HandleError, QueryEventsResult, QueryHandle, QueryResult, TimeAdvanceSubscription,
-    WakeSubscription,
+    AdvanceHandle, ApplyHandle, CancelScheduleHandle, EventQueryHandle, HandleError, QueryEventsResult, QueryHandle, QueryResult,
+    ScheduleHandle, TimeAdvanceSubscription,
 };
 use crate::history::Reconciliation;
 use crate::{Event, EventLanes, Router, RouterError, Snapshot, SnapshotLanes};
@@ -132,6 +132,26 @@ where
         Ok(self.router.apply_event(event.into())?)
     }
 
+    /// Schedules an event synchronously for logical-time application.
+    ///
+    /// The event is released when [`Contime::send_advance_to`] or
+    /// [`Contime::advance_to`] reaches `event.time()`.
+    pub fn schedule_event<E: Event>(&self, event: E) -> Result<(), ContimeError>
+    where
+        EL: From<E>,
+    {
+        Ok(self.router.schedule_event(event.into())?)
+    }
+
+    /// Cancels a future scheduled event synchronously.
+    ///
+    /// Cancellation removes future scheduled entries matching `(event_time,
+    /// event_id)`. It does not remove events that have already been released by
+    /// an advance.
+    pub fn cancel_scheduled_event_sync(&self, event_id: u128, event_time: i64) -> Result<(), ContimeError> {
+        Ok(self.router.cancel_scheduled_event_sync(event_id, event_time)?)
+    }
+
     /// Applies an authoritative snapshot synchronously and replays any later events on top of it.
     pub fn apply_snapshot<S: Snapshot>(&self, snapshot: S) -> Result<(), ContimeError>
     where
@@ -167,7 +187,7 @@ where
     /// Returns all known snapshot lanes at `time`, grouped by owning worker.
     ///
     /// Events at exactly `time` are not included. This read-only query does not allocate
-    /// reconciliation receivers or emit wakes. Workers are returned in worker-index order,
+    /// reconciliation receivers. Workers are returned in worker-index order,
     /// and each worker's lanes are sorted by snapshot id.
     pub fn snapshot_lanes_by_worker(&self, time: i64) -> Result<Vec<Vec<SL>>, ContimeError> {
         Ok(self.router.snapshot_lanes_by_worker(time)?)
@@ -194,6 +214,23 @@ where
         EL: From<E>,
     {
         Ok(self.router.send_event(event.into())?)
+    }
+
+    /// Schedules an event and returns a handle for schedule storage.
+    ///
+    /// The returned handle confirms the event was stored in the owning
+    /// worker's future-event queue. It does not wait for logical time to
+    /// advance or for the event to apply.
+    pub fn send_scheduled_event<E: Event>(&self, event: E) -> Result<ScheduleHandle, ContimeError>
+    where
+        EL: From<E>,
+    {
+        Ok(self.router.send_scheduled_event(event.into())?)
+    }
+
+    /// Sends a cancellation request for a future scheduled event.
+    pub fn cancel_scheduled_event(&self, event_id: u128, event_time: i64) -> Result<CancelScheduleHandle, ContimeError> {
+        Ok(self.router.cancel_scheduled_event(event_id, event_time)?)
     }
 
     /// Sends an authoritative snapshot and returns a handle for completion.
@@ -225,15 +262,6 @@ where
     /// Sends an absolute-time advance request and returns a completion handle.
     pub fn send_advance_to(&self, time: i64) -> Result<AdvanceHandle, ContimeError> {
         Ok(self.router.send_advance_to(time)?)
-    }
-
-    /// Subscribes to the global snapshot wake stream for this contime instance.
-    ///
-    /// Wakes are emitted for both normal in-order state changes and historical
-    /// reconciliation windows. The returned subscription merges wakes across all
-    /// internal workers into one unified stream.
-    pub fn subscribe_wakes(&self) -> Result<WakeSubscription<SL>, ContimeError> {
-        Ok(self.router.subscribe_wakes()?)
     }
 
     /// Subscribes to successful global time advancement.

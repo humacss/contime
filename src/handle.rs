@@ -3,7 +3,7 @@ use std::time::Duration;
 use crossbeam_channel::Receiver as CrossbeamReceiver;
 use flume::Receiver as FlumeReceiver;
 
-use crate::history::{Reconciliation, SnapshotWakeCause};
+use crate::history::Reconciliation;
 use crate::SnapshotLanes;
 
 /// Errors returned by handle-based APIs.
@@ -60,6 +60,57 @@ impl ApplyHandle {
     }
 }
 
+/// Completion handle returned by scheduled event APIs.
+pub struct ScheduleHandle {
+    rxs: Vec<CrossbeamReceiver<()>>,
+}
+
+impl ScheduleHandle {
+    pub(crate) fn new(rxs: Vec<CrossbeamReceiver<()>>) -> Self {
+        Self { rxs }
+    }
+
+    /// Blocks until all affected workers have stored the scheduled change.
+    pub fn wait(self) -> Result<(), HandleError> {
+        for rx in &self.rxs {
+            rx.recv().map_err(|_| HandleError::WorkerDropped)?;
+        }
+        Ok(())
+    }
+
+    /// Non-blocking completion check.
+    ///
+    /// Returns `Ok(Some(()))` once every affected worker has acknowledged the
+    /// schedule or cancellation request.
+    pub fn try_recv(&mut self) -> Result<Option<()>, HandleError> {
+        let mut i = 0;
+        while i < self.rxs.len() {
+            match self.rxs[i].try_recv() {
+                Ok(()) => {
+                    self.rxs.swap_remove(i);
+                }
+                Err(crossbeam_channel::TryRecvError::Empty) => {
+                    i += 1;
+                }
+                Err(crossbeam_channel::TryRecvError::Disconnected) => return Err(HandleError::WorkerDropped),
+            }
+        }
+        if self.rxs.is_empty() {
+            Ok(Some(()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Asynchronously waits for all affected workers to acknowledge the request.
+    pub async fn recv_async(self) -> Result<(), HandleError> {
+        self.wait()
+    }
+}
+
+/// Completion handle returned by scheduled event cancellation APIs.
+pub type CancelScheduleHandle = ScheduleHandle;
+
 /// Result returned by a query.
 pub enum QueryResult<SL: SnapshotLanes> {
     /// The requested snapshot was found.
@@ -78,61 +129,6 @@ pub enum QueryEventsResult<EL> {
     Found(Vec<EL>),
     /// No history exists for the requested snapshot id.
     NotFound,
-}
-
-/// Global snapshot wake emitted when one snapshot lane changes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotWake<SL: SnapshotLanes> {
-    /// The current materialized snapshot lane after applying the change.
-    pub lane: SL,
-    /// Concrete snapshot id used for routing and sharding.
-    pub snapshot_id: u128,
-    /// Earliest logical time affected by the change.
-    pub from_time: i64,
-    /// Latest logical time affected by the change.
-    pub to_time: i64,
-    /// Why the wake was emitted.
-    pub cause: SnapshotWakeCause,
-}
-
-/// Unified wake subscription merged across every contime worker.
-pub struct WakeSubscription<SL: SnapshotLanes> {
-    rx: FlumeReceiver<SnapshotWake<SL>>,
-    cleanup: Option<Box<dyn FnOnce() + Send + 'static>>,
-}
-
-impl<SL: SnapshotLanes> WakeSubscription<SL> {
-    pub(crate) fn new(rx: FlumeReceiver<SnapshotWake<SL>>, cleanup: Option<Box<dyn FnOnce() + Send + 'static>>) -> Self {
-        Self { rx, cleanup }
-    }
-
-    /// Blocks until the next global wake is available.
-    pub fn recv(&self) -> Result<SnapshotWake<SL>, flume::RecvError> {
-        self.rx.recv()
-    }
-
-    /// Returns the underlying receiver for internal event-driven integrations.
-    pub fn receiver(&self) -> &FlumeReceiver<SnapshotWake<SL>> {
-        &self.rx
-    }
-
-    /// Waits for one wake with a timeout.
-    pub fn recv_timeout(&self, timeout: Duration) -> Result<SnapshotWake<SL>, flume::RecvTimeoutError> {
-        self.rx.recv_timeout(timeout)
-    }
-
-    /// Non-blocking wake check.
-    pub fn try_recv(&self) -> Result<SnapshotWake<SL>, flume::TryRecvError> {
-        self.rx.try_recv()
-    }
-}
-
-impl<SL: SnapshotLanes> Drop for WakeSubscription<SL> {
-    fn drop(&mut self) {
-        if let Some(cleanup) = self.cleanup.take() {
-            cleanup();
-        }
-    }
 }
 
 /// Logical time advancement published by a `contime` runtime.

@@ -1,5 +1,3 @@
-use flume::TryRecvError;
-
 use contime::{Snapshot, TestEvent, TestSnapshot, TestSnapshotContime, TestSnapshotLanes};
 
 fn snapshot_ids_by_worker(lanes_by_worker: &[Vec<TestSnapshotLanes>]) -> Vec<Vec<u128>> {
@@ -92,14 +90,13 @@ fn snapshot_lanes_by_worker_materializes_lanes_at_requested_time() {
 }
 
 #[test]
-fn snapshot_lanes_by_worker_does_not_emit_wakes() {
+fn snapshot_lanes_by_worker_is_read_only() {
     let contime = TestSnapshotContime::new(2, 100_000);
-    let wakes = contime.subscribe_wakes().unwrap();
 
     contime.apply_event(TestEvent::Positive(1, 5, 50, 10)).unwrap();
-    assert!(wakes.try_recv().is_ok(), "setup event should emit a wake");
 
-    let _ = contime.snapshot_lanes_by_worker(6).unwrap();
+    let before = flatten_snapshots(contime.snapshot_lanes_by_worker(6).unwrap());
+    let after = flatten_snapshots(contime.snapshot_lanes_by_worker(6).unwrap());
 
-    assert_eq!(wakes.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(before, after);
 }

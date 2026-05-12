@@ -39,3 +39,7 @@ harness = false
 [[bench]]
 name = "channels"
 harness = false
+
+[[bench]]
+name = "scheduling"
+harness = false
