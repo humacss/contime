@@ -56,7 +56,6 @@ mod worker;
 
 extern crate self as contime;
 
-use apply::apply_event_in_place;
 use key::ContimeKey;
 use router::{Router, RouterError};
 use worker::{Worker, WorkerInbound};
