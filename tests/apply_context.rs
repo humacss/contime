@@ -1,4 +1,4 @@
-use contime::{ApplyEvent, Event, Snapshot};
+use contime::{AfterApplyEvent, ApplyEvent, ApplyEvents, Event, Snapshot};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ContextValueAt {
@@ -81,29 +81,15 @@ impl ApplyEvent<ContextValueAt> for OnContextValueChanged {
     }
 }
 
-impl ApplyEvent<ContextValueAt, ApplyTrace> for OnContextValueChanged {
-    fn snapshot_id(&self) -> u128 {
-        ContextValueAt::lane_id(self.entity_id)
-    }
+impl AfterApplyEvent<ContextValueAt> for OnContextValueChanged {}
 
-    fn apply_to(&self, snapshot: &mut ContextValueAt) {
-        <Self as ApplyEvent<ContextValueAt>>::apply_to(self, snapshot);
-    }
-
+impl AfterApplyEvent<ContextValueAt, ApplyTrace> for OnContextValueChanged {
     fn after_apply(&self, snapshot: &ContextValueAt, context: &mut ApplyTrace) {
         context.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
     }
 }
 
-impl ApplyEvent<ContextValueAt, ApplyTraceSender> for OnContextValueChanged {
-    fn snapshot_id(&self) -> u128 {
-        ContextValueAt::lane_id(self.entity_id)
-    }
-
-    fn apply_to(&self, snapshot: &mut ContextValueAt) {
-        <Self as ApplyEvent<ContextValueAt>>::apply_to(self, snapshot);
-    }
-
+impl AfterApplyEvent<ContextValueAt, ApplyTraceSender> for OnContextValueChanged {
     fn after_apply(&self, snapshot: &ContextValueAt, context: &mut ApplyTraceSender) {
         context.tx.send((self.entity_id, self.time, self.value, snapshot.value)).unwrap();
     }
@@ -133,8 +119,8 @@ fn after_apply_receives_post_apply_snapshot_without_changing_snapshot_semantics(
     let mut snapshot = ContextValueAt::default();
     let mut context = ApplyTrace::default();
 
-    <OnContextValueChanged as ApplyEvent<ContextValueAt, ApplyTrace>>::apply_to(&event, &mut snapshot);
-    <OnContextValueChanged as ApplyEvent<ContextValueAt, ApplyTrace>>::after_apply(&event, &snapshot, &mut context);
+    <OnContextValueChanged as ApplyEvent<ContextValueAt>>::apply_to(&event, &mut snapshot);
+    <OnContextValueChanged as AfterApplyEvent<ContextValueAt, ApplyTrace>>::after_apply(&event, &snapshot, &mut context);
 
     assert_eq!(snapshot, ContextValueAt { entity_id: 3, time: 2, value: 4 });
     assert_eq!(context.applied, vec![(3, 2, 4)]);
@@ -146,8 +132,13 @@ fn generated_lane_dispatch_passes_after_apply_to_concrete_event() {
     let mut snapshot = SnapshotLanes::ContextValueAt(ContextValueAt::default());
     let mut context = ApplyTrace::default();
 
-    <EventLanes as ApplyEvent<SnapshotLanes, ApplyTrace>>::apply_to(&event, &mut snapshot);
-    <EventLanes as ApplyEvent<SnapshotLanes, ApplyTrace>>::after_apply(&event, &snapshot, &mut context);
+    <SnapshotLanes as ApplyEvents<ApplyTrace>>::apply_events(&mut snapshot, 2, &[event]);
+    <SnapshotLanes as ApplyEvents<ApplyTrace>>::after_apply_events(
+        &snapshot,
+        2,
+        &[EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 })],
+        &mut context,
+    );
 
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 2, value: 4 }));
     assert_eq!(context.applied, vec![(3, 2, 4)]);

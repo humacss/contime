@@ -35,7 +35,7 @@
 
 use std::time::Duration;
 
-use contime::{ApplyEvent, Event, Snapshot};
+use contime::{AfterApplyEvent, ApplyEvent, Event, Snapshot};
 
 /// Point-in-time state for one logical stream of received values.
 ///
@@ -128,6 +128,8 @@ impl ApplyEvent<OrderedValuesSnapshot> for ReceiveValue {
         snapshot.values.push(self.value);
     }
 }
+
+impl<C> AfterApplyEvent<OrderedValuesSnapshot, C> for ReceiveValue {}
 
 // Generate the lane enums and a typed `Contime` alias for this single-snapshot example.
 contime::contime! {

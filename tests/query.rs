@@ -64,10 +64,9 @@ fn test_query_at_exact_event_time() {
 
     c.apply_event(TestEvent::Positive(1, 5, 5, 42)).unwrap();
 
-    // Query at exactly t=5 — event at t=5 should NOT be included
-    // (snapshot_at uses Bound::Excluded for the upper bound)
+    // Query at exactly t=5 includes the fully applied t=5 bucket.
     let (snap, _) = c.at::<TestSnapshot>(5, 1).unwrap();
-    assert_eq!(snap.sum, 0);
+    assert_eq!(snap.sum, 42);
 
     // Query at t=6 — event at t=5 should be included
     let (snap, _) = c.at::<TestSnapshot>(6, 1).unwrap();
@@ -75,14 +74,14 @@ fn test_query_at_exact_event_time() {
 }
 
 #[test]
-fn test_query_excludes_all_same_time_events_independent_of_event_id_ordering() {
+fn test_query_includes_all_same_time_events_independent_of_event_id_ordering() {
     let c = TestSnapshotContime::new(1, 100000);
 
     c.apply_event(TestEvent::Positive(10, 5, 1, 40)).unwrap();
     c.apply_event(TestEvent::Positive(10, 5, 20, 60)).unwrap();
 
     let (snap, _) = c.at::<TestSnapshot>(5, 10).unwrap();
-    assert_eq!(snap.sum, 0);
+    assert_eq!(snap.sum, 100);
 
     let (snap, _) = c.at::<TestSnapshot>(6, 10).unwrap();
     assert_eq!(snap.sum, 100);

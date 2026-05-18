@@ -84,7 +84,7 @@ fn snapshot_lanes_by_worker_materializes_lanes_at_requested_time() {
     let after_first = flatten_snapshots(contime.snapshot_lanes_by_worker(6).unwrap());
     let after_second = flatten_snapshots(contime.snapshot_lanes_by_worker(9).unwrap());
 
-    assert_eq!(before_first, vec![TestSnapshot { id: 1, time: 5, items: vec![], sum: 0 }]);
+    assert_eq!(before_first, vec![TestSnapshot { id: 1, time: 5, items: vec![10], sum: 10 }]);
     assert_eq!(after_first, vec![TestSnapshot { id: 1, time: 6, items: vec![10], sum: 10 }]);
     assert_eq!(after_second, vec![TestSnapshot { id: 1, time: 9, items: vec![10, 20], sum: 30 }]);
 }

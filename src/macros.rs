@@ -118,15 +118,14 @@ macro_rules! contime {
                 }
             }
 
-            impl<C> $crate::ApplyEvent<SnapshotLanes, C> for EventLanes
+            impl $crate::ApplyEvent<SnapshotLanes> for EventLanes
             where
-                C: 'static,
-                $event: $crate::ApplyEvent<$snapshot, C>,
+                $event: $crate::ApplyEvent<$snapshot>,
             {
                 fn snapshot_id(&self) -> u128 {
                     match self {
                         EventLanes::$event(event) => {
-                            <$event as $crate::ApplyEvent<$snapshot, C>>::snapshot_id(event)
+                            <$event as $crate::ApplyEvent<$snapshot>>::snapshot_id(event)
                         }
                     }
                 }
@@ -142,15 +141,35 @@ macro_rules! contime {
                         }
                     }
                 }
+            }
 
-                fn after_apply(&self, snapshot: &SnapshotLanes, context: &mut C) {
+            impl<C> $crate::ApplyEvents<C> for SnapshotLanes
+            where
+                C: 'static,
+                EventLanes: $crate::ApplyEvent<SnapshotLanes>,
+                $event: $crate::AfterApplyEvent<$snapshot, C>,
+            {
+                fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+                    for event in events {
+                        <EventLanes as $crate::ApplyEvent<SnapshotLanes>>::apply_to(event, self);
+                    }
+                    <Self as $crate::Snapshot>::set_time(self, time);
+                }
+
+                fn after_apply_events(&self, _time: i64, events: &[Self::Event], context: &mut C) {
                     match self {
-                        Self::$event(event) => {
-                            match snapshot {
-                                SnapshotLanes::$snapshot(s) => {
-                                    <$event as $crate::ApplyEvent<$snapshot, C>>::after_apply(event, s, context)
+                        SnapshotLanes::$snapshot(snapshot) => {
+                            let mut bucket = Vec::new();
+                            for event in events {
+                                match event {
+                                    EventLanes::$event(event) => bucket.push(event.clone()),
                                 }
                             }
+                            <$event as $crate::AfterApplyEvent<$snapshot, C>>::after_apply_events(
+                                snapshot,
+                                &bucket,
+                                context,
+                            );
                         }
                     }
                 }
@@ -159,7 +178,8 @@ macro_rules! contime {
             impl<C> $crate::EventLanes<SnapshotLanes, C> for EventLanes
             where
                 C: 'static,
-                EventLanes: $crate::ApplyEvent<SnapshotLanes, C>,
+                EventLanes: $crate::ApplyEvent<SnapshotLanes>,
+                SnapshotLanes: $crate::ApplyEvents<C>,
             {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
                     match self {
@@ -289,12 +309,11 @@ macro_rules! contime {
             }
 
             // ── ApplyEvent<SnapshotLanes> ──────────────────────────────
-            impl<C> $crate::ApplyEvent<SnapshotLanes, C> for EventLanes
+            impl $crate::ApplyEvent<SnapshotLanes> for EventLanes
             where
-                C: 'static,
                 $(
                     $(
-                        $evtype: $crate::ApplyEvent<$target, C>,
+                        $evtype: $crate::ApplyEvent<$target>,
                     )+
                 )+
             {
@@ -302,7 +321,7 @@ macro_rules! contime {
                     match self {
                         $(
                             Self::$variant(e) => {
-                                $crate::__contime_first_snapshot_id_typed!(e; C; $evtype; $( $target ),+ )
+                                $crate::__contime_first_snapshot_id_typed!(e; $evtype; $( $target ),+ )
                             }
                         )+
                     }
@@ -319,17 +338,45 @@ macro_rules! contime {
                         _ => {} // Event-snapshot combination not mapped
                     }
                 }
+            }
 
-                fn after_apply(&self, snapshot: &SnapshotLanes, context: &mut C) {
-                    match (self, snapshot) {
-                        $($(
-                            (Self::$variant(e), SnapshotLanes::$target(s)) => {
-                                <$evtype as $crate::ApplyEvent<$target, C>>::after_apply(e, s, context)
-                            }
-                        )+)+
-                        #[allow(unreachable_patterns)]
-                        _ => {} // Event-snapshot combination not mapped
+            impl<C> $crate::ApplyEvents<C> for SnapshotLanes
+            where
+                C: 'static,
+                EventLanes: $crate::ApplyEvent<SnapshotLanes>,
+                $(
+                    $(
+                        $evtype: $crate::AfterApplyEvent<$target, C>,
+                    )+
+                )+
+            {
+                fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+                    for event in events {
+                        <EventLanes as $crate::ApplyEvent<SnapshotLanes>>::apply_to(event, self);
                     }
+                    <Self as $crate::Snapshot>::set_time(self, time);
+                }
+
+                fn after_apply_events(&self, _time: i64, events: &[Self::Event], context: &mut C) {
+                    $(
+                        $(
+                            if let SnapshotLanes::$target(snapshot) = self {
+                                let mut bucket = Vec::new();
+                                for event in events {
+                                    if let EventLanes::$variant(event) = event {
+                                        bucket.push(event.clone());
+                                    }
+                                }
+                                if !bucket.is_empty() {
+                                    <$evtype as $crate::AfterApplyEvent<$target, C>>::after_apply_events(
+                                        snapshot,
+                                        &bucket,
+                                        context,
+                                    );
+                                }
+                            }
+                        )+
+                    )+
                 }
             }
 
@@ -337,7 +384,8 @@ macro_rules! contime {
             impl<C> $crate::EventLanes<SnapshotLanes, C> for EventLanes
             where
                 C: 'static,
-                EventLanes: $crate::ApplyEvent<SnapshotLanes, C>,
+                EventLanes: $crate::ApplyEvent<SnapshotLanes>,
+                SnapshotLanes: $crate::ApplyEvents<C>,
             {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
                     match self {
@@ -384,8 +432,8 @@ macro_rules! __contime_first_seed_from_event {
 #[macro_export]
 #[doc(hidden)]
 macro_rules! __contime_first_snapshot_id_typed {
-    ($event:expr; $context_ty:ty; $evtype:ty; $first:ident $(, $rest:ident )* ) => {
-        <$evtype as $crate::ApplyEvent<$first, $context_ty>>::snapshot_id($event)
+    ($event:expr; $evtype:ty; $first:ident $(, $rest:ident )* ) => {
+        <$evtype as $crate::ApplyEvent<$first>>::snapshot_id($event)
     };
 }
 

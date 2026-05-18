@@ -1,4 +1,4 @@
-use contime::{ApplyEvent, Event, Snapshot};
+use contime::{AfterApplyEvent, ApplyEvent, ApplyEvents, Event, Snapshot};
 
 type EventId = u128;
 type SnapshotId = u128;
@@ -73,6 +73,16 @@ impl ApplyEvent<BenchSnapshot> for BenchEvent {
             Self::Positive(_snapshot_id, _time, _event_id, value) => {
                 snapshot.sum += *value as i32;
             }
+        }
+    }
+}
+
+impl<C> AfterApplyEvent<BenchSnapshot, C> for BenchEvent {}
+
+impl<C> ApplyEvents<C> for BenchSnapshot {
+    fn apply_events(&mut self, _time: i64, events: &[Self::Event]) {
+        for event in events {
+            event.apply_to(self);
         }
     }
 }

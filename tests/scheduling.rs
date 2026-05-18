@@ -1,4 +1,4 @@
-use contime::{ApplyEvent, Event, QueryResult, Snapshot, TestEvent, TestSnapshot, TestSnapshotContime};
+use contime::{AfterApplyEvent, ApplyEvent, Event, QueryResult, Snapshot, TestEvent, TestSnapshot, TestSnapshotContime};
 
 #[test]
 fn scheduled_event_does_not_apply_before_advance() {
@@ -74,6 +74,32 @@ fn repeated_schedule_with_same_identity_replaces_payload() {
 
     let (snapshot, _) = contime.at::<TestSnapshot>(6, 1).expect("snapshot should exist");
     assert_eq!(snapshot.sum, 9);
+}
+
+#[test]
+fn keyed_schedule_replaces_older_future_event_for_same_snapshot() {
+    let contime = TestSnapshotContime::new(1, 10_000);
+
+    contime.schedule_keyed_event(77, TestEvent::Positive(1, 5, 10, 3)).unwrap();
+    contime.schedule_keyed_event(77, TestEvent::Positive(1, 8, 20, 9)).unwrap();
+    contime.advance_to(8).expect("time should advance");
+
+    let (snapshot, _) = contime.at::<TestSnapshot>(9, 1).expect("snapshot should exist");
+    assert_eq!(snapshot.items, vec![9]);
+    assert_eq!(snapshot.sum, 9);
+}
+
+#[test]
+fn different_schedule_keys_do_not_replace_each_other() {
+    let contime = TestSnapshotContime::new(1, 10_000);
+
+    contime.schedule_keyed_event(77, TestEvent::Positive(1, 5, 10, 3)).unwrap();
+    contime.schedule_keyed_event(88, TestEvent::Positive(1, 5, 20, 9)).unwrap();
+    contime.advance_to(5).expect("time should advance");
+
+    let (snapshot, _) = contime.at::<TestSnapshot>(6, 1).expect("snapshot should exist");
+    assert_eq!(snapshot.items, vec![3, 9]);
+    assert_eq!(snapshot.sum, 12);
 }
 
 #[test]
@@ -221,6 +247,9 @@ impl ApplyEvent<RightAt> for MultiEvent {
         snapshot.value = self.value;
     }
 }
+
+impl<C> AfterApplyEvent<LeftAt, C> for MultiEvent {}
+impl<C> AfterApplyEvent<RightAt, C> for MultiEvent {}
 
 contime::contime! {
     mod multi;
