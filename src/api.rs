@@ -6,7 +6,7 @@ use crate::handle::{
     ScheduleHandle, TimeAdvanceSubscription,
 };
 use crate::history::Reconciliation;
-use crate::{Event, EventLanes, Router, RouterError, Snapshot, SnapshotLanes};
+use crate::{ApplyEvents, Event, EventLanes, Router, RouterError, ScheduleKey, Snapshot, SnapshotLanes};
 
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
@@ -39,14 +39,14 @@ impl From<HandleError> for ContimeError {
 /// Main entry point for building and querying continuous-time state.
 ///
 /// `SL` and `EL` are usually generated with [`crate::contime!`].
-pub struct Contime<SL: SnapshotLanes<Event = EL>, EL: EventLanes<SL, C>, C = ()> {
+pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
     router: Router<SL, EL, C>,
     _context: PhantomData<C>,
 }
 
 impl<SL, EL> Contime<SL, EL, ()>
 where
-    SL: SnapshotLanes<Event = EL> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents<()> + 'static,
     EL: EventLanes<SL> + 'static,
 {
     /// Creates a `contime` instance with `worker_count` workers and a shared memory budget.
@@ -72,7 +72,7 @@ where
 
 impl<SL, EL, C> Contime<SL, EL, C>
 where
-    SL: SnapshotLanes<Event = EL> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + ApplyEvents<()> + 'static,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {
@@ -141,6 +141,15 @@ where
         EL: From<E>,
     {
         Ok(self.router.schedule_event(event.into())?)
+    }
+
+    /// Schedules an event synchronously, replacing any future event with the
+    /// same schedule key for the same target snapshot.
+    pub fn schedule_keyed_event<E: Event>(&self, schedule_key: ScheduleKey, event: E) -> Result<(), ContimeError>
+    where
+        EL: From<E>,
+    {
+        Ok(self.router.schedule_keyed_event(schedule_key, event.into())?)
     }
 
     /// Cancels a future scheduled event synchronously.
@@ -226,6 +235,15 @@ where
         EL: From<E>,
     {
         Ok(self.router.send_scheduled_event(event.into())?)
+    }
+
+    /// Schedules an event with caller-defined replacement identity and returns
+    /// a handle for schedule storage.
+    pub fn send_keyed_scheduled_event<E: Event>(&self, schedule_key: ScheduleKey, event: E) -> Result<ScheduleHandle, ContimeError>
+    where
+        EL: From<E>,
+    {
+        Ok(self.router.send_keyed_scheduled_event(schedule_key, event.into())?)
     }
 
     /// Sends a cancellation request for a future scheduled event.

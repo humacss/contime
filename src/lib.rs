@@ -60,6 +60,8 @@ use key::ContimeKey;
 use router::{Router, RouterError};
 use worker::{Worker, WorkerInbound};
 
+pub type ScheduleKey = u128;
+
 pub use api::{Contime, ContimeError};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
@@ -69,7 +71,7 @@ pub use handle::{
     ScheduleHandle, TimeAdvance, TimeAdvanceSubscription,
 };
 pub use history::{ApplyOutcome, Reconciliation, SnapshotHistory};
-pub use traits::{ApplyEvent, Event, EventLanes, SeedSnapshot, Snapshot, SnapshotLanes};
+pub use traits::{AfterApplyEvent, ApplyEvent, ApplyEvents, Event, EventLanes, SeedSnapshot, Snapshot, SnapshotLanes};
 
 mod test;
 pub use test::*;

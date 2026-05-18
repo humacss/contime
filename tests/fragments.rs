@@ -1,4 +1,4 @@
-use contime::{ApplyEvent, Event, EventLanes as _, SeedSnapshot, Snapshot};
+use contime::{AfterApplyEvent, ApplyEvent, Event, SeedSnapshot, Snapshot};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LegacyValueAt {
@@ -115,6 +115,9 @@ impl ApplyEvent<LegacyValueAt> for LegacyValueAtEvent {
         }
     }
 }
+
+impl<C> AfterApplyEvent<LegacyValueAt, C> for OnLegacyValueChanged {}
+impl<C> AfterApplyEvent<LegacyValueAt, C> for LegacyValueAtEvent {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct FragmentValueAt {
@@ -234,6 +237,9 @@ impl ApplyEvent<FragmentValueAt> for FragmentValueAtEvent {
     }
 }
 
+impl<C> AfterApplyEvent<FragmentValueAt, C> for OnFragmentValueChanged {}
+impl<C> AfterApplyEvent<FragmentValueAt, C> for FragmentValueAtEvent {}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct AlphaAt {
     entity_id: u128,
@@ -350,6 +356,9 @@ impl ApplyEvent<AlphaAt> for AlphaAtEvent {
     }
 }
 
+impl<C> AfterApplyEvent<AlphaAt, C> for OnAlphaChanged {}
+impl<C> AfterApplyEvent<AlphaAt, C> for AlphaAtEvent {}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct BetaAt {
     entity_id: u128,
@@ -465,6 +474,9 @@ impl ApplyEvent<BetaAt> for BetaAtEvent {
         }
     }
 }
+
+impl<C> AfterApplyEvent<BetaAt, C> for OnBetaChanged {}
+impl<C> AfterApplyEvent<BetaAt, C> for BetaAtEvent {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SharedSourceAt {
@@ -678,6 +690,11 @@ impl ApplyEvent<SharedMirrorAt> for SharedMirrorAtEvent {
     }
 }
 
+impl<C> AfterApplyEvent<SharedSourceAt, C> for OnSharedValueChanged {}
+impl<C> AfterApplyEvent<SharedMirrorAt, C> for OnSharedValueChanged {}
+impl<C> AfterApplyEvent<SharedSourceAt, C> for SharedSourceAtEvent {}
+impl<C> AfterApplyEvent<SharedMirrorAt, C> for SharedMirrorAtEvent {}
+
 contime::fragment! {
     macro fragment_value_fragment;
 
@@ -771,7 +788,7 @@ contime::lanes! {
 
 fn snapshot_at<T, SL, EL>(contime: &contime::Contime<SL, EL>, time: i64, snapshot_id: u128) -> T
 where
-    SL: contime::SnapshotLanes<Event = EL> + 'static,
+    SL: contime::SnapshotLanes<Event = EL> + contime::ApplyEvents + 'static,
     EL: contime::EventLanes<SL> + 'static,
     T: TryFrom<SL>,
 {
@@ -830,7 +847,7 @@ fn repeated_route_keys_merge_targets_across_fragments() {
 fn merged_event_snapshots_materialize_all_foreign_targets_without_wrapper_conversions() {
     let event = merged_route_lanes::EventLanes::from(OnSharedValueChanged { event_id: 14, time: 8, entity_id: 2, value: 34 });
 
-    let snapshots = event.snapshots();
+    let snapshots = <merged_route_lanes::EventLanes as contime::EventLanes<merged_route_lanes::SnapshotLanes>>::snapshots(&event);
     assert_eq!(snapshots.len(), 2);
 
     let source = snapshots

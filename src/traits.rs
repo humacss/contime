@@ -5,7 +5,7 @@ use std::fmt::Debug;
 /// Snapshots are the states that get queried, checkpointed, and reconciled over time.
 pub trait Snapshot: Send + Sync + Clone + Debug + PartialEq + Eq {
     /// The event type that mutates this snapshot.
-    type Event: Event + ApplyEvent<Self>;
+    type Event: Event + Clone + PartialEq + Eq;
 
     /// Returns the logical snapshot id.
     fn id(&self) -> u128;
@@ -56,7 +56,7 @@ pub trait Event: Send + Sync + Debug {
 }
 
 /// Applies an event to a snapshot type.
-pub trait ApplyEvent<S, C = ()>: Event
+pub trait ApplyEvent<S>: Event
 where
     S: Snapshot,
 {
@@ -64,18 +64,54 @@ where
     fn snapshot_id(&self) -> u128;
     /// Mutates the snapshot in place.
     fn apply_to(&self, snapshot: &mut S);
+}
+
+/// Runs context-aware work after one event bucket applies to a snapshot.
+pub trait AfterApplyEvent<S, C = ()>: ApplyEvent<S>
+where
+    S: Snapshot,
+{
     /// Runs after [`ApplyEvent::apply_to`] against the actual post-apply
     /// snapshot.
     ///
     /// Context is runtime plumbing. Implementations must not mutate the
     /// snapshot and must keep side effects deterministic and nonblocking.
     fn after_apply(&self, _snapshot: &S, _context: &mut C) {}
+
+    /// Runs once after a same-millisecond event bucket has been applied.
+    ///
+    /// The default preserves legacy behavior by invoking [`AfterApplyEvent::after_apply`]
+    /// for every event against the final post-bucket snapshot.
+    fn after_apply_events(snapshot: &S, events: &[Self], context: &mut C)
+    where
+        Self: Sized,
+    {
+        for event in events {
+            event.after_apply(snapshot, context);
+        }
+    }
+}
+
+/// Applies one same-millisecond bucket of events to a snapshot.
+///
+/// Events are supplied in deterministic event-id order. Implementations may
+/// override this when same-millisecond events need semantic merge behavior.
+pub trait ApplyEvents<C = ()>: Snapshot {
+    /// Mutates the snapshot with all events for `time`.
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]);
+
+    /// Runs after [`ApplyEvents::apply_events`] against the final post-bucket
+    /// snapshot.
+    fn after_apply_events(&self, _time: i64, _events: &[Self::Event], _context: &mut C) {}
 }
 
 /// Marker trait for the generated or user-defined event lane enum.
 ///
 /// `snapshots()` returns the initial snapshots that should exist when this event creates
 /// history for a snapshot id for the first time.
-pub trait EventLanes<SL: SnapshotLanes, C = ()>: Event + ApplyEvent<SL, C> + Clone {
+pub trait EventLanes<SL: SnapshotLanes, C = ()>: Event + ApplyEvent<SL> + Clone
+where
+    SL: ApplyEvents<C>,
+{
     fn snapshots(&self) -> Vec<SL>;
 }

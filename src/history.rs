@@ -3,7 +3,7 @@ use std::ops::Bound;
 
 use flume::{bounded, Receiver, Sender, TrySendError};
 
-use crate::{ApplyEvent, ContimeKey, Event, Snapshot};
+use crate::{ApplyEvents, ContimeKey, Event, Snapshot};
 
 use super::apply::replay_and_checkpoint;
 
@@ -57,7 +57,7 @@ const CHECKPOINT_INTERVAL: usize = 100;
 
 impl<S> LocalSnapshotHistory<S>
 where
-    S: Snapshot + 'static,
+    S: Snapshot + ApplyEvents<()> + 'static,
 {
     /// Creates a history for one snapshot and returns it with its initial memory cost.
     pub fn new(snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
@@ -125,29 +125,25 @@ where
     /// application.
     pub fn apply_event_with_context<C>(&mut self, event: S::Event, context: &mut C) -> ApplyOutcome
     where
-        S::Event: crate::ApplyEvent<S, C>,
+        S: ApplyEvents<C>,
     {
-        // Check if this event is out-of-order before applying
         let event_time = event.time();
-        let latest_event_time = self.events.keys().next_back().map(|k| k.time);
+        let latest_event_key = self.events.keys().next_back().cloned();
 
         let event_key = ContimeKey::from_event(&event);
-        if self.events.contains_key(&event_key) {
+        if self.events.get(&event_key).is_some_and(|existing| existing == &event) {
             return ApplyOutcome { bytes_delta: 0 };
         }
 
-        let is_latest = self.events.keys().next_back().is_none_or(|latest| event_key > *latest);
+        let is_new_latest_time = latest_event_key.as_ref().is_none_or(|latest| event_key.time > latest.time);
+        let mut bytes_delta = event.conservative_size() as i64;
+        self.events.insert(event_key.clone(), event);
+        bytes_delta += self.replay_from_bucket(event_time, is_new_latest_time, context);
 
-        let bytes_delta = if is_latest {
-            self.apply_latest_event(event_key, event, context)
-        } else {
-            self.apply_out_of_order_event(event_key, event, context)
-        };
-
-        // Send reconciliation if out-of-order (event is before the latest existing event)
-        if let Some(latest_time) = latest_event_time {
-            if event_time < latest_time {
-                let reconciliation = Reconciliation { snapshot_id: self.snapshot_id, from_time: event_time, to_time: latest_time };
+        // Send reconciliation if this apply changed already-observed history.
+        if let Some(latest_key) = latest_event_key {
+            if event_key < latest_key {
+                let reconciliation = Reconciliation { snapshot_id: self.snapshot_id, from_time: event_time, to_time: latest_key.time };
                 self.notify_reconciliation(reconciliation.clone());
                 return ApplyOutcome { bytes_delta };
             }
@@ -156,77 +152,75 @@ where
         ApplyOutcome { bytes_delta }
     }
 
-    fn apply_latest_event<C>(&mut self, event_key: ContimeKey, event: S::Event, context: &mut C) -> i64
+    fn replay_from_bucket<C>(&mut self, time: i64, preserve_previous_tip: bool, context: &mut C) -> i64
     where
-        S::Event: crate::ApplyEvent<S, C>,
+        S: ApplyEvents<C>,
     {
-        let mut bytes_delta = event.conservative_size() as i64;
+        let mut replay_boundary = first_key_at_time(time);
+        if !preserve_previous_tip {
+            if let Some((key, _checkpoint)) = self.checkpoints.range(..&replay_boundary).next_back() {
+                if !self.is_cadence_checkpoint(key) {
+                    replay_boundary = key.clone();
+                }
+            }
+        }
 
-        let previous_tip_key = self.checkpoints.keys().next_back().cloned();
-        let preserve_previous_tip = previous_tip_key.as_ref().is_some_and(|key| self.is_cadence_checkpoint(key));
-        let mut snapshot =
-            previous_tip_key.as_ref().and_then(|key| self.checkpoints.get(key).cloned()).unwrap_or_else(|| self.base_snapshot.clone());
+        let checkpoint_entry = self.checkpoints.range(..&replay_boundary).next_back();
+        let remove_replay_checkpoint =
+            preserve_previous_tip && checkpoint_entry.as_ref().is_some_and(|(key, _checkpoint)| !self.is_cadence_checkpoint(key));
+        let (mut snapshot, replay_start) = match checkpoint_entry {
+            Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
+            None => (self.base_snapshot.clone(), Bound::Unbounded),
+        };
 
-        if let Some(key) = previous_tip_key.as_ref().filter(|_| !preserve_previous_tip) {
-            if let Some(removed) = self.checkpoints.remove(key) {
+        let stale_keys = self.checkpoints.range(replay_boundary.clone()..).map(|(key, _)| key.clone()).collect::<Vec<_>>();
+        let mut bytes_delta = 0;
+        if remove_replay_checkpoint {
+            if let Some(key) = self.checkpoints.range(..&replay_boundary).next_back().map(|(key, _)| key.clone()) {
+                if let Some(removed) = self.checkpoints.remove(&key) {
+                    bytes_delta -= removed.conservative_size() as i64;
+                }
+            }
+        }
+        for key in stale_keys {
+            if let Some(removed) = self.checkpoints.remove(&key) {
                 bytes_delta -= removed.conservative_size() as i64;
             }
         }
 
-        event.apply_to(&mut snapshot);
-        snapshot.set_time(event.time());
-        event.after_apply(&snapshot, context);
+        let replay_events =
+            self.events.range((replay_start, Bound::Unbounded)).map(|(key, event)| (key.clone(), event.clone())).collect::<Vec<_>>();
+        let mut event_count = 0usize;
+        let mut index = 0usize;
+        let mut latest_key = None;
 
-        self.events.insert(event_key.clone(), event);
-        bytes_delta += snapshot.conservative_size() as i64;
-        self.checkpoints.insert(event_key, snapshot);
+        while index < replay_events.len() {
+            let bucket_time = replay_events[index].0.time;
+            let mut bucket = Vec::new();
+            let mut bucket_last_key = replay_events[index].0.clone();
 
-        bytes_delta
-    }
-
-    fn apply_out_of_order_event<C>(&mut self, event_key: ContimeKey, event: S::Event, context: &mut C) -> i64
-    where
-        S::Event: crate::ApplyEvent<S, C>,
-    {
-        let mut bytes_delta = event.conservative_size() as i64;
-        self.events.insert(event_key.clone(), event);
-
-        let replay_start_key = self.checkpoints.range(..&event_key).next_back().map(|(key, _)| key.clone());
-        let mut snapshot =
-            replay_start_key.as_ref().and_then(|key| self.checkpoints.get(key).cloned()).unwrap_or_else(|| self.base_snapshot.clone());
-        let mut replay_start_after = replay_start_key;
-
-        let checkpoint_keys = self.checkpoints.range(event_key.clone()..).map(|(key, _)| key.clone()).collect::<Vec<_>>();
-
-        for checkpoint_key in &checkpoint_keys {
-            let replay_start = replay_start_after.as_ref().map_or(Bound::Unbounded, Bound::Excluded);
-            for (_key, event) in self.events.range((replay_start, Bound::Included(checkpoint_key))) {
-                event.apply_to(&mut snapshot);
-                snapshot.set_time(event.time());
-                event.after_apply(&snapshot, context);
+            while index < replay_events.len() && replay_events[index].0.time == bucket_time {
+                bucket_last_key = replay_events[index].0.clone();
+                bucket.push(replay_events[index].1.clone());
+                index += 1;
             }
 
-            if let Some(previous) = self.checkpoints.insert(checkpoint_key.clone(), snapshot.clone()) {
-                bytes_delta += snapshot.conservative_size() as i64 - previous.conservative_size() as i64;
-            } else {
+            <S as ApplyEvents<()>>::apply_events(&mut snapshot, bucket_time, &bucket);
+            snapshot.set_time(bucket_time);
+            snapshot.after_apply_events(bucket_time, &bucket, context);
+            event_count += bucket.len();
+            latest_key = Some(bucket_last_key.clone());
+
+            if self.checkpoint_interval != 0 && event_count % self.checkpoint_interval == 0 {
                 bytes_delta += snapshot.conservative_size() as i64;
+                self.checkpoints.insert(bucket_last_key, snapshot.clone());
             }
-
-            replay_start_after = Some(checkpoint_key.clone());
         }
 
-        let latest_event_key = self.events.keys().next_back().cloned();
-        if let Some(latest_event_key) = latest_event_key {
-            if self.checkpoints.keys().next_back() != Some(&latest_event_key) {
-                let replay_start = replay_start_after.as_ref().map_or(Bound::Unbounded, Bound::Excluded);
-                for (_key, event) in self.events.range((replay_start, Bound::Unbounded)) {
-                    event.apply_to(&mut snapshot);
-                    snapshot.set_time(event.time());
-                    event.after_apply(&snapshot, context);
-                }
-
+        if let Some(latest_key) = latest_key {
+            if self.checkpoints.keys().next_back() != Some(&latest_key) {
                 bytes_delta += snapshot.conservative_size() as i64;
-                self.checkpoints.insert(latest_event_key, snapshot);
+                self.checkpoints.insert(latest_key, snapshot);
             }
         }
 
@@ -286,14 +280,14 @@ where
 
     /// Reconstructs the snapshot state at `time` and returns a reconciliation receiver.
     ///
-    /// Events at exactly `time` are not included in the returned snapshot.
+    /// Events at exactly `time` are included in the returned snapshot.
     pub fn snapshot_at(&mut self, time: i64) -> (S, Receiver<Reconciliation>) {
         (self.materialize_snapshot_at(time), self.subscribe_reconciliation())
     }
 
     /// Reconstructs the snapshot state at `time` without creating a reconciliation receiver.
     ///
-    /// Events at exactly `time` are not included in the returned snapshot.
+    /// Events at exactly `time` are included in the returned snapshot.
     pub fn snapshot_only_at(&self, time: i64) -> S {
         self.materialize_snapshot_at(time)
     }
@@ -315,21 +309,35 @@ where
     }
 
     fn materialize_snapshot_at(&self, time: i64) -> S {
-        let checkpoint_boundary = first_key_at_time(time);
+        let checkpoint_boundary = last_key_at_time(time);
 
-        // Find the latest checkpoint strictly before the query time.
-        let checkpoint_entry = self.checkpoints.range(..checkpoint_boundary).next_back();
+        // Find the latest checkpoint at or before the query time.
+        let checkpoint_entry = self.checkpoints.range(..=checkpoint_boundary).next_back();
 
         let (mut snapshot, replay_start) = match checkpoint_entry {
             Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
             None => (self.base_snapshot.clone(), Bound::Unbounded),
         };
 
-        let end_key = first_key_at_time(time);
+        let end_key = last_key_at_time(time);
 
-        // Replay events strictly before the query time.
-        for (_key, event) in self.events.range((replay_start, Bound::Excluded(end_key))) {
-            event.apply_to(&mut snapshot);
+        let replay_events = self
+            .events
+            .range((replay_start, Bound::Included(end_key)))
+            .map(|(key, event)| (key.clone(), event.clone()))
+            .collect::<Vec<_>>();
+        let mut index = 0usize;
+        while index < replay_events.len() {
+            let bucket_time = replay_events[index].0.time;
+            let mut bucket = Vec::new();
+
+            while index < replay_events.len() && replay_events[index].0.time == bucket_time {
+                bucket.push(replay_events[index].1.clone());
+                index += 1;
+            }
+
+            snapshot.apply_events(bucket_time, &bucket);
+            snapshot.set_time(bucket_time);
         }
 
         snapshot.set_time(time);
@@ -375,7 +383,98 @@ pub type SnapshotHistory<S> = LocalSnapshotHistory<S>;
 mod tests {
     use super::*;
 
-    use crate::{TestEvent, TestSnapshot};
+    use crate::{AfterApplyEvent, ApplyEvent, ApplyEvents, Event, TestEvent, TestSnapshot};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ContextEvent {
+        id: u128,
+        time: i64,
+        snapshot_id: u128,
+        value: i32,
+    }
+
+    impl Event for ContextEvent {
+        fn id(&self) -> u128 {
+            self.id
+        }
+
+        fn time(&self) -> i64 {
+            self.time
+        }
+
+        fn conservative_size(&self) -> u64 {
+            16 + 8 + 16 + 4
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ContextSnapshot {
+        id: u128,
+        time: i64,
+        sum: i32,
+    }
+
+    impl Snapshot for ContextSnapshot {
+        type Event = ContextEvent;
+
+        fn id(&self) -> u128 {
+            self.id
+        }
+
+        fn time(&self) -> i64 {
+            self.time
+        }
+
+        fn set_time(&mut self, time: i64) {
+            self.time = time;
+        }
+
+        fn conservative_size(&self) -> u64 {
+            16 + 8 + 4
+        }
+
+        fn from_event(event: &Self::Event) -> Self {
+            Self { id: event.snapshot_id, time: event.time, sum: 0 }
+        }
+    }
+
+    impl ApplyEvent<ContextSnapshot> for ContextEvent {
+        fn snapshot_id(&self) -> u128 {
+            self.snapshot_id
+        }
+
+        fn apply_to(&self, snapshot: &mut ContextSnapshot) {
+            snapshot.sum += self.value;
+        }
+    }
+
+    impl AfterApplyEvent<ContextSnapshot, Vec<i32>> for ContextEvent {
+        fn after_apply(&self, snapshot: &ContextSnapshot, context: &mut Vec<i32>) {
+            context.push(snapshot.sum);
+        }
+    }
+
+    impl ApplyEvents for ContextSnapshot {
+        fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+            for event in events {
+                event.apply_to(self);
+            }
+            self.set_time(time);
+        }
+    }
+
+    impl ApplyEvents<Vec<i32>> for ContextSnapshot {
+        fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+            for event in events {
+                event.apply_to(self);
+            }
+            self.set_time(time);
+        }
+
+        fn after_apply_events(&self, _time: i64, events: &[Self::Event], context: &mut Vec<i32>) {
+            <ContextEvent as AfterApplyEvent<ContextSnapshot, Vec<i32>>>::after_apply_events(self, events, context);
+        }
+    }
 
     #[test]
     fn in_order_apply_updates_current_end_checkpoint_every_time() {
@@ -428,10 +527,50 @@ mod tests {
 
         assert_eq!(
             history.checkpoints.keys().cloned().collect::<Vec<_>>(),
-            vec![ContimeKey { time: 20, id: 20 }, ContimeKey { time: 30, id: 30 }]
+            vec![ContimeKey { time: 15, id: 15 }, ContimeKey { time: 30, id: 30 }]
         );
-        assert_eq!(history.checkpoints.get(&ContimeKey { time: 20, id: 20 }).expect("checkpoint").sum, 45);
+        assert_eq!(history.checkpoints.get(&ContimeKey { time: 15, id: 15 }).expect("checkpoint").sum, 25);
         assert_eq!(history.checkpoints.get(&ContimeKey { time: 30, id: 30 }).expect("tip").sum, 75);
+    }
+
+    #[test]
+    fn snapshot_at_includes_events_at_query_time() {
+        let snapshot = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
+
+        history.apply_event(TestEvent::Positive(1, 10, 1, 5));
+
+        let actual = history.snapshot_only_at(10);
+
+        assert_eq!(actual.sum, 5);
+        assert_eq!(actual.time, 10);
+    }
+
+    #[test]
+    fn same_millisecond_events_replay_in_event_id_order() {
+        let snapshot = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
+
+        history.apply_event(TestEvent::Positive(1, 10, 20, 2));
+        history.apply_event(TestEvent::Negative(1, 10, 10, 1));
+
+        let actual = history.snapshot_only_at(10);
+
+        assert_eq!(actual.items, vec![-1, 2]);
+        assert_eq!(actual.sum, 1);
+    }
+
+    #[test]
+    fn batch_after_apply_observes_final_bucket_state() {
+        let snapshot = ContextSnapshot { id: 1, time: 0, sum: 0 };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
+        let mut context = Vec::new();
+
+        history.apply_event_with_context(ContextEvent { id: 20, time: 10, snapshot_id: 1, value: 2 }, &mut context);
+        history.apply_event_with_context(ContextEvent { id: 10, time: 10, snapshot_id: 1, value: 1 }, &mut context);
+
+        assert_eq!(history.snapshot_only_at(10).sum, 3);
+        assert_eq!(context, vec![2, 3, 3]);
     }
 
     // --- apply_snapshot tests ---

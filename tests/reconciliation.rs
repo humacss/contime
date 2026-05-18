@@ -92,10 +92,10 @@ fn test_apply_snapshot_only_replays_strictly_later_events() {
     let auth = TestSnapshot { id: 10, time: 5, sum: 100, items: vec![] };
     c.apply_snapshot(auth).unwrap();
 
-    let (snap, _) = c.at::<TestSnapshot>(6, 10).unwrap();
+    let (snap, _) = c.at::<TestSnapshot>(5, 10).unwrap();
     assert_eq!(snap.sum, 100);
 
-    let (snap, _) = c.at::<TestSnapshot>(7, 10).unwrap();
+    let (snap, _) = c.at::<TestSnapshot>(6, 10).unwrap();
     assert_eq!(snap.sum, 130);
 }
 

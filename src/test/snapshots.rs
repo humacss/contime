@@ -1,4 +1,4 @@
-use crate::{ApplyEvent, Event, Snapshot, TestEvent};
+use crate::{ApplyEvent, ApplyEvents, Event, Snapshot, TestEvent};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct TestSnapshot {
@@ -29,5 +29,14 @@ impl Snapshot for TestSnapshot {
 
     fn from_event(event: &Self::Event) -> Self {
         Self { id: event.snapshot_id(), time: event.time(), ..Self::default() }
+    }
+}
+
+impl ApplyEvents for TestSnapshot {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            event.apply_to(self);
+        }
+        self.set_time(time);
     }
 }
