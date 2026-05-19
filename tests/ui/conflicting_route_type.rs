@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvents, ApplyEvents, Event, Snapshot, SnapshotEvent};
+use contime::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct FirstAt {
@@ -141,24 +141,24 @@ impl SnapshotEvent<SecondAt> for SecondAtEvent {
 }
 
 impl ApplyEvents for FirstAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        for event in batch.events {
             match event {
                 FirstAtEvent::Shared(event) => self.id = event.id,
             }
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 
 impl ApplyEvents for SecondAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        for event in batch.events {
             match event {
                 SecondAtEvent::Shared(event) => self.id = event.id,
             }
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 

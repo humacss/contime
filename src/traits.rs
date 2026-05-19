@@ -69,16 +69,31 @@ pub trait Event: Send + Sync + Debug {
 /// Events are supplied in deterministic event-id order, but implementations
 /// must treat that ordering as transport determinism rather than domain
 /// priority.
+#[derive(Debug)]
+pub struct ApplyBatch<'a, E> {
+    pub snapshot_id: u128,
+    pub time: i64,
+    pub events: &'a [E],
+}
+
+impl<'a, E> Clone for ApplyBatch<'a, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, E> Copy for ApplyBatch<'a, E> {}
+
 pub trait ApplyEvents: Snapshot {
-    /// Mutates the snapshot with all events for `time`.
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]);
+    /// Mutates the snapshot with all events for one routed `time` bucket.
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>);
 }
 
 /// Runs context-aware work after one event bucket applies to a snapshot.
 pub trait AfterApplyEvents<C = ()>: Snapshot {
     /// Runs after [`ApplyEvents::apply_events`] against the final post-bucket
     /// snapshot.
-    fn after_apply_events(&self, _time: i64, _events: &[Self::Event], _context: &mut C) {}
+    fn after_apply_events(&self, _batch: ApplyBatch<'_, Self::Event>, _context: &mut C) {}
 }
 
 /// Marker trait for the generated or user-defined event lane enum.

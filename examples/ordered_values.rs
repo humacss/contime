@@ -35,7 +35,7 @@
 
 use std::time::Duration;
 
-use contime::{AfterApplyEvents, ApplyEvents, Event, Snapshot, SnapshotEvent};
+use contime::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 /// Point-in-time state for one logical stream of received values.
 ///
@@ -126,11 +126,12 @@ impl ApplyEvents for OrderedValuesSnapshot {
     ///
     /// The example intentionally avoids any custom insertion or sorting logic. Values end up
     /// ordered because `contime` replays events in event-time order.
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        self.id = batch.snapshot_id;
+        for event in batch.events {
             self.values.push(event.value);
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 

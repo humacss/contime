@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
-use crate::{ApplyEvents, ContimeKey, Snapshot};
+use crate::{ApplyBatch, ApplyEvents, ContimeKey, Snapshot};
 
 /// Replays events from `start_snapshot` forward (starting after `start_bound`) and creates
 /// checkpoints at every `checkpoint_interval` events. Returns the bytes_delta from new checkpoints.
@@ -29,7 +29,7 @@ pub fn replay_and_checkpoint<S: Snapshot + ApplyEvents>(
             index += 1;
         }
 
-        snapshot.apply_events(bucket_time, &bucket);
+        snapshot.apply_events(ApplyBatch { snapshot_id: snapshot.id(), time: bucket_time, events: &bucket });
         snapshot.set_time(bucket_time);
         count += bucket.len();
 

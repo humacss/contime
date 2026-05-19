@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvents, ApplyEvents, Event, SeedSnapshot, Snapshot, SnapshotEvent};
+use contime::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, SeedSnapshot, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LegacyValueAt {
@@ -111,8 +111,8 @@ impl SnapshotEvent<LegacyValueAt> for LegacyValueAtEvent {
 }
 
 impl ApplyEvents for LegacyValueAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        for event in batch.events {
             match event {
                 LegacyValueAtEvent::OnLegacyValueChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -120,7 +120,7 @@ impl ApplyEvents for LegacyValueAt {
                 }
             }
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 
@@ -239,8 +239,8 @@ impl SnapshotEvent<FragmentValueAt> for FragmentValueAtEvent {
 }
 
 impl ApplyEvents for FragmentValueAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        for event in batch.events {
             match event {
                 FragmentValueAtEvent::OnFragmentValueChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -248,7 +248,7 @@ impl ApplyEvents for FragmentValueAt {
                 }
             }
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 
@@ -365,8 +365,8 @@ impl SnapshotEvent<AlphaAt> for AlphaAtEvent {
 }
 
 impl ApplyEvents for AlphaAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        for event in batch.events {
             match event {
                 AlphaAtEvent::OnAlphaChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -374,7 +374,7 @@ impl ApplyEvents for AlphaAt {
                 }
             }
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 
@@ -491,8 +491,8 @@ impl SnapshotEvent<BetaAt> for BetaAtEvent {
 }
 
 impl ApplyEvents for BetaAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        for event in batch.events {
             match event {
                 BetaAtEvent::OnBetaChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -500,7 +500,7 @@ impl ApplyEvents for BetaAt {
                 }
             }
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 
@@ -707,8 +707,8 @@ impl SnapshotEvent<SharedMirrorAt> for SharedMirrorAtEvent {
 }
 
 impl ApplyEvents for SharedSourceAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        for event in batch.events {
             match event {
                 SharedSourceAtEvent::OnSharedValueChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -716,13 +716,13 @@ impl ApplyEvents for SharedSourceAt {
                 }
             }
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 
 impl ApplyEvents for SharedMirrorAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        for event in batch.events {
             match event {
                 SharedMirrorAtEvent::OnSharedValueChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -730,7 +730,7 @@ impl ApplyEvents for SharedMirrorAt {
                 }
             }
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 

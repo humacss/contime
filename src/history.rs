@@ -3,7 +3,7 @@ use std::ops::Bound;
 
 use flume::{bounded, Receiver, Sender, TrySendError};
 
-use crate::{AfterApplyEvents, ApplyEvents, ContimeKey, Event, Snapshot};
+use crate::{AfterApplyEvents, ApplyBatch, ApplyEvents, ContimeKey, Event, Snapshot};
 
 use super::apply::replay_and_checkpoint;
 
@@ -208,9 +208,10 @@ where
                 index += 1;
             }
 
-            <S as ApplyEvents>::apply_events(&mut snapshot, bucket_time, &bucket);
+            let batch = ApplyBatch { snapshot_id: self.snapshot_id, time: bucket_time, events: &bucket };
+            <S as ApplyEvents>::apply_events(&mut snapshot, batch);
             snapshot.set_time(bucket_time);
-            <S as AfterApplyEvents<C>>::after_apply_events(&snapshot, bucket_time, &bucket, context);
+            <S as AfterApplyEvents<C>>::after_apply_events(&snapshot, batch, context);
             event_count += bucket.len();
             latest_key = Some(bucket_last_key.clone());
 
@@ -339,7 +340,7 @@ where
                 index += 1;
             }
 
-            snapshot.apply_events(bucket_time, &bucket);
+            snapshot.apply_events(ApplyBatch { snapshot_id: self.snapshot_id, time: bucket_time, events: &bucket });
             snapshot.set_time(bucket_time);
         }
 
@@ -386,7 +387,7 @@ pub type SnapshotHistory<S> = LocalSnapshotHistory<S>;
 mod tests {
     use super::*;
 
-    use crate::{AfterApplyEvents, ApplyEvents, Event, SnapshotEvent, TestEvent, TestSnapshot};
+    use crate::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, SnapshotEvent, TestEvent, TestSnapshot};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ContextEvent {
@@ -448,16 +449,17 @@ mod tests {
     }
 
     impl ApplyEvents for ContextSnapshot {
-        fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-            for event in events {
+        fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+            self.id = batch.snapshot_id;
+            for event in batch.events {
                 self.sum += event.value;
             }
-            self.set_time(time);
+            self.set_time(batch.time);
         }
     }
 
     impl AfterApplyEvents<Vec<i32>> for ContextSnapshot {
-        fn after_apply_events(&self, _time: i64, _events: &[Self::Event], context: &mut Vec<i32>) {
+        fn after_apply_events(&self, _batch: ApplyBatch<'_, Self::Event>, context: &mut Vec<i32>) {
             context.push(self.sum);
         }
     }
@@ -517,6 +519,23 @@ mod tests {
         );
         assert_eq!(history.checkpoints.get(&ContimeKey { time: 15, id: 15 }).expect("checkpoint").sum, 25);
         assert_eq!(history.checkpoints.get(&ContimeKey { time: 30, id: 30 }).expect("tip").sum, 75);
+    }
+
+    #[test]
+    fn out_of_order_apply_replays_existing_future_bucket_from_corrected_state() {
+        let snapshot = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 10_000);
+        history.checkpoint_interval = 100;
+
+        history.apply_event(TestEvent::Positive(1, 1, 1, 1));
+        history.apply_event(TestEvent::Positive(1, 1001, 1001, 1000));
+        assert_eq!(history.snapshot_only_at(1100).sum, 1001);
+
+        history.apply_event(TestEvent::Positive(1, 876, 876, 10));
+
+        let actual = history.snapshot_only_at(1100);
+        assert_eq!(actual.sum, 1011);
+        assert_eq!(actual.items, vec![1, 10, 1000]);
     }
 
     #[test]
