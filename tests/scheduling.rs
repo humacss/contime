@@ -1,4 +1,6 @@
-use contime::{AfterApplyEvents, ApplyEvents, Event, QueryResult, Snapshot, SnapshotEvent, TestEvent, TestSnapshot, TestSnapshotContime};
+use contime::{
+    AfterApplyEvents, ApplyBatch, ApplyEvents, Event, QueryResult, Snapshot, SnapshotEvent, TestEvent, TestSnapshot, TestSnapshotContime,
+};
 
 #[test]
 fn scheduled_event_does_not_apply_before_advance() {
@@ -114,6 +116,25 @@ fn released_scheduled_events_apply_before_later_inbound_events() {
     let (snapshot, _) = contime.at::<TestSnapshot>(7, 1).expect("snapshot should exist");
     assert_eq!(snapshot.items, vec![5, 7]);
     assert_eq!(snapshot.sum, 12);
+}
+
+#[test]
+fn applied_scheduled_event_replays_after_older_event_arrives() {
+    let contime = TestSnapshotContime::new(1, 10_000);
+
+    contime.apply_event(TestEvent::Positive(1, 1, 1, 1)).unwrap();
+    contime.schedule_event(TestEvent::Positive(1, 1001, 1001, 1000)).unwrap();
+    contime.advance_to(1100).expect("scheduled event should be released");
+
+    let (before, _) = contime.at::<TestSnapshot>(1100, 1).expect("snapshot should exist");
+    assert_eq!(before.items, vec![1, 1000]);
+    assert_eq!(before.sum, 1001);
+
+    contime.apply_event(TestEvent::Positive(1, 876, 876, 10)).unwrap();
+
+    let (after, _) = contime.at::<TestSnapshot>(1100, 1).expect("snapshot should exist");
+    assert_eq!(after.items, vec![1, 10, 1000]);
+    assert_eq!(after.sum, 1011);
 }
 
 #[test]
@@ -239,22 +260,22 @@ impl SnapshotEvent<RightAt> for MultiEvent {
 }
 
 impl ApplyEvents for LeftAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        if let Some(event) = events.last() {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        if let Some(event) = batch.events.last() {
             self.id = event.left_id;
             self.value = event.value;
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 
 impl ApplyEvents for RightAt {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        if let Some(event) = events.last() {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        if let Some(event) = batch.events.last() {
             self.id = event.right_id;
             self.value = event.value;
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 

@@ -269,17 +269,18 @@ impl contime::SnapshotEvent<CallbackSnapshot> for CallbackEvent {
 }
 
 impl contime::ApplyEvents for CallbackSnapshot {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: contime::ApplyBatch<'_, Self::Event>) {
+        self.snapshot_id = batch.snapshot_id;
+        for event in batch.events {
             self.sum += event.value as i32;
         }
-        self.time = time;
+        self.time = batch.time;
     }
 }
 
 impl contime::AfterApplyEvents<CallbackContext> for CallbackSnapshot {
-    fn after_apply_events(&self, _time: i64, events: &[Self::Event], context: &mut CallbackContext) {
-        for event in events {
+    fn after_apply_events(&self, batch: contime::ApplyBatch<'_, Self::Event>, context: &mut CallbackContext) {
+        for event in batch.events {
             context.sink = context.sink.wrapping_add(event.event_id).wrapping_add(self.sum as u128);
         }
     }

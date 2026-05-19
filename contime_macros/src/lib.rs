@@ -210,7 +210,7 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                 if route.targets.iter().any(|target| normalized_path_key(&target.path) == snapshot_key) {
                     let key = &route.key;
                     Some(quote! {
-                        for event in events {
+                        for event in batch.events {
                             if let EventLanes::#key(event) = event {
                                 bucket.push(event.clone().into());
                             }
@@ -225,9 +225,16 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                     let mut bucket = Vec::new();
                     #( #route_pushes )*
                     if !bucket.is_empty() {
-                        <#snapshot_ty as ::contime::ApplyEvents>::apply_events(snapshot, time, &bucket);
+                        <#snapshot_ty as ::contime::ApplyEvents>::apply_events(
+                            snapshot,
+                            ::contime::ApplyBatch {
+                                snapshot_id: batch.snapshot_id,
+                                time: batch.time,
+                                events: &bucket,
+                            },
+                        );
                     } else {
-                        <Self as ::contime::Snapshot>::set_time(self, time);
+                        <Self as ::contime::Snapshot>::set_time(self, batch.time);
                     }
                 }
             }
@@ -244,7 +251,7 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                 if route.targets.iter().any(|target| normalized_path_key(&target.path) == snapshot_key) {
                     let key = &route.key;
                     Some(quote! {
-                        for event in events {
+                        for event in batch.events {
                             if let EventLanes::#key(event) = event {
                                 bucket.push(event.clone().into());
                             }
@@ -259,7 +266,15 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                     let mut bucket = Vec::new();
                     #( #route_pushes )*
                     if !bucket.is_empty() {
-                        <#snapshot_ty as ::contime::AfterApplyEvents<C>>::after_apply_events(snapshot, time, &bucket, context);
+                        <#snapshot_ty as ::contime::AfterApplyEvents<C>>::after_apply_events(
+                            snapshot,
+                            ::contime::ApplyBatch {
+                                snapshot_id: batch.snapshot_id,
+                                time: batch.time,
+                                events: &bucket,
+                            },
+                            context,
+                        );
                     }
                 }
             }
@@ -397,7 +412,7 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
             where
                 #( #apply_bounds, )*
             {
-                fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+                fn apply_events(&mut self, batch: ::contime::ApplyBatch<'_, Self::Event>) {
                     match self {
                         #( #apply_snapshot_arms )*
                     }
@@ -409,7 +424,7 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                 C: 'static,
                 #( #after_apply_bounds, )*
             {
-                fn after_apply_events(&self, time: i64, events: &[Self::Event], context: &mut C) {
+                fn after_apply_events(&self, batch: ::contime::ApplyBatch<'_, Self::Event>, context: &mut C) {
                     match self {
                         #( #after_apply_snapshot_arms )*
                     }

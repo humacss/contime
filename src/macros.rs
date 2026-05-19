@@ -136,16 +136,23 @@ macro_rules! contime {
                 $snapshot: $crate::ApplyEvents,
                 <$snapshot as $crate::Snapshot>::Event: From<$event>,
             {
-                fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+                fn apply_events(&mut self, batch: $crate::ApplyBatch<'_, Self::Event>) {
                     match self {
                         SnapshotLanes::$snapshot(snapshot) => {
                             let mut bucket = Vec::new();
-                            for event in events {
+                            for event in batch.events {
                                 match event {
                                     EventLanes::$event(event) => bucket.push(event.clone().into()),
                                 }
                             }
-                            <$snapshot as $crate::ApplyEvents>::apply_events(snapshot, time, &bucket);
+                            <$snapshot as $crate::ApplyEvents>::apply_events(
+                                snapshot,
+                                $crate::ApplyBatch {
+                                    snapshot_id: batch.snapshot_id,
+                                    time: batch.time,
+                                    events: &bucket,
+                                },
+                            );
                         }
                     }
                 }
@@ -157,19 +164,22 @@ macro_rules! contime {
                 $snapshot: $crate::AfterApplyEvents<C>,
                 <$snapshot as $crate::Snapshot>::Event: From<$event>,
             {
-                fn after_apply_events(&self, time: i64, events: &[Self::Event], context: &mut C) {
+                fn after_apply_events(&self, batch: $crate::ApplyBatch<'_, Self::Event>, context: &mut C) {
                     match self {
                         SnapshotLanes::$snapshot(snapshot) => {
                             let mut bucket = Vec::new();
-                            for event in events {
+                            for event in batch.events {
                                 match event {
                                     EventLanes::$event(event) => bucket.push(event.clone().into()),
                                 }
                             }
                             <$snapshot as $crate::AfterApplyEvents<C>>::after_apply_events(
                                 snapshot,
-                                time,
-                                &bucket,
+                                $crate::ApplyBatch {
+                                    snapshot_id: batch.snapshot_id,
+                                    time: batch.time,
+                                    events: &bucket,
+                                },
                                 context,
                             );
                         }

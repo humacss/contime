@@ -1,4 +1,4 @@
-use crate::{AfterApplyEvents, ApplyEvents, Event, Snapshot, SnapshotEvent, TestEvent};
+use crate::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent, TestEvent};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct TestSnapshot {
@@ -33,8 +33,9 @@ impl Snapshot for TestSnapshot {
 }
 
 impl ApplyEvents for TestSnapshot {
-    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-        for event in events {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        self.id = batch.snapshot_id;
+        for event in batch.events {
             match event {
                 TestEvent::Positive(_snapshot_id, _time, _event_id, value) => {
                     self.items.push(*value as i16);
@@ -46,7 +47,7 @@ impl ApplyEvents for TestSnapshot {
                 }
             }
         }
-        self.set_time(time);
+        self.set_time(batch.time);
     }
 }
 
