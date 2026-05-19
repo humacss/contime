@@ -10,7 +10,7 @@ use crate::handle::{
     AdvanceHandle, ApplyHandle, CancelScheduleHandle, EventQueryHandle, QueryEventsResult, QueryHandle, QueryResult, ScheduleHandle,
     TimeAdvance, TimeAdvanceSubscription,
 };
-use crate::{ApplyEvents, EventLanes, ScheduleKey, SnapshotLanes, Worker, WorkerInbound};
+use crate::{AfterApplyEvents, ApplyEvents, EventLanes, ScheduleKey, SnapshotLanes, Worker, WorkerInbound};
 
 const SUBSCRIPTION_CHANNEL_CAPACITY: usize = 1_000_000;
 
@@ -20,7 +20,7 @@ pub enum RouterError {
     Error,
 }
 
-pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
+pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
     hasher: RandomState,
     workers: Vec<Worker<SL, EL, C>>,
     memory_budget: Arc<AtomicU64>,
@@ -32,7 +32,7 @@ pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents<C>, EL: EventLanes
 
 impl<SL, EL> Router<SL, EL, ()>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents<()> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<()> + 'static,
     EL: EventLanes<SL> + 'static,
 {
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
@@ -46,7 +46,7 @@ where
 
 impl<SL, EL, C> Router<SL, EL, C>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + ApplyEvents<()> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {

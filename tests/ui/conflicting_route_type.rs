@@ -1,4 +1,4 @@
-use contime::{ApplyEvent, Event, Snapshot};
+use contime::{AfterApplyEvents, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct FirstAt {
@@ -108,49 +108,62 @@ impl Event for SecondAtEvent {
     fn conservative_size(&self) -> u64 { std::mem::size_of::<Self>() as u64 }
 }
 
-impl ApplyEvent<FirstAt> for OnFirst {
-    fn snapshot_id(&self) -> u128 { self.id }
-    fn apply_to(&self, snapshot: &mut FirstAt) {
-        snapshot.id = self.id;
-        snapshot.time = self.time;
-    }
+impl From<OnFirst> for FirstAtEvent {
+    fn from(event: OnFirst) -> Self { Self::Shared(event) }
 }
 
-impl ApplyEvent<SecondAt> for OnSecond {
-    fn snapshot_id(&self) -> u128 { self.id }
-    fn apply_to(&self, snapshot: &mut SecondAt) {
-        snapshot.id = self.id;
-        snapshot.time = self.time;
-    }
+impl From<OnSecond> for SecondAtEvent {
+    fn from(event: OnSecond) -> Self { Self::Shared(event) }
 }
 
-impl ApplyEvent<FirstAt> for FirstAtEvent {
+impl SnapshotEvent<FirstAt> for OnFirst {
+    fn snapshot_id(&self) -> u128 { self.id }
+}
+
+impl SnapshotEvent<SecondAt> for OnSecond {
+    fn snapshot_id(&self) -> u128 { self.id }
+}
+
+impl SnapshotEvent<FirstAt> for FirstAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            FirstAtEvent::Shared(event) => event.snapshot_id(),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut FirstAt) {
-        match self {
-            FirstAtEvent::Shared(event) => event.apply_to(snapshot),
+            FirstAtEvent::Shared(event) => <OnFirst as SnapshotEvent<FirstAt>>::snapshot_id(event),
         }
     }
 }
 
-impl ApplyEvent<SecondAt> for SecondAtEvent {
+impl SnapshotEvent<SecondAt> for SecondAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            SecondAtEvent::Shared(event) => event.snapshot_id(),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut SecondAt) {
-        match self {
-            SecondAtEvent::Shared(event) => event.apply_to(snapshot),
+            SecondAtEvent::Shared(event) => <OnSecond as SnapshotEvent<SecondAt>>::snapshot_id(event),
         }
     }
 }
+
+impl ApplyEvents for FirstAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                FirstAtEvent::Shared(event) => self.id = event.id,
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl ApplyEvents for SecondAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                SecondAtEvent::Shared(event) => self.id = event.id,
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for FirstAt {}
+impl<C> AfterApplyEvents<C> for SecondAt {}
 
 contime::fragment! {
     macro first_fragment;

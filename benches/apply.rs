@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use std::hint::black_box;
 
-use contime::{ApplyEvent, SnapshotHistory};
+use contime::SnapshotHistory;
 
 mod helpers;
 use helpers::{BenchContime, BenchEvent, BenchSnapshot};
@@ -262,40 +262,25 @@ impl contime::Event for CallbackEvent {
     }
 }
 
-impl contime::ApplyEvent<CallbackSnapshot> for CallbackEvent {
+impl contime::SnapshotEvent<CallbackSnapshot> for CallbackEvent {
     fn snapshot_id(&self) -> u128 {
         self.snapshot_id
-    }
-
-    fn apply_to(&self, snapshot: &mut CallbackSnapshot) {
-        snapshot.sum += self.value as i32;
-    }
-}
-
-impl contime::AfterApplyEvent<CallbackSnapshot, CallbackContext> for CallbackEvent {
-    fn after_apply(&self, snapshot: &CallbackSnapshot, context: &mut CallbackContext) {
-        context.sink = context.sink.wrapping_add(self.event_id).wrapping_add(snapshot.sum as u128);
     }
 }
 
 impl contime::ApplyEvents for CallbackSnapshot {
-    fn apply_events(&mut self, _time: i64, events: &[Self::Event]) {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
         for event in events {
-            event.apply_to(self);
+            self.sum += event.value as i32;
         }
+        self.time = time;
     }
 }
 
-impl contime::ApplyEvents<CallbackContext> for CallbackSnapshot {
-    fn apply_events(&mut self, _time: i64, events: &[Self::Event]) {
-        for event in events {
-            event.apply_to(self);
-        }
-    }
-
+impl contime::AfterApplyEvents<CallbackContext> for CallbackSnapshot {
     fn after_apply_events(&self, _time: i64, events: &[Self::Event], context: &mut CallbackContext) {
         for event in events {
-            <CallbackEvent as contime::AfterApplyEvent<CallbackSnapshot, CallbackContext>>::after_apply(event, self, context);
+            context.sink = context.sink.wrapping_add(event.event_id).wrapping_add(self.sum as u128);
         }
     }
 }

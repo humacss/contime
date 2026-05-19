@@ -6,7 +6,7 @@
 //!
 //! # Workflow
 //!
-//! 1. Implement [`Snapshot`], [`Event`], and [`ApplyEvent`] for your domain types.
+//! 1. Implement [`Snapshot`], [`Event`], and [`ApplyEvents`] for your domain types.
 //! 2. Generate lane enums with [`contime!`], or assemble larger runtimes with
 //!    [`fragment!`] and [`lanes!`], or define compatible lane types manually.
 //! 3. Construct a [`Contime`] with a worker count and memory budget.
@@ -15,9 +15,8 @@
 //!    snapshot-scoped events with [`Contime::events_between`], and listen for
 //!    [`Reconciliation`] notifications when late data changes previously queried history.
 //!
-//! Queries currently replay events with `event.time() < query_time`, so query the first
-//! logical instant after the events you want included. Event history range queries use
-//! half-open ranges: `from_time <= event.time() < to_time`.
+//! Point queries include all events at the queried millisecond. Event history range queries
+//! use half-open ranges: `from_time <= event.time() < to_time`.
 //!
 //! # Where To Start
 //!
@@ -71,7 +70,7 @@ pub use handle::{
     ScheduleHandle, TimeAdvance, TimeAdvanceSubscription,
 };
 pub use history::{ApplyOutcome, Reconciliation, SnapshotHistory};
-pub use traits::{AfterApplyEvent, ApplyEvent, ApplyEvents, Event, EventLanes, SeedSnapshot, Snapshot, SnapshotLanes};
+pub use traits::{AfterApplyEvents, ApplyEvents, Event, EventLanes, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
 
 mod test;
 pub use test::*;

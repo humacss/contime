@@ -10,7 +10,7 @@ use ahash::AHashMap;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::handle::{QueryEventsResult, QueryResult};
-use crate::{ApplyEvents, EventLanes, ScheduleKey, SnapshotHistory, SnapshotLanes};
+use crate::{AfterApplyEvents, ApplyEvents, EventLanes, ScheduleKey, SnapshotHistory, SnapshotLanes};
 
 pub type SnapshotId = u128;
 
@@ -57,7 +57,7 @@ pub enum WorkerInbound<SL: SnapshotLanes, EL> {
     Shutdown,
 }
 
-pub struct Worker<SL: SnapshotLanes + ApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
+pub struct Worker<SL: SnapshotLanes + ApplyEvents + AfterApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
     pub worker_inbound_tx: Sender<WorkerInbound<SL, EL>>,
 
     threads: Vec<JoinHandle<()>>,
@@ -65,7 +65,7 @@ pub struct Worker<SL: SnapshotLanes + ApplyEvents<C>, EL: EventLanes<SL, C>, C =
     _context: PhantomData<C>,
 }
 
-impl<SL: SnapshotLanes + ApplyEvents<C>, EL: EventLanes<SL, C>, C> Drop for Worker<SL, EL, C> {
+impl<SL: SnapshotLanes + ApplyEvents + AfterApplyEvents<C>, EL: EventLanes<SL, C>, C> Drop for Worker<SL, EL, C> {
     fn drop(&mut self) {
         self.is_running.store(false, Ordering::Relaxed);
 
@@ -81,7 +81,7 @@ impl<SL: SnapshotLanes + ApplyEvents<C>, EL: EventLanes<SL, C>, C> Drop for Work
 
 impl<SL, EL, C> Worker<SL, EL, C>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + ApplyEvents<()> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static,
     EL: EventLanes<SL, C> + 'static + Send,
     C: Send + 'static,
 {
@@ -121,7 +121,7 @@ fn fetch_saturating_add_signed(atomic: &Arc<AtomicU64>, delta: i64, order: Order
     }
 }
 
-fn handle_worker<SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + ApplyEvents<()> + 'static, EL: EventLanes<SL, C>, C>(
+fn handle_worker<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static, EL: EventLanes<SL, C>, C>(
     is_running: Arc<AtomicBool>,
     worker_inbound_rx: Receiver<WorkerInbound<SL, EL>>,
     memory_usage: Arc<AtomicU64>,
@@ -263,7 +263,7 @@ fn handle_worker<SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + ApplyEvents<()
     }
 }
 
-fn apply_event_to_history<SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + ApplyEvents<()> + 'static, EL: EventLanes<SL, C>, C>(
+fn apply_event_to_history<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static, EL: EventLanes<SL, C>, C>(
     history_by_id: &mut AHashMap<SnapshotId, SnapshotHistory<SL>>,
     memory_usage: &Arc<AtomicU64>,
     lower_time_horizon_delta: i64,
@@ -284,7 +284,7 @@ fn apply_event_to_history<SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + Apply
     fetch_saturating_add_signed(memory_usage, outcome.bytes_delta, Ordering::Relaxed);
 }
 
-fn drain_ready_events<SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + ApplyEvents<()> + 'static, EL: EventLanes<SL, C>, C>(
+fn drain_ready_events<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static, EL: EventLanes<SL, C>, C>(
     ready_events: &mut VecDeque<ScheduledEvent<SL, EL>>,
     history_by_id: &mut AHashMap<SnapshotId, SnapshotHistory<SL>>,
     memory_usage: &Arc<AtomicU64>,
