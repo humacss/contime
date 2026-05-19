@@ -70,7 +70,7 @@ This design lets `contime` scale across multiple threads and processors with zer
 The public API is small. In practice you do five things:
 
 1. Define a `Snapshot` type and one or more `Event` types.
-2. Implement `ApplyEvent` so events can mutate snapshots.
+2. Implement `SnapshotEvent` for routing and `ApplyEvents` so each snapshot mutates from same-millisecond event buckets.
 3. Generate `SnapshotLanes`, `EventLanes`, and a typed `Contime` alias with `contime::contime!`.
 4. Create a `Contime` instance with a worker count and memory budget.
 5. Apply events or snapshots, then query state, inspect retained snapshot-scoped

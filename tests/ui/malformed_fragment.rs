@@ -1,4 +1,4 @@
-use contime::{ApplyEvent, Event, Snapshot};
+use contime::{AfterApplyEvents, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct BrokenAt {
@@ -54,27 +54,34 @@ impl Event for BrokenAtEvent {
     fn conservative_size(&self) -> u64 { std::mem::size_of::<Self>() as u64 }
 }
 
-impl ApplyEvent<BrokenAt> for OnBroken {
-    fn snapshot_id(&self) -> u128 { self.id }
-    fn apply_to(&self, snapshot: &mut BrokenAt) {
-        snapshot.id = self.id;
-        snapshot.time = self.time;
-    }
+impl From<OnBroken> for BrokenAtEvent {
+    fn from(event: OnBroken) -> Self { Self::OnBroken(event) }
 }
 
-impl ApplyEvent<BrokenAt> for BrokenAtEvent {
+impl SnapshotEvent<BrokenAt> for OnBroken {
+    fn snapshot_id(&self) -> u128 { self.id }
+}
+
+impl SnapshotEvent<BrokenAt> for BrokenAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            BrokenAtEvent::OnBroken(event) => event.snapshot_id(),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut BrokenAt) {
-        match self {
-            BrokenAtEvent::OnBroken(event) => event.apply_to(snapshot),
+            BrokenAtEvent::OnBroken(event) => <OnBroken as SnapshotEvent<BrokenAt>>::snapshot_id(event),
         }
     }
 }
+
+impl ApplyEvents for BrokenAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                BrokenAtEvent::OnBroken(event) => self.id = event.id,
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for BrokenAt {}
 
 contime::fragment! {
     macro broken_fragment;

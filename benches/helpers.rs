@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvent, ApplyEvent, ApplyEvents, Event, Snapshot};
+use contime::{AfterApplyEvents, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 type EventId = u128;
 type SnapshotId = u128;
@@ -27,7 +27,7 @@ impl Snapshot for BenchSnapshot {
     }
 
     fn from_event(event: &<Self as Snapshot>::Event) -> Self {
-        Self { id: event.snapshot_id(), ..Self::default() }
+        Self { id: <BenchEvent as SnapshotEvent<BenchSnapshot>>::snapshot_id(event), ..Self::default() }
     }
 
     fn conservative_size(&self) -> u64 {
@@ -57,35 +57,32 @@ impl Event for BenchEvent {
     }
 }
 
-impl ApplyEvent<BenchSnapshot> for BenchEvent {
+impl SnapshotEvent<BenchSnapshot> for BenchEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
             Self::Positive(snapshot_id, _time, _event_id, _value) => *snapshot_id,
         }
     }
+}
 
-    fn apply_to(&self, snapshot: &mut BenchSnapshot) {
-        if self.snapshot_id() != snapshot.id {
-            return;
-        }
+impl ApplyEvents for BenchSnapshot {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            if <BenchEvent as SnapshotEvent<BenchSnapshot>>::snapshot_id(event) != self.id {
+                continue;
+            }
 
-        match self {
-            Self::Positive(_snapshot_id, _time, _event_id, value) => {
-                snapshot.sum += *value as i32;
+            match event {
+                BenchEvent::Positive(_snapshot_id, _time, _event_id, value) => {
+                    self.sum += *value as i32;
+                }
             }
         }
+        self.time = time;
     }
 }
 
-impl<C> AfterApplyEvent<BenchSnapshot, C> for BenchEvent {}
-
-impl<C> ApplyEvents<C> for BenchSnapshot {
-    fn apply_events(&mut self, _time: i64, events: &[Self::Event]) {
-        for event in events {
-            event.apply_to(self);
-        }
-    }
-}
+impl<C> AfterApplyEvents<C> for BenchSnapshot {}
 
 contime::contime! {
     mod bench_lanes;

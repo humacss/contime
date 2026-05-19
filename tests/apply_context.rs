@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvent, ApplyEvent, ApplyEvents, Event, Snapshot};
+use contime::{AfterApplyEvents, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ContextValueAt {
@@ -69,31 +69,36 @@ impl Event for OnContextValueChanged {
     }
 }
 
-impl ApplyEvent<ContextValueAt> for OnContextValueChanged {
+impl SnapshotEvent<ContextValueAt> for OnContextValueChanged {
     fn snapshot_id(&self) -> u128 {
         ContextValueAt::lane_id(self.entity_id)
     }
+}
 
-    fn apply_to(&self, snapshot: &mut ContextValueAt) {
-        snapshot.entity_id = self.entity_id;
-        snapshot.time = self.time;
-        snapshot.value = self.value;
+impl ApplyEvents for ContextValueAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        if let Some(event) = events.last() {
+            self.entity_id = event.entity_id;
+            self.value = event.value;
+        }
+        self.time = time;
     }
 }
 
-impl AfterApplyEvent<ContextValueAt> for OnContextValueChanged {}
-
-impl AfterApplyEvent<ContextValueAt, ApplyTrace> for OnContextValueChanged {
-    fn after_apply(&self, snapshot: &ContextValueAt, context: &mut ApplyTrace) {
-        context.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
+impl AfterApplyEvents<ApplyTrace> for ContextValueAt {
+    fn after_apply_events(&self, _time: i64, _events: &[Self::Event], context: &mut ApplyTrace) {
+        context.applied.push((self.entity_id, self.time, self.value));
     }
 }
 
-impl AfterApplyEvent<ContextValueAt, ApplyTraceSender> for OnContextValueChanged {
-    fn after_apply(&self, snapshot: &ContextValueAt, context: &mut ApplyTraceSender) {
-        context.tx.send((self.entity_id, self.time, self.value, snapshot.value)).unwrap();
+impl AfterApplyEvents<ApplyTraceSender> for ContextValueAt {
+    fn after_apply_events(&self, _time: i64, events: &[Self::Event], context: &mut ApplyTraceSender) {
+        let event = events.last().expect("after apply should receive non-empty bucket");
+        context.tx.send((event.entity_id, event.time, event.value, self.value)).unwrap();
     }
 }
+
+impl AfterApplyEvents for ContextValueAt {}
 
 contime::contime! {
     mod context_contime;
@@ -108,7 +113,7 @@ fn context_free_apply_still_mutates_snapshot() {
     let event = OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 };
     let mut snapshot = ContextValueAt::default();
 
-    <OnContextValueChanged as ApplyEvent<ContextValueAt>>::apply_to(&event, &mut snapshot);
+    <ContextValueAt as ApplyEvents>::apply_events(&mut snapshot, 2, &[event]);
 
     assert_eq!(snapshot, ContextValueAt { entity_id: 3, time: 2, value: 4 });
 }
@@ -119,8 +124,8 @@ fn after_apply_receives_post_apply_snapshot_without_changing_snapshot_semantics(
     let mut snapshot = ContextValueAt::default();
     let mut context = ApplyTrace::default();
 
-    <OnContextValueChanged as ApplyEvent<ContextValueAt>>::apply_to(&event, &mut snapshot);
-    <OnContextValueChanged as AfterApplyEvent<ContextValueAt, ApplyTrace>>::after_apply(&event, &snapshot, &mut context);
+    <ContextValueAt as ApplyEvents>::apply_events(&mut snapshot, 2, &[event.clone()]);
+    <ContextValueAt as AfterApplyEvents<ApplyTrace>>::after_apply_events(&snapshot, 2, &[event], &mut context);
 
     assert_eq!(snapshot, ContextValueAt { entity_id: 3, time: 2, value: 4 });
     assert_eq!(context.applied, vec![(3, 2, 4)]);
@@ -132,8 +137,8 @@ fn generated_lane_dispatch_passes_after_apply_to_concrete_event() {
     let mut snapshot = SnapshotLanes::ContextValueAt(ContextValueAt::default());
     let mut context = ApplyTrace::default();
 
-    <SnapshotLanes as ApplyEvents<ApplyTrace>>::apply_events(&mut snapshot, 2, &[event]);
-    <SnapshotLanes as ApplyEvents<ApplyTrace>>::after_apply_events(
+    <SnapshotLanes as ApplyEvents>::apply_events(&mut snapshot, 2, &[event]);
+    <SnapshotLanes as AfterApplyEvents<ApplyTrace>>::after_apply_events(
         &snapshot,
         2,
         &[EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 })],

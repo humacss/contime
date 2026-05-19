@@ -3,7 +3,7 @@ use std::ops::Bound;
 
 use flume::{bounded, Receiver, Sender, TrySendError};
 
-use crate::{ApplyEvents, ContimeKey, Event, Snapshot};
+use crate::{AfterApplyEvents, ApplyEvents, ContimeKey, Event, Snapshot};
 
 use super::apply::replay_and_checkpoint;
 
@@ -57,7 +57,7 @@ const CHECKPOINT_INTERVAL: usize = 100;
 
 impl<S> LocalSnapshotHistory<S>
 where
-    S: Snapshot + ApplyEvents<()> + 'static,
+    S: Snapshot + ApplyEvents + 'static,
 {
     /// Creates a history for one snapshot and returns it with its initial memory cost.
     pub fn new(snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
@@ -114,7 +114,10 @@ where
     }
 
     /// Applies an event to this history and returns the memory delta.
-    pub fn apply_event(&mut self, event: S::Event) -> ApplyOutcome {
+    pub fn apply_event(&mut self, event: S::Event) -> ApplyOutcome
+    where
+        S: AfterApplyEvents<()>,
+    {
         self.apply_event_with_context(event, &mut ())
     }
 
@@ -125,7 +128,7 @@ where
     /// application.
     pub fn apply_event_with_context<C>(&mut self, event: S::Event, context: &mut C) -> ApplyOutcome
     where
-        S: ApplyEvents<C>,
+        S: AfterApplyEvents<C>,
     {
         let event_time = event.time();
         let latest_event_key = self.events.keys().next_back().cloned();
@@ -154,7 +157,7 @@ where
 
     fn replay_from_bucket<C>(&mut self, time: i64, preserve_previous_tip: bool, context: &mut C) -> i64
     where
-        S: ApplyEvents<C>,
+        S: AfterApplyEvents<C>,
     {
         let mut replay_boundary = first_key_at_time(time);
         if !preserve_previous_tip {
@@ -205,9 +208,9 @@ where
                 index += 1;
             }
 
-            <S as ApplyEvents<()>>::apply_events(&mut snapshot, bucket_time, &bucket);
+            <S as ApplyEvents>::apply_events(&mut snapshot, bucket_time, &bucket);
             snapshot.set_time(bucket_time);
-            snapshot.after_apply_events(bucket_time, &bucket, context);
+            <S as AfterApplyEvents<C>>::after_apply_events(&snapshot, bucket_time, &bucket, context);
             event_count += bucket.len();
             latest_key = Some(bucket_last_key.clone());
 
@@ -383,7 +386,7 @@ pub type SnapshotHistory<S> = LocalSnapshotHistory<S>;
 mod tests {
     use super::*;
 
-    use crate::{AfterApplyEvent, ApplyEvent, ApplyEvents, Event, TestEvent, TestSnapshot};
+    use crate::{AfterApplyEvents, ApplyEvents, Event, SnapshotEvent, TestEvent, TestSnapshot};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ContextEvent {
@@ -438,41 +441,24 @@ mod tests {
         }
     }
 
-    impl ApplyEvent<ContextSnapshot> for ContextEvent {
+    impl SnapshotEvent<ContextSnapshot> for ContextEvent {
         fn snapshot_id(&self) -> u128 {
             self.snapshot_id
-        }
-
-        fn apply_to(&self, snapshot: &mut ContextSnapshot) {
-            snapshot.sum += self.value;
-        }
-    }
-
-    impl AfterApplyEvent<ContextSnapshot, Vec<i32>> for ContextEvent {
-        fn after_apply(&self, snapshot: &ContextSnapshot, context: &mut Vec<i32>) {
-            context.push(snapshot.sum);
         }
     }
 
     impl ApplyEvents for ContextSnapshot {
         fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
             for event in events {
-                event.apply_to(self);
+                self.sum += event.value;
             }
             self.set_time(time);
         }
     }
 
-    impl ApplyEvents<Vec<i32>> for ContextSnapshot {
-        fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
-            for event in events {
-                event.apply_to(self);
-            }
-            self.set_time(time);
-        }
-
-        fn after_apply_events(&self, _time: i64, events: &[Self::Event], context: &mut Vec<i32>) {
-            <ContextEvent as AfterApplyEvent<ContextSnapshot, Vec<i32>>>::after_apply_events(self, events, context);
+    impl AfterApplyEvents<Vec<i32>> for ContextSnapshot {
+        fn after_apply_events(&self, _time: i64, _events: &[Self::Event], context: &mut Vec<i32>) {
+            context.push(self.sum);
         }
     }
 
@@ -570,7 +556,7 @@ mod tests {
         history.apply_event_with_context(ContextEvent { id: 10, time: 10, snapshot_id: 1, value: 1 }, &mut context);
 
         assert_eq!(history.snapshot_only_at(10).sum, 3);
-        assert_eq!(context, vec![2, 3, 3]);
+        assert_eq!(context, vec![2, 3]);
     }
 
     // --- apply_snapshot tests ---

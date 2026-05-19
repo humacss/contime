@@ -35,7 +35,7 @@
 
 use std::time::Duration;
 
-use contime::{AfterApplyEvent, ApplyEvent, Event, Snapshot};
+use contime::{AfterApplyEvents, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 /// Point-in-time state for one logical stream of received values.
 ///
@@ -114,22 +114,27 @@ impl Event for ReceiveValue {
     }
 }
 
-impl ApplyEvent<OrderedValuesSnapshot> for ReceiveValue {
+impl SnapshotEvent<OrderedValuesSnapshot> for ReceiveValue {
     /// Snapshot history targeted by this event.
     fn snapshot_id(&self) -> u128 {
         self.snapshot_id
     }
+}
 
+impl ApplyEvents for OrderedValuesSnapshot {
     /// Applies one event to one replay step.
     ///
     /// The example intentionally avoids any custom insertion or sorting logic. Values end up
     /// ordered because `contime` replays events in event-time order.
-    fn apply_to(&self, snapshot: &mut OrderedValuesSnapshot) {
-        snapshot.values.push(self.value);
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            self.values.push(event.value);
+        }
+        self.time = time;
     }
 }
 
-impl<C> AfterApplyEvent<OrderedValuesSnapshot, C> for ReceiveValue {}
+impl<C> AfterApplyEvents<C> for OrderedValuesSnapshot {}
 
 // Generate the lane enums and a typed `Contime` alias for this single-snapshot example.
 contime::contime! {

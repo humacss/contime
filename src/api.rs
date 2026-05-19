@@ -6,7 +6,7 @@ use crate::handle::{
     ScheduleHandle, TimeAdvanceSubscription,
 };
 use crate::history::Reconciliation;
-use crate::{ApplyEvents, Event, EventLanes, Router, RouterError, ScheduleKey, Snapshot, SnapshotLanes};
+use crate::{AfterApplyEvents, ApplyEvents, Event, EventLanes, Router, RouterError, ScheduleKey, Snapshot, SnapshotLanes};
 
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
@@ -39,14 +39,14 @@ impl From<HandleError> for ContimeError {
 /// Main entry point for building and querying continuous-time state.
 ///
 /// `SL` and `EL` are usually generated with [`crate::contime!`].
-pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
+pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
     router: Router<SL, EL, C>,
     _context: PhantomData<C>,
 }
 
 impl<SL, EL> Contime<SL, EL, ()>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents<()> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<()> + 'static,
     EL: EventLanes<SL> + 'static,
 {
     /// Creates a `contime` instance with `worker_count` workers and a shared memory budget.
@@ -72,7 +72,7 @@ where
 
 impl<SL, EL, C> Contime<SL, EL, C>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents<C> + ApplyEvents<()> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {

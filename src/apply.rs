@@ -5,7 +5,7 @@ use crate::{ApplyEvents, ContimeKey, Snapshot};
 
 /// Replays events from `start_snapshot` forward (starting after `start_bound`) and creates
 /// checkpoints at every `checkpoint_interval` events. Returns the bytes_delta from new checkpoints.
-pub fn replay_and_checkpoint<S: Snapshot + ApplyEvents<()>>(
+pub fn replay_and_checkpoint<S: Snapshot + ApplyEvents>(
     start_snapshot: &S,
     start_bound: Bound<&ContimeKey>,
     checkpoints: &mut BTreeMap<ContimeKey, S>,

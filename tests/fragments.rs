@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvent, ApplyEvent, Event, SeedSnapshot, Snapshot};
+use contime::{AfterApplyEvents, ApplyEvents, Event, SeedSnapshot, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LegacyValueAt {
@@ -90,34 +90,41 @@ impl Event for LegacyValueAtEvent {
     }
 }
 
-impl ApplyEvent<LegacyValueAt> for OnLegacyValueChanged {
+impl From<OnLegacyValueChanged> for LegacyValueAtEvent {
+    fn from(event: OnLegacyValueChanged) -> Self {
+        Self::OnLegacyValueChanged(event)
+    }
+}
+
+impl SnapshotEvent<LegacyValueAt> for OnLegacyValueChanged {
     fn snapshot_id(&self) -> u128 {
         LegacyValueAt::lane_id(self.entity_id)
     }
-
-    fn apply_to(&self, snapshot: &mut LegacyValueAt) {
-        snapshot.entity_id = self.entity_id;
-        snapshot.time = self.time;
-        snapshot.value = self.value;
-    }
 }
 
-impl ApplyEvent<LegacyValueAt> for LegacyValueAtEvent {
+impl SnapshotEvent<LegacyValueAt> for LegacyValueAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            Self::OnLegacyValueChanged(event) => <OnLegacyValueChanged as ApplyEvent<LegacyValueAt>>::snapshot_id(event),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut LegacyValueAt) {
-        match self {
-            Self::OnLegacyValueChanged(event) => event.apply_to(snapshot),
+            Self::OnLegacyValueChanged(event) => <OnLegacyValueChanged as SnapshotEvent<LegacyValueAt>>::snapshot_id(event),
         }
     }
 }
 
-impl<C> AfterApplyEvent<LegacyValueAt, C> for OnLegacyValueChanged {}
-impl<C> AfterApplyEvent<LegacyValueAt, C> for LegacyValueAtEvent {}
+impl ApplyEvents for LegacyValueAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                LegacyValueAtEvent::OnLegacyValueChanged(event) => {
+                    self.entity_id = event.entity_id;
+                    self.value = event.value;
+                }
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for LegacyValueAt {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct FragmentValueAt {
@@ -211,34 +218,41 @@ impl Event for FragmentValueAtEvent {
     }
 }
 
-impl ApplyEvent<FragmentValueAt> for OnFragmentValueChanged {
+impl From<OnFragmentValueChanged> for FragmentValueAtEvent {
+    fn from(event: OnFragmentValueChanged) -> Self {
+        Self::OnFragmentValueChanged(event)
+    }
+}
+
+impl SnapshotEvent<FragmentValueAt> for OnFragmentValueChanged {
     fn snapshot_id(&self) -> u128 {
         FragmentValueAt::lane_id(self.entity_id)
     }
-
-    fn apply_to(&self, snapshot: &mut FragmentValueAt) {
-        snapshot.entity_id = self.entity_id;
-        snapshot.time = self.time;
-        snapshot.value = self.value;
-    }
 }
 
-impl ApplyEvent<FragmentValueAt> for FragmentValueAtEvent {
+impl SnapshotEvent<FragmentValueAt> for FragmentValueAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            Self::OnFragmentValueChanged(event) => <OnFragmentValueChanged as ApplyEvent<FragmentValueAt>>::snapshot_id(event),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut FragmentValueAt) {
-        match self {
-            Self::OnFragmentValueChanged(event) => event.apply_to(snapshot),
+            Self::OnFragmentValueChanged(event) => <OnFragmentValueChanged as SnapshotEvent<FragmentValueAt>>::snapshot_id(event),
         }
     }
 }
 
-impl<C> AfterApplyEvent<FragmentValueAt, C> for OnFragmentValueChanged {}
-impl<C> AfterApplyEvent<FragmentValueAt, C> for FragmentValueAtEvent {}
+impl ApplyEvents for FragmentValueAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                FragmentValueAtEvent::OnFragmentValueChanged(event) => {
+                    self.entity_id = event.entity_id;
+                    self.value = event.value;
+                }
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for FragmentValueAt {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct AlphaAt {
@@ -330,34 +344,41 @@ impl Event for AlphaAtEvent {
     }
 }
 
-impl ApplyEvent<AlphaAt> for OnAlphaChanged {
+impl From<OnAlphaChanged> for AlphaAtEvent {
+    fn from(event: OnAlphaChanged) -> Self {
+        Self::OnAlphaChanged(event)
+    }
+}
+
+impl SnapshotEvent<AlphaAt> for OnAlphaChanged {
     fn snapshot_id(&self) -> u128 {
         AlphaAt::lane_id(self.entity_id)
     }
-
-    fn apply_to(&self, snapshot: &mut AlphaAt) {
-        snapshot.entity_id = self.entity_id;
-        snapshot.time = self.time;
-        snapshot.alpha = self.alpha;
-    }
 }
 
-impl ApplyEvent<AlphaAt> for AlphaAtEvent {
+impl SnapshotEvent<AlphaAt> for AlphaAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            Self::OnAlphaChanged(event) => <OnAlphaChanged as ApplyEvent<AlphaAt>>::snapshot_id(event),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut AlphaAt) {
-        match self {
-            Self::OnAlphaChanged(event) => event.apply_to(snapshot),
+            Self::OnAlphaChanged(event) => <OnAlphaChanged as SnapshotEvent<AlphaAt>>::snapshot_id(event),
         }
     }
 }
 
-impl<C> AfterApplyEvent<AlphaAt, C> for OnAlphaChanged {}
-impl<C> AfterApplyEvent<AlphaAt, C> for AlphaAtEvent {}
+impl ApplyEvents for AlphaAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                AlphaAtEvent::OnAlphaChanged(event) => {
+                    self.entity_id = event.entity_id;
+                    self.alpha = event.alpha;
+                }
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for AlphaAt {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct BetaAt {
@@ -449,34 +470,41 @@ impl Event for BetaAtEvent {
     }
 }
 
-impl ApplyEvent<BetaAt> for OnBetaChanged {
+impl From<OnBetaChanged> for BetaAtEvent {
+    fn from(event: OnBetaChanged) -> Self {
+        Self::OnBetaChanged(event)
+    }
+}
+
+impl SnapshotEvent<BetaAt> for OnBetaChanged {
     fn snapshot_id(&self) -> u128 {
         BetaAt::lane_id(self.entity_id)
     }
-
-    fn apply_to(&self, snapshot: &mut BetaAt) {
-        snapshot.entity_id = self.entity_id;
-        snapshot.time = self.time;
-        snapshot.beta = self.beta;
-    }
 }
 
-impl ApplyEvent<BetaAt> for BetaAtEvent {
+impl SnapshotEvent<BetaAt> for BetaAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            Self::OnBetaChanged(event) => <OnBetaChanged as ApplyEvent<BetaAt>>::snapshot_id(event),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut BetaAt) {
-        match self {
-            Self::OnBetaChanged(event) => event.apply_to(snapshot),
+            Self::OnBetaChanged(event) => <OnBetaChanged as SnapshotEvent<BetaAt>>::snapshot_id(event),
         }
     }
 }
 
-impl<C> AfterApplyEvent<BetaAt, C> for OnBetaChanged {}
-impl<C> AfterApplyEvent<BetaAt, C> for BetaAtEvent {}
+impl ApplyEvents for BetaAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                BetaAtEvent::OnBetaChanged(event) => {
+                    self.entity_id = event.entity_id;
+                    self.beta = event.beta;
+                }
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for BetaAt {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SharedSourceAt {
@@ -638,62 +666,76 @@ impl Event for SharedMirrorAtEvent {
     }
 }
 
-impl ApplyEvent<SharedSourceAt> for OnSharedValueChanged {
+impl From<OnSharedValueChanged> for SharedSourceAtEvent {
+    fn from(event: OnSharedValueChanged) -> Self {
+        Self::OnSharedValueChanged(event)
+    }
+}
+
+impl From<OnSharedValueChanged> for SharedMirrorAtEvent {
+    fn from(event: OnSharedValueChanged) -> Self {
+        Self::OnSharedValueChanged(event)
+    }
+}
+
+impl SnapshotEvent<SharedSourceAt> for OnSharedValueChanged {
     fn snapshot_id(&self) -> u128 {
         SharedSourceAt::lane_id(self.entity_id)
     }
-
-    fn apply_to(&self, snapshot: &mut SharedSourceAt) {
-        snapshot.entity_id = self.entity_id;
-        snapshot.time = self.time;
-        snapshot.value = self.value;
-    }
 }
 
-impl ApplyEvent<SharedMirrorAt> for OnSharedValueChanged {
+impl SnapshotEvent<SharedMirrorAt> for OnSharedValueChanged {
     fn snapshot_id(&self) -> u128 {
         SharedMirrorAt::lane_id(self.entity_id)
     }
-
-    fn apply_to(&self, snapshot: &mut SharedMirrorAt) {
-        snapshot.entity_id = self.entity_id;
-        snapshot.time = self.time;
-        snapshot.mirrored = self.value;
-    }
 }
 
-impl ApplyEvent<SharedSourceAt> for SharedSourceAtEvent {
+impl SnapshotEvent<SharedSourceAt> for SharedSourceAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            Self::OnSharedValueChanged(event) => <OnSharedValueChanged as ApplyEvent<SharedSourceAt>>::snapshot_id(event),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut SharedSourceAt) {
-        match self {
-            Self::OnSharedValueChanged(event) => event.apply_to(snapshot),
+            Self::OnSharedValueChanged(event) => <OnSharedValueChanged as SnapshotEvent<SharedSourceAt>>::snapshot_id(event),
         }
     }
 }
 
-impl ApplyEvent<SharedMirrorAt> for SharedMirrorAtEvent {
+impl SnapshotEvent<SharedMirrorAt> for SharedMirrorAtEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
-            Self::OnSharedValueChanged(event) => <OnSharedValueChanged as ApplyEvent<SharedMirrorAt>>::snapshot_id(event),
-        }
-    }
-
-    fn apply_to(&self, snapshot: &mut SharedMirrorAt) {
-        match self {
-            Self::OnSharedValueChanged(event) => event.apply_to(snapshot),
+            Self::OnSharedValueChanged(event) => <OnSharedValueChanged as SnapshotEvent<SharedMirrorAt>>::snapshot_id(event),
         }
     }
 }
 
-impl<C> AfterApplyEvent<SharedSourceAt, C> for OnSharedValueChanged {}
-impl<C> AfterApplyEvent<SharedMirrorAt, C> for OnSharedValueChanged {}
-impl<C> AfterApplyEvent<SharedSourceAt, C> for SharedSourceAtEvent {}
-impl<C> AfterApplyEvent<SharedMirrorAt, C> for SharedMirrorAtEvent {}
+impl ApplyEvents for SharedSourceAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                SharedSourceAtEvent::OnSharedValueChanged(event) => {
+                    self.entity_id = event.entity_id;
+                    self.value = event.value;
+                }
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl ApplyEvents for SharedMirrorAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        for event in events {
+            match event {
+                SharedMirrorAtEvent::OnSharedValueChanged(event) => {
+                    self.entity_id = event.entity_id;
+                    self.mirrored = event.value;
+                }
+            }
+        }
+        self.time = time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for SharedSourceAt {}
+impl<C> AfterApplyEvents<C> for SharedMirrorAt {}
 
 contime::fragment! {
     macro fragment_value_fragment;
@@ -788,7 +830,7 @@ contime::lanes! {
 
 fn snapshot_at<T, SL, EL>(contime: &contime::Contime<SL, EL>, time: i64, snapshot_id: u128) -> T
 where
-    SL: contime::SnapshotLanes<Event = EL> + contime::ApplyEvents + 'static,
+    SL: contime::SnapshotLanes<Event = EL> + contime::ApplyEvents + contime::AfterApplyEvents + 'static,
     EL: contime::EventLanes<SL> + 'static,
     T: TryFrom<SL>,
 {

@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvent, ApplyEvent, Event, QueryResult, Snapshot, TestEvent, TestSnapshot, TestSnapshotContime};
+use contime::{AfterApplyEvents, ApplyEvents, Event, QueryResult, Snapshot, SnapshotEvent, TestEvent, TestSnapshot, TestSnapshotContime};
 
 #[test]
 fn scheduled_event_does_not_apply_before_advance() {
@@ -226,30 +226,40 @@ impl Event for MultiEvent {
     }
 }
 
-impl ApplyEvent<LeftAt> for MultiEvent {
+impl SnapshotEvent<LeftAt> for MultiEvent {
     fn snapshot_id(&self) -> u128 {
         self.left_id
     }
-
-    fn apply_to(&self, snapshot: &mut LeftAt) {
-        snapshot.id = self.left_id;
-        snapshot.value = self.value;
-    }
 }
 
-impl ApplyEvent<RightAt> for MultiEvent {
+impl SnapshotEvent<RightAt> for MultiEvent {
     fn snapshot_id(&self) -> u128 {
         self.right_id
     }
+}
 
-    fn apply_to(&self, snapshot: &mut RightAt) {
-        snapshot.id = self.right_id;
-        snapshot.value = self.value;
+impl ApplyEvents for LeftAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        if let Some(event) = events.last() {
+            self.id = event.left_id;
+            self.value = event.value;
+        }
+        self.time = time;
     }
 }
 
-impl<C> AfterApplyEvent<LeftAt, C> for MultiEvent {}
-impl<C> AfterApplyEvent<RightAt, C> for MultiEvent {}
+impl ApplyEvents for RightAt {
+    fn apply_events(&mut self, time: i64, events: &[Self::Event]) {
+        if let Some(event) = events.last() {
+            self.id = event.right_id;
+            self.value = event.value;
+        }
+        self.time = time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for LeftAt {}
+impl<C> AfterApplyEvents<C> for RightAt {}
 
 contime::contime! {
     mod multi;
