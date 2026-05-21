@@ -231,6 +231,7 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                                 snapshot_id: batch.snapshot_id,
                                 time: batch.time,
                                 events: &bucket,
+                                bucket_revision: batch.bucket_revision,
                             },
                         );
                     } else {
@@ -272,6 +273,7 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                                 snapshot_id: batch.snapshot_id,
                                 time: batch.time,
                                 events: &bucket,
+                                bucket_revision: batch.bucket_revision,
                             },
                             context,
                         );

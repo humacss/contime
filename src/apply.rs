@@ -29,7 +29,7 @@ pub fn replay_and_checkpoint<S: Snapshot + ApplyEvents>(
             index += 1;
         }
 
-        snapshot.apply_events(ApplyBatch { snapshot_id: snapshot.id(), time: bucket_time, events: &bucket });
+        snapshot.apply_events(ApplyBatch { snapshot_id: snapshot.id(), time: bucket_time, events: &bucket, bucket_revision: 0 });
         snapshot.set_time(bucket_time);
         count += bucket.len();
 

@@ -74,6 +74,7 @@ pub struct ApplyBatch<'a, E> {
     pub snapshot_id: u128,
     pub time: i64,
     pub events: &'a [E],
+    pub bucket_revision: u64,
 }
 
 impl<'a, E> Clone for ApplyBatch<'a, E> {
