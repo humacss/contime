@@ -151,6 +151,7 @@ macro_rules! contime {
                                     snapshot_id: batch.snapshot_id,
                                     time: batch.time,
                                     events: &bucket,
+                                    bucket_revision: batch.bucket_revision,
                                 },
                             );
                         }
@@ -179,6 +180,7 @@ macro_rules! contime {
                                     snapshot_id: batch.snapshot_id,
                                     time: batch.time,
                                     events: &bucket,
+                                    bucket_revision: batch.bucket_revision,
                                 },
                                 context,
                             );

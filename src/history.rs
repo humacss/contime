@@ -44,6 +44,8 @@ where
     pub checkpoints: BTreeMap<ContimeKey, S>,
     /// Applied events keyed by time and id.
     pub events: BTreeMap<ContimeKey, S::Event>,
+    /// Runtime materialization revision per same-millisecond bucket.
+    pub bucket_revisions: BTreeMap<i64, u64>,
     /// Interval between generated checkpoints during replay.
     pub checkpoint_interval: usize,
 
@@ -77,6 +79,7 @@ where
                 base_snapshot,
                 checkpoints,
                 events,
+                bucket_revisions: BTreeMap::new(),
                 checkpoint_interval: CHECKPOINT_INTERVAL,
             },
             base_size,
@@ -94,6 +97,7 @@ where
 
         // Split off events and checkpoints at the drop boundary
         let kept_events = self.events.split_off(&drop_key);
+        let kept_revisions = self.bucket_revisions.split_off(&drop_time);
         for (_key, event) in &self.events {
             bytes_delta -= event.conservative_size() as i64;
         }
@@ -108,6 +112,7 @@ where
         }
 
         self.events = kept_events;
+        self.bucket_revisions = kept_revisions;
         self.checkpoints = kept_checkpoints;
 
         bytes_delta
@@ -208,7 +213,8 @@ where
                 index += 1;
             }
 
-            let batch = ApplyBatch { snapshot_id: self.snapshot_id, time: bucket_time, events: &bucket };
+            let bucket_revision = self.next_bucket_revision(bucket_time);
+            let batch = ApplyBatch { snapshot_id: self.snapshot_id, time: bucket_time, events: &bucket, bucket_revision };
             <S as ApplyEvents>::apply_events(&mut snapshot, batch);
             snapshot.set_time(bucket_time);
             <S as AfterApplyEvents<C>>::after_apply_events(&snapshot, batch, context);
@@ -241,6 +247,16 @@ where
         let event_count = self.events.range((replay_start, Bound::Included(checkpoint_key))).count();
 
         event_count != 0 && event_count % self.checkpoint_interval == 0
+    }
+
+    fn next_bucket_revision(&mut self, time: i64) -> u64 {
+        let revision = self.bucket_revisions.entry(time).or_insert(0);
+        *revision = revision.saturating_add(1);
+        *revision
+    }
+
+    fn current_bucket_revision(&self, time: i64) -> u64 {
+        self.bucket_revisions.get(&time).copied().unwrap_or(0)
     }
 
     /// Applies an authoritative snapshot and replays later events on top of it.
@@ -340,7 +356,12 @@ where
                 index += 1;
             }
 
-            snapshot.apply_events(ApplyBatch { snapshot_id: self.snapshot_id, time: bucket_time, events: &bucket });
+            snapshot.apply_events(ApplyBatch {
+                snapshot_id: self.snapshot_id,
+                time: bucket_time,
+                events: &bucket,
+                bucket_revision: self.current_bucket_revision(bucket_time),
+            });
             snapshot.set_time(bucket_time);
         }
 
@@ -418,6 +439,9 @@ mod tests {
         sum: i32,
     }
 
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct RevisionTrace(Vec<(i64, u64, i32)>);
+
     impl Snapshot for ContextSnapshot {
         type Event = ContextEvent;
 
@@ -461,6 +485,12 @@ mod tests {
     impl AfterApplyEvents<Vec<i32>> for ContextSnapshot {
         fn after_apply_events(&self, _batch: ApplyBatch<'_, Self::Event>, context: &mut Vec<i32>) {
             context.push(self.sum);
+        }
+    }
+
+    impl AfterApplyEvents<RevisionTrace> for ContextSnapshot {
+        fn after_apply_events(&self, batch: ApplyBatch<'_, Self::Event>, context: &mut RevisionTrace) {
+            context.0.push((batch.time, batch.bucket_revision, self.sum));
         }
     }
 
@@ -576,6 +606,45 @@ mod tests {
 
         assert_eq!(history.snapshot_only_at(10).sum, 3);
         assert_eq!(context, vec![2, 3]);
+    }
+
+    #[test]
+    fn same_time_bucket_reapply_increments_bucket_revision() {
+        let snapshot = ContextSnapshot { id: 1, time: 0, sum: 0 };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
+        let mut context = RevisionTrace::default();
+
+        history.apply_event_with_context(ContextEvent { id: 20, time: 100, snapshot_id: 1, value: 2 }, &mut context);
+        history.apply_event_with_context(ContextEvent { id: 10, time: 100, snapshot_id: 1, value: 1 }, &mut context);
+
+        assert_eq!(context.0, vec![(100, 1, 2), (100, 2, 3)]);
+    }
+
+    #[test]
+    fn out_of_order_replay_increments_replayed_bucket_revisions() {
+        let snapshot = ContextSnapshot { id: 1, time: 0, sum: 0 };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
+        let mut context = RevisionTrace::default();
+
+        history.apply_event_with_context(ContextEvent { id: 200, time: 200, snapshot_id: 1, value: 20 }, &mut context);
+        history.apply_event_with_context(ContextEvent { id: 100, time: 100, snapshot_id: 1, value: 10 }, &mut context);
+
+        assert_eq!(context.0, vec![(200, 1, 20), (100, 1, 10), (200, 2, 30)]);
+    }
+
+    #[test]
+    fn query_replay_does_not_increment_bucket_revision_or_run_after_apply() {
+        let snapshot = ContextSnapshot { id: 1, time: 0, sum: 0 };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
+        let mut context = RevisionTrace::default();
+
+        history.apply_event_with_context(ContextEvent { id: 10, time: 100, snapshot_id: 1, value: 10 }, &mut context);
+        let before = history.bucket_revisions.clone();
+
+        assert_eq!(history.snapshot_only_at(100).sum, 10);
+
+        assert_eq!(history.bucket_revisions, before);
+        assert_eq!(context.0, vec![(100, 1, 10)]);
     }
 
     // --- apply_snapshot tests ---

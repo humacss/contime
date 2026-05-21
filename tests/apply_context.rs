@@ -22,7 +22,7 @@ struct ApplyTrace {
 
 #[derive(Default, Debug, PartialEq, Eq)]
 struct ApplyBatchTrace {
-    applied: Vec<(u128, i64, usize)>,
+    applied: Vec<(u128, i64, usize, u64)>,
 }
 
 #[derive(Clone)]
@@ -105,7 +105,7 @@ impl AfterApplyEvents<ApplyTraceSender> for ContextValueAt {
 
 impl AfterApplyEvents<ApplyBatchTrace> for ContextValueAt {
     fn after_apply_events(&self, batch: ApplyBatch<'_, Self::Event>, context: &mut ApplyBatchTrace) {
-        context.applied.push((batch.snapshot_id, batch.time, batch.events.len()));
+        context.applied.push((batch.snapshot_id, batch.time, batch.events.len(), batch.bucket_revision));
     }
 }
 
@@ -126,7 +126,7 @@ fn context_free_apply_still_mutates_snapshot() {
 
     <ContextValueAt as ApplyEvents>::apply_events(
         &mut snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event] },
+        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event], bucket_revision: 0 },
     );
 
     assert_eq!(snapshot, ContextValueAt { entity_id: 3, time: 2, value: 4 });
@@ -140,11 +140,11 @@ fn after_apply_receives_post_apply_snapshot_without_changing_snapshot_semantics(
 
     <ContextValueAt as ApplyEvents>::apply_events(
         &mut snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event.clone()] },
+        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event.clone()], bucket_revision: 0 },
     );
     <ContextValueAt as AfterApplyEvents<ApplyTrace>>::after_apply_events(
         &snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event] },
+        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event], bucket_revision: 0 },
         &mut context,
     );
 
@@ -160,7 +160,7 @@ fn generated_lane_dispatch_passes_after_apply_to_concrete_event() {
 
     <SnapshotLanes as ApplyEvents>::apply_events(
         &mut snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event] },
+        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event], bucket_revision: 7 },
     );
     <SnapshotLanes as AfterApplyEvents<ApplyTrace>>::after_apply_events(
         &snapshot,
@@ -168,6 +168,7 @@ fn generated_lane_dispatch_passes_after_apply_to_concrete_event() {
             snapshot_id: ContextValueAt::lane_id(3),
             time: 2,
             events: &[EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 })],
+            bucket_revision: 7,
         },
         &mut context,
     );
@@ -184,16 +185,16 @@ fn generated_lane_dispatch_passes_routed_snapshot_id_to_apply_batch() {
 
     <SnapshotLanes as ApplyEvents>::apply_events(
         &mut snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event.clone()] },
+        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event.clone()], bucket_revision: 9 },
     );
     <SnapshotLanes as AfterApplyEvents<ApplyBatchTrace>>::after_apply_events(
         &snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event] },
+        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[event], bucket_revision: 9 },
         &mut context,
     );
 
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 2, value: 4 }));
-    assert_eq!(context.applied, vec![(3, 2, 1)]);
+    assert_eq!(context.applied, vec![(3, 2, 1, 9)]);
 }
 
 #[test]
