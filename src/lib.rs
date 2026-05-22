@@ -70,7 +70,9 @@ pub use handle::{
     ScheduleHandle, TimeAdvance, TimeAdvanceSubscription,
 };
 pub use history::{ApplyOutcome, Reconciliation, SnapshotHistory};
-pub use traits::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, EventLanes, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
+pub use traits::{
+    AfterApplyEvents, ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes,
+};
 
 mod test;
 pub use test::*;

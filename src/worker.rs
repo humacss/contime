@@ -275,7 +275,7 @@ fn apply_event_to_history<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApp
     let history = match history_by_id.entry(snapshot_id) {
         Entry::Occupied(entry) => entry.into_mut(),
         Entry::Vacant(entry) => {
-            let (history, base_delta) = SnapshotHistory::new(initial_snapshot, 0, lower_time_horizon_delta);
+            let (history, base_delta) = SnapshotHistory::new_with_snapshot_id(snapshot_id, initial_snapshot, 0, lower_time_horizon_delta);
             fetch_saturating_add_signed(memory_usage, base_delta, Ordering::Relaxed);
             entry.insert(history)
         }
