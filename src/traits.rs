@@ -101,9 +101,19 @@ pub trait AfterApplyEvents<C = ()>: Snapshot {
 ///
 /// `snapshots()` returns the initial snapshots that should exist when this event creates
 /// history for a snapshot id for the first time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoutedSnapshot<SL> {
+    pub snapshot_id: u128,
+    pub initial_snapshot: SL,
+}
+
 pub trait EventLanes<SL: SnapshotLanes, C = ()>: Event + Clone
 where
     SL: ApplyEvents + AfterApplyEvents<C>,
 {
     fn snapshots(&self) -> Vec<SL>;
+
+    fn routed_snapshots(&self) -> Vec<RoutedSnapshot<SL>> {
+        self.snapshots().into_iter().map(|snapshot| RoutedSnapshot { snapshot_id: snapshot.id(), initial_snapshot: snapshot }).collect()
+    }
 }

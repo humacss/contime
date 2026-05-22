@@ -202,6 +202,17 @@ macro_rules! contime {
                         }
                     }
                 }
+
+                fn routed_snapshots(&self) -> Vec<$crate::RoutedSnapshot<SnapshotLanes>> {
+                    match self {
+                        Self::$event(event) => {
+                            vec![$crate::RoutedSnapshot {
+                                snapshot_id: <$event as $crate::SnapshotEvent<$snapshot>>::snapshot_id(event),
+                                initial_snapshot: <$snapshot as $crate::SeedSnapshot<$event>>::seed_from_event(event).into(),
+                            }]
+                        }
+                    }
+                }
             }
 
             impl From<$event> for EventLanes {

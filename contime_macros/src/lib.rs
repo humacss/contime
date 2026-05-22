@@ -309,6 +309,35 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
         })
         .collect::<Vec<_>>();
 
+    let event_routed_snapshots_arms = routes
+        .iter()
+        .map(|route| {
+            let key = &route.key;
+            let event_ty = &route.event_ty;
+            let targets = route.targets.iter().map(|target| {
+                let target_variant = &target.variant;
+                let target_ty = &target.path;
+                quote! {
+                    {
+                        ::contime::RoutedSnapshot {
+                            snapshot_id: <#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(e),
+                            initial_snapshot: SnapshotLanes::#target_variant(
+                                <#target_ty as ::contime::SeedSnapshot<#event_ty>>::seed_from_event(e)
+                            ),
+                        }
+                    }
+                }
+            });
+            quote! {
+                Self::#key(e) => {
+                    vec![
+                        #( #targets, )*
+                    ]
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
     let event_from_impls = routes
         .iter()
         .map(|route| {
@@ -442,6 +471,12 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
                     match self {
                         #( #event_snapshots_arms )*
+                    }
+                }
+
+                fn routed_snapshots(&self) -> Vec<::contime::RoutedSnapshot<SnapshotLanes>> {
+                    match self {
+                        #( #event_routed_snapshots_arms )*
                     }
                 }
             }

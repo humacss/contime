@@ -162,6 +162,51 @@ fn send_advance_to_reserves_current_time_without_waiting() {
     second.wait().expect("second advance should complete");
 }
 
+#[test]
+fn immediate_event_routes_by_snapshot_event_id_not_seed_snapshot_id() {
+    let contime = raw_route::Contime::new(1, 10_000);
+
+    contime.apply_event(RawRouteEvent { event_id: 10, time: 5, target_snapshot_id: 123, value: 7 }).expect("event should apply");
+
+    let routed = contime
+        .many_at(6, &[123])
+        .expect("target snapshot should query")
+        .pop()
+        .flatten()
+        .and_then(|lane| RawRouteAt::try_from(lane).ok())
+        .expect("target snapshot should exist");
+    assert_eq!(routed.snapshot_id, 123);
+    assert_eq!(routed.applied_values, vec![7]);
+    assert!(
+        contime.many_at(6, &[0]).expect("default snapshot should query").pop().flatten().is_none(),
+        "seed snapshot identity must not become the routed lane"
+    );
+}
+
+#[test]
+fn scheduled_event_routes_by_snapshot_event_id_not_seed_snapshot_id() {
+    let contime = raw_route::Contime::new(1, 10_000);
+
+    contime
+        .schedule_keyed_event(55, RawRouteEvent { event_id: 10, time: 5, target_snapshot_id: 123, value: 7 })
+        .expect("event should schedule");
+    contime.advance_to(5).expect("scheduled event should apply");
+
+    let routed = contime
+        .many_at(6, &[123])
+        .expect("target snapshot should query")
+        .pop()
+        .flatten()
+        .and_then(|lane| RawRouteAt::try_from(lane).ok())
+        .expect("target snapshot should exist");
+    assert_eq!(routed.snapshot_id, 123);
+    assert_eq!(routed.applied_values, vec![7]);
+    assert!(
+        contime.many_at(6, &[0]).expect("default snapshot should query").pop().flatten().is_none(),
+        "seed snapshot identity must not become the routed lane"
+    );
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LeftAt {
     id: u128,
@@ -286,4 +331,81 @@ contime::contime! {
     mod multi;
     snapshots { LeftAt, RightAt },
     Multi(MultiEvent) => [LeftAt, RightAt],
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RawRouteAt {
+    snapshot_id: u128,
+    time: i64,
+    applied_values: Vec<i32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RawRouteEvent {
+    event_id: u128,
+    time: i64,
+    target_snapshot_id: u128,
+    value: i32,
+}
+
+impl Snapshot for RawRouteAt {
+    type Event = RawRouteEvent;
+
+    fn id(&self) -> u128 {
+        self.snapshot_id
+    }
+
+    fn time(&self) -> i64 {
+        self.time
+    }
+
+    fn set_time(&mut self, time: i64) {
+        self.time = time;
+    }
+
+    fn conservative_size(&self) -> u64 {
+        (std::mem::size_of::<Self>() + self.applied_values.len() * std::mem::size_of::<i32>()) as u64
+    }
+
+    fn from_event(event: &Self::Event) -> Self {
+        Self { snapshot_id: 0, time: event.time, applied_values: Vec::new() }
+    }
+}
+
+impl Event for RawRouteEvent {
+    fn id(&self) -> u128 {
+        self.event_id
+    }
+
+    fn time(&self) -> i64 {
+        self.time
+    }
+
+    fn conservative_size(&self) -> u64 {
+        std::mem::size_of::<Self>() as u64
+    }
+}
+
+impl SnapshotEvent<RawRouteAt> for RawRouteEvent {
+    fn snapshot_id(&self) -> u128 {
+        self.target_snapshot_id
+    }
+}
+
+impl ApplyEvents for RawRouteAt {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+        self.snapshot_id = batch.snapshot_id;
+        for event in batch.events {
+            self.applied_values.push(event.value);
+        }
+        self.time = batch.time;
+    }
+}
+
+impl<C> AfterApplyEvents<C> for RawRouteAt {}
+
+contime::contime! {
+    mod raw_route;
+    snapshots { RawRouteAt },
+    RawRoute(RawRouteEvent) => [RawRouteAt],
 }

@@ -105,13 +105,13 @@ where
         }
 
         let mut rxs = Vec::new();
-        for snapshot in event_lane.snapshots() {
-            let snapshot_id = snapshot.id();
+        for routed in event_lane.routed_snapshots() {
+            let snapshot_id = routed.snapshot_id;
             let index = self.worker_index(snapshot_id);
             let (tx, rx) = bounded(1);
             self.workers[index]
                 .worker_inbound_tx
-                .send(WorkerInbound::Event { snapshot_id, event: event_lane.clone(), initial_snapshot: snapshot, reply: tx })
+                .send(WorkerInbound::Event { snapshot_id, event: event_lane.clone(), initial_snapshot: routed.initial_snapshot, reply: tx })
                 .map_err(|_| RouterError::Error)?;
             rxs.push(rx);
         }
@@ -135,8 +135,8 @@ where
         }
 
         let mut rxs = Vec::new();
-        for snapshot in event_lane.snapshots() {
-            let snapshot_id = snapshot.id();
+        for routed in event_lane.routed_snapshots() {
+            let snapshot_id = routed.snapshot_id;
             let index = self.worker_index(snapshot_id);
             let (tx, rx) = bounded(1);
             self.workers[index]
@@ -145,7 +145,7 @@ where
                     snapshot_id,
                     schedule_key,
                     event: event_lane.clone(),
-                    initial_snapshot: snapshot,
+                    initial_snapshot: routed.initial_snapshot,
                     reply: tx,
                 })
                 .map_err(|_| RouterError::Error)?;

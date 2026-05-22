@@ -63,6 +63,11 @@ where
 {
     /// Creates a history for one snapshot and returns it with its initial memory cost.
     pub fn new(snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
+        Self::new_with_snapshot_id(snapshot.id(), snapshot, current_time, lower_time_horizon_delta)
+    }
+
+    /// Creates a history for one explicitly routed snapshot id.
+    pub fn new_with_snapshot_id(snapshot_id: u128, snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
         let checkpoints = BTreeMap::new();
         let events = BTreeMap::new();
         let mut base_snapshot = snapshot.clone();
@@ -75,7 +80,7 @@ where
                 current_time,
                 lower_time_horizon_delta,
                 reconciliation_subscribers: vec![],
-                snapshot_id: snapshot.id(),
+                snapshot_id,
                 base_snapshot,
                 checkpoints,
                 events,
