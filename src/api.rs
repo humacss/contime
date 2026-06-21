@@ -1,12 +1,9 @@
 use flume::Receiver;
 use std::marker::PhantomData;
 
-use crate::handle::{
-    AdvanceHandle, ApplyHandle, CancelScheduleHandle, EventQueryHandle, HandleError, QueryEventsResult, QueryHandle, QueryResult,
-    ScheduleHandle, TimeAdvanceSubscription,
-};
+use crate::handle::{AdvanceHandle, ApplyHandle, HandleError, QueryHandle, QueryResult, TimeAdvanceSubscription};
 use crate::history::Reconciliation;
-use crate::{AfterApplyEvents, ApplyEvents, Event, EventLanes, Router, RouterError, ScheduleKey, Snapshot, SnapshotLanes};
+use crate::{AfterApplyEvents, ApplyContextEvents, ApplyEvents, Event, EventLanes, Router, RouterError, Snapshot, SnapshotLanes};
 
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
@@ -39,14 +36,19 @@ impl From<HandleError> for ContimeError {
 /// Main entry point for building and querying continuous-time state.
 ///
 /// `SL` and `EL` are usually generated with [`crate::contime!`].
-pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
+pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = ()>
+where
+    SL: AfterApplyEvents<C>,
+{
     router: Router<SL, EL, C>,
+    apply_context: C,
     _context: PhantomData<C>,
 }
 
 impl<SL, EL> Contime<SL, EL, ()>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<()> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
+    SL: AfterApplyEvents<()> + 'static,
     EL: EventLanes<SL> + 'static,
 {
     /// Creates a `contime` instance with `worker_count` workers and a shared memory budget.
@@ -55,7 +57,7 @@ where
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
         let router = Router::<SL, EL>::new(worker_count, memory_budget_bytes);
 
-        Self { router, _context: PhantomData }
+        Self { router, apply_context: (), _context: PhantomData }
     }
 
     /// Creates a `contime` instance that retains a bounded amount of history behind the
@@ -66,21 +68,22 @@ where
     pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: i64) -> Self {
         let router = Router::<SL, EL>::with_history_horizon(worker_count, memory_budget_bytes, lower_time_horizon_delta);
 
-        Self { router, _context: PhantomData }
+        Self { router, apply_context: (), _context: PhantomData }
     }
 }
 
 impl<SL, EL, C> Contime<SL, EL, C>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
+    SL: AfterApplyEvents<C> + 'static,
     EL: EventLanes<SL, C> + 'static,
-    C: Clone + Send + 'static,
+    C: ApplyContextEvents<EL> + Clone + Send + 'static,
 {
     /// Creates a `contime` instance with an explicit per-worker apply context.
     pub fn new_with_apply_context(worker_count: usize, memory_budget_bytes: u64, apply_context: C) -> Self {
-        let router = Router::<SL, EL, C>::new_with_apply_context(worker_count, memory_budget_bytes, apply_context);
+        let router = Router::<SL, EL, C>::new_with_apply_context(worker_count, memory_budget_bytes, apply_context.clone());
 
-        Self { router, _context: PhantomData }
+        Self { router, apply_context, _context: PhantomData }
     }
 
     /// Creates a history-bounded `contime` instance with an explicit per-worker apply context.
@@ -94,10 +97,10 @@ where
             worker_count,
             memory_budget_bytes,
             lower_time_horizon_delta,
-            apply_context,
+            apply_context.clone(),
         );
 
-        Self { router, _context: PhantomData }
+        Self { router, apply_context, _context: PhantomData }
     }
 
     // Sync methods (blocking)
@@ -124,41 +127,21 @@ where
         self.router.current_time()
     }
 
+    /// Returns a clone of the apply context attached to this runtime.
+    ///
+    /// Extension layers can use this to inspect their own context-owned queues
+    /// after public `contime` operations complete.
+    pub fn apply_context(&self) -> C {
+        self.apply_context.clone()
+    }
+
     /// Applies an event synchronously and waits for all affected workers to finish.
     pub fn apply_event<E: Event>(&self, event: E) -> Result<(), ContimeError>
     where
         EL: From<E>,
     {
-        Ok(self.router.apply_event(event.into())?)
-    }
-
-    /// Schedules an event synchronously for logical-time application.
-    ///
-    /// The event is released when [`Contime::send_advance_to`] or
-    /// [`Contime::advance_to`] reaches `event.time()`.
-    pub fn schedule_event<E: Event>(&self, event: E) -> Result<(), ContimeError>
-    where
-        EL: From<E>,
-    {
-        Ok(self.router.schedule_event(event.into())?)
-    }
-
-    /// Schedules an event synchronously, replacing any future event with the
-    /// same schedule key for the same target snapshot.
-    pub fn schedule_keyed_event<E: Event>(&self, schedule_key: ScheduleKey, event: E) -> Result<(), ContimeError>
-    where
-        EL: From<E>,
-    {
-        Ok(self.router.schedule_keyed_event(schedule_key, event.into())?)
-    }
-
-    /// Cancels a future scheduled event synchronously.
-    ///
-    /// Cancellation removes future scheduled entries matching `(event_time,
-    /// event_id)`. It does not remove events that have already been released by
-    /// an advance.
-    pub fn cancel_scheduled_event_sync(&self, event_id: u128, event_time: i64) -> Result<(), ContimeError> {
-        Ok(self.router.cancel_scheduled_event_sync(event_id, event_time)?)
+        self.router.apply_event(event.into())?;
+        self.apply_pending_context_events()
     }
 
     /// Applies an authoritative snapshot synchronously and replays any later events on top of it.
@@ -166,13 +149,13 @@ where
     where
         SL: From<S>,
     {
-        Ok(self.router.apply_snapshot(snapshot.into())?)
+        self.router.apply_snapshot(snapshot.into())?;
+        self.apply_pending_context_events()
     }
 
     /// Returns the snapshot state at `time` together with a reconciliation receiver.
     ///
-    /// Events at exactly `time` are not included. Query the first logical instant after the
-    /// event you want included.
+    /// Events at exactly `time` are included.
     pub fn at<S>(&self, time: i64, snapshot_id: u128) -> Result<(S, Receiver<Reconciliation>), ContimeError>
     where
         S: Snapshot + From<SL>,
@@ -185,7 +168,7 @@ where
 
     /// Returns snapshot lanes for many snapshot ids at the same query time.
     ///
-    /// Events at exactly `time` are not included. This batch API does not allocate
+    /// Events at exactly `time` are included. This batch API does not allocate
     /// reconciliation receivers and is intended for hot internal read paths.
     ///
     /// Results are returned in the same order as `snapshot_ids`. Missing histories yield `None`.
@@ -195,24 +178,11 @@ where
 
     /// Returns all known snapshot lanes at `time`, grouped by owning worker.
     ///
-    /// Events at exactly `time` are not included. This read-only query does not allocate
+    /// Events at exactly `time` are included. This read-only query does not allocate
     /// reconciliation receivers. Workers are returned in worker-index order,
     /// and each worker's lanes are sorted by snapshot id.
     pub fn snapshot_lanes_by_worker(&self, time: i64) -> Result<Vec<Vec<SL>>, ContimeError> {
         Ok(self.router.snapshot_lanes_by_worker(time)?)
-    }
-
-    /// Returns retained events for one snapshot id in a half-open time range.
-    ///
-    /// Events satisfy `from_time <= event.time() < to_time` and are returned
-    /// in deterministic `(time, event_id)` order. This is a retained-history
-    /// query only; events pruned by [`Contime::advance`] and the configured
-    /// history horizon are not returned.
-    pub fn events_between(&self, snapshot_id: u128, from_time: i64, to_time: i64) -> Result<Vec<EL>, ContimeError> {
-        match self.router.events_between(snapshot_id, from_time, to_time)? {
-            QueryEventsResult::Found(events) => Ok(events),
-            QueryEventsResult::NotFound => Err(ContimeError::NotFound),
-        }
     }
 
     // Async methods (handle-based)
@@ -223,32 +193,6 @@ where
         EL: From<E>,
     {
         Ok(self.router.send_event(event.into())?)
-    }
-
-    /// Schedules an event and returns a handle for schedule storage.
-    ///
-    /// The returned handle confirms the event was stored in the owning
-    /// worker's future-event queue. It does not wait for logical time to
-    /// advance or for the event to apply.
-    pub fn send_scheduled_event<E: Event>(&self, event: E) -> Result<ScheduleHandle, ContimeError>
-    where
-        EL: From<E>,
-    {
-        Ok(self.router.send_scheduled_event(event.into())?)
-    }
-
-    /// Schedules an event with caller-defined replacement identity and returns
-    /// a handle for schedule storage.
-    pub fn send_keyed_scheduled_event<E: Event>(&self, schedule_key: ScheduleKey, event: E) -> Result<ScheduleHandle, ContimeError>
-    where
-        EL: From<E>,
-    {
-        Ok(self.router.send_keyed_scheduled_event(schedule_key, event.into())?)
-    }
-
-    /// Sends a cancellation request for a future scheduled event.
-    pub fn cancel_scheduled_event(&self, event_id: u128, event_time: i64) -> Result<CancelScheduleHandle, ContimeError> {
-        Ok(self.router.cancel_scheduled_event(event_id, event_time)?)
     }
 
     /// Sends an authoritative snapshot and returns a handle for completion.
@@ -264,14 +208,6 @@ where
         Ok(self.router.query_at(time, snapshot_id)?)
     }
 
-    /// Starts a snapshot-scoped event history query and returns a handle.
-    ///
-    /// The returned events satisfy `from_time <= event.time() < to_time` and
-    /// are sorted by `(time, event_id)`.
-    pub fn query_events_between(&self, snapshot_id: u128, from_time: i64, to_time: i64) -> Result<EventQueryHandle<EL>, ContimeError> {
-        Ok(self.router.query_events_between(snapshot_id, from_time, to_time)?)
-    }
-
     /// Broadcasts an advance request to every worker and returns a completion handle.
     pub fn send_advance(&self, time: i64) -> Result<AdvanceHandle, ContimeError> {
         Ok(self.router.send_advance(time)?)
@@ -285,5 +221,21 @@ where
     /// Subscribes to successful global time advancement.
     pub fn subscribe_time_advances(&self) -> Result<TimeAdvanceSubscription, ContimeError> {
         Ok(self.router.subscribe_time_advances()?)
+    }
+
+    fn apply_pending_context_events(&self) -> Result<(), ContimeError> {
+        loop {
+            let events = self.apply_context.drain_after_apply_events();
+            let replacements = self.apply_context.drain_after_apply_replacements();
+            if events.is_empty() && replacements.is_empty() {
+                return Ok(());
+            }
+            for event in events {
+                self.router.apply_event(event)?;
+            }
+            for replacement in replacements {
+                self.router.replace_context_events(replacement.source_key, replacement.from_time, replacement.events)?;
+            }
+        }
     }
 }

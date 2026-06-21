@@ -452,7 +452,6 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
 
             impl<C> ::contime::AfterApplyEvents<C> for SnapshotLanes
             where
-                C: 'static,
                 #( #after_apply_bounds, )*
             {
                 fn after_apply_events(&self, batch: ::contime::ApplyBatch<'_, Self::Event>, context: &mut C) {
@@ -464,9 +463,8 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
 
             impl<C> ::contime::EventLanes<SnapshotLanes, C> for EventLanes
             where
-                C: 'static,
                 EventLanes: ::contime::SnapshotEvent<SnapshotLanes>,
-                SnapshotLanes: ::contime::ApplyEvents + ::contime::AfterApplyEvents<C>,
+                SnapshotLanes: ::contime::ApplyEvents,
             {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
                     match self {

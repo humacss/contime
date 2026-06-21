@@ -30,6 +30,8 @@ struct ApplyTraceSender {
     tx: flume::Sender<(u128, i64, i32, i32)>,
 }
 
+impl contime::ApplyContextEvents<EventLanes> for ApplyTraceSender {}
+
 impl ContextValueAt {
     fn lane_id(entity_id: u128) -> u128 {
         entity_id
@@ -226,27 +228,6 @@ fn out_of_order_apply_runs_after_apply_for_replayed_events() {
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
     assert_eq!(rx.try_recv().unwrap(), (3, 20, 20, 20));
     assert_eq!(rx.try_recv().unwrap(), (3, 30, 30, 30));
-    assert!(rx.try_recv().is_err());
-}
-
-#[test]
-fn older_event_after_applied_schedule_runs_after_apply_for_future_bucket() {
-    let (tx, rx) = flume::bounded(8);
-    let contime =
-        contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
-
-    contime.apply_event(OnContextValueChanged { event_id: 1, time: 1, entity_id: 3, value: 1 }).unwrap();
-    contime.schedule_event(OnContextValueChanged { event_id: 1001, time: 1001, entity_id: 3, value: 1001 }).unwrap();
-    contime.advance_to(1100).expect("scheduled event should apply");
-
-    assert_eq!(rx.try_recv().unwrap(), (3, 1, 1, 1));
-    assert_eq!(rx.try_recv().unwrap(), (3, 1001, 1001, 1001));
-    assert!(rx.try_recv().is_err());
-
-    contime.apply_event(OnContextValueChanged { event_id: 876, time: 876, entity_id: 3, value: 876 }).unwrap();
-
-    assert_eq!(rx.try_recv().unwrap(), (3, 876, 876, 876));
-    assert_eq!(rx.try_recv().unwrap(), (3, 1001, 1001, 1001));
     assert!(rx.try_recv().is_err());
 }
 

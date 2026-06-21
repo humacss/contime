@@ -97,6 +97,33 @@ pub trait AfterApplyEvents<C = ()>: Snapshot {
     fn after_apply_events(&self, _batch: ApplyBatch<'_, Self::Event>, _context: &mut C) {}
 }
 
+/// Neutral extension seam for events produced while applying an event bucket.
+///
+/// Public `contime` does not interpret why these events were produced. It only
+/// drains them after the current apply completes and routes them through normal
+/// event application.
+pub trait ApplyContextEvents<E> {
+    fn emit_after_apply_event(&self, _event: E) {}
+
+    fn replace_after_apply_events(&self, _source_key: u128, _from_time: i64, _events: Vec<E>) {}
+
+    fn drain_after_apply_events(&self) -> Vec<E> {
+        Vec::new()
+    }
+
+    fn drain_after_apply_replacements(&self) -> Vec<ApplyContextEventReplacement<E>> {
+        Vec::new()
+    }
+}
+
+impl<E> ApplyContextEvents<E> for () {}
+
+pub struct ApplyContextEventReplacement<E> {
+    pub source_key: u128,
+    pub from_time: i64,
+    pub events: Vec<E>,
+}
+
 /// Marker trait for the generated or user-defined event lane enum.
 ///
 /// `snapshots()` returns the initial snapshots that should exist when this event creates
@@ -107,9 +134,9 @@ pub struct RoutedSnapshot<SL> {
     pub initial_snapshot: SL,
 }
 
-pub trait EventLanes<SL: SnapshotLanes, C = ()>: Event + Clone
+pub trait EventLanes<SL: SnapshotLanes, C = ()>: Event + Clone + PartialEq + Eq
 where
-    SL: ApplyEvents + AfterApplyEvents<C>,
+    SL: ApplyEvents,
 {
     fn snapshots(&self) -> Vec<SL>;
 
