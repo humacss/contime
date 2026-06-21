@@ -1,0 +1,18 @@
+#[test]
+fn public_contime_api_excludes_reactor_owned_replay_and_scheduler_symbols() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")).unwrap();
+
+    for forbidden in [
+        "pub type ScheduleKey",
+        "pub use replay",
+        "ReplayApplyContext",
+        "ReplayEventBatch",
+        "ReplayEventEmitter",
+        "RoutedReplayEventEmitter",
+        "AfterReplayEvents",
+        "CancelScheduleHandle",
+        "ScheduleHandle",
+    ] {
+        assert!(!source.contains(forbidden), "public contime lib.rs should not expose reactor-owned symbol `{forbidden}`");
+    }
+}

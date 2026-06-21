@@ -6,11 +6,8 @@ use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 use flume::bounded as flume_bounded;
 
-use crate::handle::{
-    AdvanceHandle, ApplyHandle, CancelScheduleHandle, EventQueryHandle, QueryEventsResult, QueryHandle, QueryResult, ScheduleHandle,
-    TimeAdvance, TimeAdvanceSubscription,
-};
-use crate::{AfterApplyEvents, ApplyEvents, EventLanes, ScheduleKey, SnapshotLanes, Worker, WorkerInbound};
+use crate::handle::{AdvanceHandle, ApplyHandle, QueryHandle, QueryResult, TimeAdvance, TimeAdvanceSubscription};
+use crate::{AfterApplyEvents, ApplyEvents, EventLanes, SnapshotLanes, Worker, WorkerInbound};
 
 const SUBSCRIPTION_CHANNEL_CAPACITY: usize = 1_000_000;
 
@@ -20,7 +17,10 @@ pub enum RouterError {
     Error,
 }
 
-pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
+pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = ()>
+where
+    SL: AfterApplyEvents<C>,
+{
     hasher: RandomState,
     workers: Vec<Worker<SL, EL, C>>,
     memory_budget: Arc<AtomicU64>,
@@ -32,7 +32,8 @@ pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents
 
 impl<SL, EL> Router<SL, EL, ()>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<()> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
+    SL: AfterApplyEvents<()> + 'static,
     EL: EventLanes<SL> + 'static,
 {
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
@@ -46,7 +47,8 @@ where
 
 impl<SL, EL, C> Router<SL, EL, C>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static,
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
+    SL: AfterApplyEvents<C> + 'static,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {
@@ -80,6 +82,7 @@ where
                 rx,
                 worker_index,
                 worker_txs.clone(),
+                hasher.clone(),
                 Arc::clone(&memory_usage),
                 lower_time_horizon_delta,
                 apply_context.clone(),
@@ -123,62 +126,40 @@ where
         self.send_event(event_lane)?.wait().map_err(|_| RouterError::Error)
     }
 
-    pub fn send_scheduled_event(&self, event_lane: EL) -> Result<ScheduleHandle, RouterError> {
-        self.send_keyed_scheduled_event(default_schedule_key(&event_lane), event_lane)
-    }
-
-    pub fn send_keyed_scheduled_event(&self, schedule_key: ScheduleKey, event_lane: EL) -> Result<ScheduleHandle, RouterError> {
-        let usage = self.memory_usage.load(Ordering::Relaxed);
-        let budget = self.memory_budget.load(Ordering::Relaxed);
-        if usage + event_lane.conservative_size() >= budget {
-            return Err(RouterError::MemoryFull);
+    pub fn replace_context_events(&self, source_key: u128, from_time: i64, events: Vec<EL>) -> Result<(), RouterError> {
+        let mut events_by_worker = Vec::with_capacity(self.workers.len());
+        events_by_worker.resize_with(self.workers.len(), Vec::new);
+        for event in events {
+            let mut target_workers = Vec::new();
+            for routed in event.routed_snapshots() {
+                let worker_index = self.worker_index(routed.snapshot_id);
+                if !target_workers.contains(&worker_index) {
+                    target_workers.push(worker_index);
+                }
+            }
+            for worker_index in target_workers {
+                events_by_worker[worker_index].push(event.clone());
+            }
         }
 
-        let mut rxs = Vec::new();
-        for routed in event_lane.routed_snapshots() {
-            let snapshot_id = routed.snapshot_id;
-            let index = self.worker_index(snapshot_id);
+        let mut rxs = Vec::with_capacity(self.workers.len());
+        for (worker_index, worker) in self.workers.iter().enumerate() {
             let (tx, rx) = bounded(1);
-            self.workers[index]
+            worker
                 .worker_inbound_tx
-                .send(WorkerInbound::ScheduleEvent {
-                    snapshot_id,
-                    schedule_key,
-                    event: event_lane.clone(),
-                    initial_snapshot: routed.initial_snapshot,
+                .send(WorkerInbound::ReplaceContextEvents {
+                    source_key,
+                    from_time,
+                    events: events_by_worker[worker_index].clone(),
                     reply: tx,
                 })
                 .map_err(|_| RouterError::Error)?;
             rxs.push(rx);
         }
-
-        Ok(ScheduleHandle::new(rxs))
-    }
-
-    pub fn schedule_event(&self, event_lane: EL) -> Result<(), RouterError> {
-        self.send_scheduled_event(event_lane)?.wait().map_err(|_| RouterError::Error)
-    }
-
-    pub fn schedule_keyed_event(&self, schedule_key: ScheduleKey, event_lane: EL) -> Result<(), RouterError> {
-        self.send_keyed_scheduled_event(schedule_key, event_lane)?.wait().map_err(|_| RouterError::Error)
-    }
-
-    pub fn cancel_scheduled_event(&self, event_id: u128, event_time: i64) -> Result<CancelScheduleHandle, RouterError> {
-        let mut rxs = Vec::with_capacity(self.workers.len());
-        for worker in &self.workers {
-            let (tx, rx) = bounded(1);
-            worker
-                .worker_inbound_tx
-                .send(WorkerInbound::CancelScheduledEvent { event_id, event_time, reply: tx })
-                .map_err(|_| RouterError::Error)?;
-            rxs.push(rx);
+        for rx in rxs {
+            rx.recv().map_err(|_| RouterError::Error)?;
         }
-
-        Ok(CancelScheduleHandle::new(rxs))
-    }
-
-    pub fn cancel_scheduled_event_sync(&self, event_id: u128, event_time: i64) -> Result<(), RouterError> {
-        self.cancel_scheduled_event(event_id, event_time)?.wait().map_err(|_| RouterError::Error)
+        Ok(())
     }
 
     pub fn send_snapshot(&self, snapshot_lane: SL) -> Result<ApplyHandle, RouterError> {
@@ -273,21 +254,6 @@ where
         Ok(lanes_by_worker)
     }
 
-    pub fn query_events_between(&self, snapshot_id: u128, from_time: i64, to_time: i64) -> Result<EventQueryHandle<EL>, RouterError> {
-        let index = self.worker_index(snapshot_id);
-        let (tx, rx) = bounded(1);
-        self.workers[index]
-            .worker_inbound_tx
-            .send(WorkerInbound::EventsBetween { snapshot_id, from_time, to_time, reply: tx })
-            .map_err(|_| RouterError::Error)?;
-
-        Ok(EventQueryHandle::new(rx))
-    }
-
-    pub fn events_between(&self, snapshot_id: u128, from_time: i64, to_time: i64) -> Result<QueryEventsResult<EL>, RouterError> {
-        self.query_events_between(snapshot_id, from_time, to_time)?.wait().map_err(|_| RouterError::Error)
-    }
-
     pub fn send_advance(&self, time: i64) -> Result<AdvanceHandle, RouterError> {
         let subscribers = Arc::clone(&self.time_advance_subscribers);
         let advanced_to = self.current_time.fetch_add(time, Ordering::Relaxed).saturating_add(time);
@@ -338,11 +304,6 @@ where
 
         hash as usize % self.workers.len()
     }
-}
-
-fn default_schedule_key<EL: crate::Event>(event: &EL) -> ScheduleKey {
-    let time = event.time() as u128;
-    event.id().wrapping_mul(0x9E37_79B9_7F4A_7C15_6A09_E667_F3BC_C909_u128) ^ time.rotate_left(64)
 }
 
 fn notify_time_advances(subscribers: &Arc<Mutex<Vec<flume::Sender<TimeAdvance>>>>, advance: TimeAdvance) {

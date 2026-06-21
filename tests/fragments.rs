@@ -830,7 +830,8 @@ contime::lanes! {
 
 fn snapshot_at<T, SL, EL>(contime: &contime::Contime<SL, EL>, time: i64, snapshot_id: u128) -> T
 where
-    SL: contime::SnapshotLanes<Event = EL> + contime::ApplyEvents + contime::AfterApplyEvents + 'static,
+    SL: contime::SnapshotLanes<Event = EL> + contime::ApplyEvents + 'static,
+    SL: contime::AfterApplyEvents<()> + 'static,
     EL: contime::EventLanes<SL> + 'static,
     T: TryFrom<SL>,
 {

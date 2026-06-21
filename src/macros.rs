@@ -7,24 +7,13 @@
 /// contime::contime! { MySnapshot { MyEvent } }
 /// // or with a named module:
 /// contime::contime! { mod my_mod; MySnapshot { MyEvent } }
+/// // with explicit context:
+/// contime::contime! { mod my_mod; context MyStreamContext; MySnapshot { MyEvent } }
 /// ```
 ///
 /// # Multi-snapshot form
 ///
-/// List snapshot types, then events with explicit variant names, types, and
-/// target snapshots. Events shared across snapshots are listed once with all
-/// targets.
-///
-/// ```ignore
-/// contime::contime! {
-///     mod state;
-///     snapshots { AccountAt, ActorAt, CharacterAt, ConnectionAt },
-///     OnAccountCreated(Event<OnAccountCreated>) => [AccountAt],
-///     OnCharacterCreated(Event<OnCharacterCreated>) => [AccountAt, CharacterAt],
-///     OnNewActorDeltas(Event<OnNewActorDeltas>) => [ActorAt],
-///     OnConnectionServerTime(Event<OnConnectionServerTime>) => [ConnectionAt],
-/// }
-/// ```
+/// (unchanged)
 #[macro_export]
 macro_rules! contime {
     // ── Single-snapshot shorthand (no module name) ──────────────────────
@@ -37,21 +26,18 @@ macro_rules! contime {
         }
     };
 
-    // ── Single-snapshot with module name ────────────────────────────────
-    (mod $modname:ident; $snapshot:ident { $event:ident $(,)? }) => {
+    // ── Single-snapshot with module name + OPTIONAL context ─────────────
+    (mod $modname:ident; context $context:ty; $snapshot:ident { $event:ident $(,)? }) => {
         mod $modname {
             use super::*;
-
             #[derive(Clone, Debug, PartialEq, Eq)]
             pub enum SnapshotLanes {
                 $snapshot($snapshot),
             }
-
             impl $crate::SnapshotLanes for SnapshotLanes {}
 
             impl $crate::Snapshot for SnapshotLanes {
                 type Event = EventLanes;
-
                 fn id(&self) -> u128 {
                     match self {
                         Self::$snapshot(s) => <$snapshot as $crate::Snapshot>::id(s),
@@ -159,9 +145,9 @@ macro_rules! contime {
                 }
             }
 
+            // Generic over C so it works with any context (including StreamContext)
             impl<C> $crate::AfterApplyEvents<C> for SnapshotLanes
             where
-                C: 'static,
                 $snapshot: $crate::AfterApplyEvents<C>,
                 <$snapshot as $crate::Snapshot>::Event: From<$event>,
             {
@@ -191,9 +177,8 @@ macro_rules! contime {
 
             impl<C> $crate::EventLanes<SnapshotLanes, C> for EventLanes
             where
-                C: 'static,
                 EventLanes: $crate::SnapshotEvent<SnapshotLanes>,
-                SnapshotLanes: $crate::ApplyEvents + $crate::AfterApplyEvents<C>,
+                SnapshotLanes: $crate::ApplyEvents,
             {
                 fn snapshots(&self) -> Vec<SnapshotLanes> {
                     match self {
@@ -202,7 +187,6 @@ macro_rules! contime {
                         }
                     }
                 }
-
                 fn routed_snapshots(&self) -> Vec<$crate::RoutedSnapshot<SnapshotLanes>> {
                     match self {
                         Self::$event(event) => {
@@ -221,23 +205,21 @@ macro_rules! contime {
                 }
             }
 
-            pub type Contime = $crate::Contime<SnapshotLanes, EventLanes>;
+            // === KEY CHANGE: Contime now includes the context type ===
+            pub type Contime = $crate::Contime<SnapshotLanes, EventLanes, $context>;
         }
     };
 
-    // ── Multi-snapshot form ─────────────────────────────────────────────
-    //
-    // Syntax:
-    //   contime! {
-    //       mod my_module;
-    //       snapshots { SnapA, SnapB },
-    //       VariantX($TypeX) => [SnapA],
-    //       VariantY($TypeY) => [SnapA, SnapB],
-    //   }
-    //
-    // $variant is the enum variant name used in both EventLanes and the
-    // per-snapshot event enums. $type is the concrete type stored in the
-    // variant. These are explicit — no magic name matching.
+    // ── Single-snapshot with module name (NO context → default to ()) ───
+    (mod $modname:ident; $snapshot:ident { $event:ident $(,)? }) => {
+        $crate::contime! {
+            mod $modname;
+            context ();
+            $snapshot { $event }
+        }
+    };
+
+    // ── Multi-snapshot form (unchanged for now) ─────────────────────────
     (
         mod $modname:ident;
         snapshots { $( $snapshot:ident ),+ $(,)? },

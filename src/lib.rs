@@ -11,12 +11,10 @@
 //!    [`fragment!`] and [`lanes!`], or define compatible lane types manually.
 //! 3. Construct a [`Contime`] with a worker count and memory budget.
 //! 4. Apply events or authoritative snapshots.
-//! 5. Query state with [`Contime::at`] or [`Contime::query_at`], query retained
-//!    snapshot-scoped events with [`Contime::events_between`], and listen for
+//! 5. Query state with [`Contime::at`] or [`Contime::query_at`] and listen for
 //!    [`Reconciliation`] notifications when late data changes previously queried history.
 //!
-//! Point queries include all events at the queried millisecond. Event history range queries
-//! use half-open ranges: `from_time <= event.time() < to_time`.
+//! Point queries include all events at the queried millisecond.
 //!
 //! # Where To Start
 //!
@@ -44,7 +42,6 @@
 //! assert_eq!(reconciliation.to_time, 5);
 //! ```
 mod api;
-mod apply;
 mod handle;
 mod history;
 mod key;
@@ -59,19 +56,15 @@ use key::ContimeKey;
 use router::{Router, RouterError};
 use worker::{Worker, WorkerInbound};
 
-pub type ScheduleKey = u128;
-
 pub use api::{Contime, ContimeError};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::fragment;
-pub use handle::{
-    AdvanceHandle, ApplyHandle, CancelScheduleHandle, EventQueryHandle, HandleError, QueryEventsResult, QueryHandle, QueryResult,
-    ScheduleHandle, TimeAdvance, TimeAdvanceSubscription,
-};
+pub use handle::{AdvanceHandle, ApplyHandle, HandleError, QueryHandle, QueryResult, TimeAdvance, TimeAdvanceSubscription};
 pub use history::{ApplyOutcome, Reconciliation, SnapshotHistory};
 pub use traits::{
-    AfterApplyEvents, ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes,
+    AfterApplyEvents, ApplyBatch, ApplyContextEventReplacement, ApplyContextEvents, ApplyEvents, Event, EventLanes, RoutedSnapshot,
+    SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes,
 };
 
 mod test;

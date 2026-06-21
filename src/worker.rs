@@ -1,63 +1,30 @@
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, VecDeque};
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-use ahash::AHashMap;
+use ahash::{AHashMap, RandomState};
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::handle::{QueryEventsResult, QueryResult};
-use crate::{AfterApplyEvents, ApplyEvents, EventLanes, ScheduleKey, SnapshotHistory, SnapshotLanes};
+use crate::handle::QueryResult;
+use crate::{AfterApplyEvents, ApplyEvents, EventLanes, SnapshotHistory, SnapshotLanes};
 
 pub type SnapshotId = u128;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct ScheduledEventKey {
-    time: i64,
-    event_id: u128,
-    schedule_key: ScheduleKey,
-    snapshot_id: u128,
-}
-
-struct ScheduledEvent<SL, EL> {
-    snapshot_id: u128,
-    schedule_key: ScheduleKey,
-    event: EL,
-    initial_snapshot: SL,
-}
-
-impl<SL: SnapshotLanes, EL: crate::Event> ScheduledEvent<SL, EL> {
-    fn key(&self) -> ScheduledEventKey {
-        ScheduledEventKey {
-            time: self.event.time(),
-            event_id: self.event.id(),
-            schedule_key: self.schedule_key,
-            snapshot_id: self.snapshot_id,
-        }
-    }
-
-    fn conservative_size(&self) -> u64 {
-        self.event.conservative_size().saturating_add(self.initial_snapshot.conservative_size())
-    }
-}
-
 pub enum WorkerInbound<SL: SnapshotLanes, EL> {
     Event { snapshot_id: u128, event: EL, initial_snapshot: SL, reply: Sender<()> },
-    ScheduleEvent { snapshot_id: u128, schedule_key: ScheduleKey, event: EL, initial_snapshot: SL, reply: Sender<()> },
-    CancelScheduledEvent { event_id: u128, event_time: i64, reply: Sender<()> },
+    ReplaceContextEvents { source_key: u128, from_time: i64, events: Vec<EL>, reply: Sender<()> },
     Snapshot { snapshot: SL, reply: Sender<()> },
     SnapshotAt { snapshot_id: u128, time: i64, reply: Sender<QueryResult<SL>> },
     SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: i64, reply: Sender<Vec<(usize, Option<SL>)>> },
     SnapshotLanesAt { time: i64, reply: Sender<Vec<SL>> },
-    EventsBetween { snapshot_id: u128, from_time: i64, to_time: i64, reply: Sender<QueryEventsResult<EL>> },
     AdvanceTime { time: i64, reply: Sender<()> },
     Shutdown,
 }
 
-pub struct Worker<SL: SnapshotLanes + ApplyEvents + AfterApplyEvents<C>, EL: EventLanes<SL, C>, C = ()> {
+pub struct Worker<SL: SnapshotLanes + ApplyEvents, EL: EventLanes<SL, C>, C = ()> {
     pub worker_inbound_tx: Sender<WorkerInbound<SL, EL>>,
 
     threads: Vec<JoinHandle<()>>,
@@ -65,7 +32,7 @@ pub struct Worker<SL: SnapshotLanes + ApplyEvents + AfterApplyEvents<C>, EL: Eve
     _context: PhantomData<C>,
 }
 
-impl<SL: SnapshotLanes + ApplyEvents + AfterApplyEvents<C>, EL: EventLanes<SL, C>, C> Drop for Worker<SL, EL, C> {
+impl<SL: SnapshotLanes + ApplyEvents, EL: EventLanes<SL, C>, C> Drop for Worker<SL, EL, C> {
     fn drop(&mut self) {
         self.is_running.store(false, Ordering::Relaxed);
 
@@ -91,6 +58,7 @@ where
         worker_inbound_rx: Receiver<WorkerInbound<SL, EL>>,
         _worker_index: usize,
         _worker_txs: Arc<Vec<Sender<WorkerInbound<SL, EL>>>>,
+        _hasher: RandomState,
         memory_usage: Arc<AtomicU64>,
         lower_time_horizon_delta: i64,
         apply_context: C,
@@ -121,49 +89,24 @@ fn fetch_saturating_add_signed(atomic: &Arc<AtomicU64>, delta: i64, order: Order
     }
 }
 
-fn handle_worker<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static, EL: EventLanes<SL, C>, C>(
+fn handle_worker<SL, EL, C>(
     is_running: Arc<AtomicBool>,
     worker_inbound_rx: Receiver<WorkerInbound<SL, EL>>,
     memory_usage: Arc<AtomicU64>,
     lower_time_horizon_delta: i64,
     mut apply_context: C,
-) {
+) where
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static,
+    EL: EventLanes<SL, C>,
+{
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
-    let mut scheduled_events = BTreeMap::<ScheduledEventKey, ScheduledEvent<SL, EL>>::new();
-    let mut scheduled_event_keys_by_identity = AHashMap::<(ScheduleKey, SnapshotId), ScheduledEventKey>::new();
-    let mut ready_events = VecDeque::<ScheduledEvent<SL, EL>>::new();
-    let mut current_time = 0_i64;
 
     while is_running.load(Ordering::Relaxed) {
-        if let Some(event) = ready_events.pop_front() {
-            apply_event_to_history(
-                &mut history_by_id,
-                &memory_usage,
-                lower_time_horizon_delta,
-                &mut apply_context,
-                event.snapshot_id,
-                event.event,
-                event.initial_snapshot,
-            );
-            continue;
-        }
-
         match worker_inbound_rx.recv() {
             Ok(WorkerInbound::AdvanceTime { time: new_time, reply }) => {
-                current_time = current_time.saturating_add(new_time);
                 for history in history_by_id.values_mut() {
                     fetch_saturating_add_signed(&memory_usage, history.advance(new_time), Ordering::Relaxed);
                 }
-                let due_to = ScheduledEventKey { time: current_time, event_id: u128::MAX, schedule_key: u128::MAX, snapshot_id: u128::MAX };
-                let due_keys = scheduled_events.range(..=due_to).map(|(key, _)| key.clone()).collect::<Vec<_>>();
-                for key in due_keys {
-                    if let Some(event) = scheduled_events.remove(&key) {
-                        scheduled_event_keys_by_identity.remove(&(event.schedule_key, event.snapshot_id));
-                        fetch_saturating_add_signed(&memory_usage, -(event.conservative_size() as i64), Ordering::Relaxed);
-                        ready_events.push_back(event);
-                    }
-                }
-                drain_ready_events(&mut ready_events, &mut history_by_id, &memory_usage, lower_time_horizon_delta, &mut apply_context);
                 let _ = reply.send(());
             }
             Ok(WorkerInbound::Event { snapshot_id, event, initial_snapshot, reply }) => {
@@ -176,36 +119,18 @@ fn handle_worker<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<
                     event,
                     initial_snapshot,
                 );
-                drain_ready_events(&mut ready_events, &mut history_by_id, &memory_usage, lower_time_horizon_delta, &mut apply_context);
                 let _ = reply.send(());
             }
-            Ok(WorkerInbound::ScheduleEvent { snapshot_id, schedule_key, event, initial_snapshot, reply }) => {
-                let scheduled = ScheduledEvent { snapshot_id, schedule_key, event, initial_snapshot };
-                if let Some(previous_key) = scheduled_event_keys_by_identity.remove(&(schedule_key, snapshot_id)) {
-                    if let Some(previous) = scheduled_events.remove(&previous_key) {
-                        fetch_saturating_add_signed(&memory_usage, -(previous.conservative_size() as i64), Ordering::Relaxed);
-                    }
-                }
-                let key = scheduled.key();
-                if key.time <= current_time {
-                    ready_events.push_back(scheduled);
-                } else {
-                    fetch_saturating_add_signed(&memory_usage, scheduled.conservative_size() as i64, Ordering::Relaxed);
-                    scheduled_event_keys_by_identity.insert((schedule_key, snapshot_id), key.clone());
-                    scheduled_events.insert(key, scheduled);
-                }
-                let _ = reply.send(());
-            }
-            Ok(WorkerInbound::CancelScheduledEvent { event_id, event_time, reply }) => {
-                let from = ScheduledEventKey { time: event_time, event_id, schedule_key: u128::MIN, snapshot_id: u128::MIN };
-                let to = ScheduledEventKey { time: event_time, event_id, schedule_key: u128::MAX, snapshot_id: u128::MAX };
-                let keys = scheduled_events.range(from..=to).map(|(key, _)| key.clone()).collect::<Vec<_>>();
-                for key in keys {
-                    if let Some(event) = scheduled_events.remove(&key) {
-                        scheduled_event_keys_by_identity.remove(&(event.schedule_key, event.snapshot_id));
-                        fetch_saturating_add_signed(&memory_usage, -(event.conservative_size() as i64), Ordering::Relaxed);
-                    }
-                }
+            Ok(WorkerInbound::ReplaceContextEvents { source_key, from_time, events, reply }) => {
+                replace_context_events_in_worker(
+                    &mut history_by_id,
+                    &memory_usage,
+                    lower_time_horizon_delta,
+                    &mut apply_context,
+                    source_key,
+                    from_time,
+                    events,
+                );
                 let _ = reply.send(());
             }
             Ok(WorkerInbound::Snapshot { snapshot, reply }) => {
@@ -220,7 +145,6 @@ fn handle_worker<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<
                 };
 
                 fetch_saturating_add_signed(&memory_usage, outcome.bytes_delta, Ordering::Relaxed);
-                drain_ready_events(&mut ready_events, &mut history_by_id, &memory_usage, lower_time_horizon_delta, &mut apply_context);
                 let _ = reply.send(());
             }
             Ok(WorkerInbound::SnapshotAt { snapshot_id, time, reply }) => {
@@ -251,19 +175,56 @@ fn handle_worker<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<
                 }
                 let _ = reply.send(lanes);
             }
-            Ok(WorkerInbound::EventsBetween { snapshot_id, from_time, to_time, reply }) => {
-                let result = history_by_id
-                    .get(&snapshot_id)
-                    .map(|history| QueryEventsResult::Found(history.events_between(from_time, to_time)))
-                    .unwrap_or(QueryEventsResult::NotFound);
-                let _ = reply.send(result);
-            }
             Ok(WorkerInbound::Shutdown) | Err(_) => return,
         }
     }
 }
 
-fn apply_event_to_history<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static, EL: EventLanes<SL, C>, C>(
+fn replace_context_events_in_worker<SL, EL, C>(
+    history_by_id: &mut AHashMap<SnapshotId, SnapshotHistory<SL>>,
+    memory_usage: &Arc<AtomicU64>,
+    lower_time_horizon_delta: i64,
+    apply_context: &mut C,
+    source_key: u128,
+    from_time: i64,
+    events: Vec<EL>,
+) where
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static,
+    EL: EventLanes<SL, C>,
+{
+    let mut events_by_snapshot = AHashMap::<SnapshotId, (SL, Vec<EL>)>::new();
+    for event in events {
+        for routed in event.routed_snapshots() {
+            events_by_snapshot.entry(routed.snapshot_id).or_insert_with(|| (routed.initial_snapshot, Vec::new())).1.push(event.clone());
+        }
+    }
+
+    let existing_snapshot_ids = history_by_id.keys().copied().collect::<Vec<_>>();
+    for snapshot_id in existing_snapshot_ids {
+        let events = events_by_snapshot.remove(&snapshot_id).map(|(_, events)| events).unwrap_or_default();
+        let Some(history) = history_by_id.get_mut(&snapshot_id) else {
+            continue;
+        };
+        let outcome = history.replace_context_events(source_key, from_time, events, apply_context);
+        fetch_saturating_add_signed(memory_usage, outcome.bytes_delta, Ordering::Relaxed);
+    }
+
+    for (snapshot_id, (initial_snapshot, events)) in events_by_snapshot {
+        let history = match history_by_id.entry(snapshot_id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let (history, base_delta) =
+                    SnapshotHistory::new_with_snapshot_id(snapshot_id, initial_snapshot, 0, lower_time_horizon_delta);
+                fetch_saturating_add_signed(memory_usage, base_delta, Ordering::Relaxed);
+                entry.insert(history)
+            }
+        };
+        let outcome = history.replace_context_events(source_key, from_time, events, apply_context);
+        fetch_saturating_add_signed(memory_usage, outcome.bytes_delta, Ordering::Relaxed);
+    }
+}
+
+fn apply_event_to_history<SL, EL, C>(
     history_by_id: &mut AHashMap<SnapshotId, SnapshotHistory<SL>>,
     memory_usage: &Arc<AtomicU64>,
     lower_time_horizon_delta: i64,
@@ -271,7 +232,10 @@ fn apply_event_to_history<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApp
     snapshot_id: u128,
     event: EL,
     initial_snapshot: SL,
-) {
+) where
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static,
+    EL: EventLanes<SL, C>,
+{
     let history = match history_by_id.entry(snapshot_id) {
         Entry::Occupied(entry) => entry.into_mut(),
         Entry::Vacant(entry) => {
@@ -282,24 +246,4 @@ fn apply_event_to_history<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApp
     };
     let outcome = history.apply_event_with_context(event, apply_context);
     fetch_saturating_add_signed(memory_usage, outcome.bytes_delta, Ordering::Relaxed);
-}
-
-fn drain_ready_events<SL: SnapshotLanes<Event = EL> + ApplyEvents + AfterApplyEvents<C> + 'static, EL: EventLanes<SL, C>, C>(
-    ready_events: &mut VecDeque<ScheduledEvent<SL, EL>>,
-    history_by_id: &mut AHashMap<SnapshotId, SnapshotHistory<SL>>,
-    memory_usage: &Arc<AtomicU64>,
-    lower_time_horizon_delta: i64,
-    apply_context: &mut C,
-) {
-    while let Some(event) = ready_events.pop_front() {
-        apply_event_to_history(
-            history_by_id,
-            memory_usage,
-            lower_time_horizon_delta,
-            apply_context,
-            event.snapshot_id,
-            event.event,
-            event.initial_snapshot,
-        );
-    }
 }
