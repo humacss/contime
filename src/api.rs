@@ -31,6 +31,7 @@ impl From<RouterError> for ContimeError {
 pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = ()>
 where
     C: ApplyWrapper<SL>,
+    C::Error: Into<ApplyError>,
 {
     router: Router<SL, EL, C>,
     apply_context: C,
@@ -41,6 +42,7 @@ impl<SL, EL> Contime<SL, EL, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     (): ApplyWrapper<SL>,
+    <() as ApplyWrapper<SL>>::Error: Into<ApplyError>,
     EL: EventLanes<SL> + 'static,
 {
     /// Creates a `contime` instance with `worker_count` workers and a shared memory budget.
@@ -68,6 +70,7 @@ impl<SL, EL, C> Contime<SL, EL, C>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + 'static,
+    C::Error: Into<ApplyError>,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {

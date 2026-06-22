@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::Bound;
 
-use crate::{ApplyBatch, ApplyError, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, Event, Snapshot};
+use std::convert::Infallible;
+
+use crate::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, Snapshot};
 
 use super::history::LocalSnapshotHistory;
 
@@ -83,94 +85,148 @@ where
     bytes_delta
 }
 
-pub(super) fn update_checkpoints_after_event_batch<S, C>(
+pub(super) struct CheckpointForApply<S>
+where
+    S: Snapshot,
+{
+    snapshot: S,
+    start: Bound<ContimeKey>,
+    end: Bound<ContimeKey>,
+    stale_start: Option<usize>,
+    preserve_previous_tip: bool,
+    first_changed_time: i64,
+    exact_event_key: Option<ContimeKey>,
+    bytes_delta: i64,
+}
+
+pub(super) struct AppliedCheckpoint<S>
+where
+    S: Snapshot,
+{
+    stale_start: Option<usize>,
+    bytes_delta: i64,
+    final_key: Option<ContimeKey>,
+    final_snapshot: S,
+    materialized_checkpoints: Vec<(ContimeKey, S)>,
+}
+
+pub(super) fn get_checkpoint_for_apply<S>(
     history: &mut LocalSnapshotHistory<S>,
     earliest_changed_time: i64,
-    latest_changed_time: i64,
     latest_event_key_before_apply: Option<ContimeKey>,
     single_changed_event_key: Option<ContimeKey>,
-    context: &mut C,
-) -> Result<i64, ApplyError>
+) -> CheckpointForApply<S>
 where
     S: Snapshot + ApplyEvents + 'static,
-    C: ApplyWrapper<S>,
 {
-    let (extra_events, earliest_apply_time) =
-        collect_wrapper_batches_for_changed_event_times(history, earliest_changed_time, latest_changed_time, context)?;
-    let preserve_previous_tip = latest_event_key_before_apply.as_ref().is_none_or(|latest| earliest_apply_time > latest.time);
+    let preserve_previous_tip = latest_event_key_before_apply.as_ref().is_none_or(|latest| earliest_changed_time > latest.time);
 
     if preserve_previous_tip {
         if let Some(single_changed_event_key) = single_changed_event_key {
-            return apply_latest_event_without_recompute(
-                history,
-                latest_event_key_before_apply,
-                single_changed_event_key,
-                earliest_apply_time,
-                &extra_events,
-                context,
-            );
+            return get_latest_event_checkpoint_for_apply(history, latest_event_key_before_apply, single_changed_event_key);
         }
     }
 
-    recompute_checkpoints_from(history, earliest_apply_time, preserve_previous_tip, &extra_events, context)
+    get_recomputed_checkpoint_for_apply(history, earliest_changed_time, preserve_previous_tip)
 }
 
-fn collect_wrapper_batches_for_changed_event_times<S, C>(
+pub(super) fn apply_events_to_checkpoint<S, C>(
     history: &LocalSnapshotHistory<S>,
-    earliest_changed_time: i64,
-    latest_changed_time: i64,
+    mut checkpoint: CheckpointForApply<S>,
     context: &mut C,
-) -> Result<(BTreeMap<ContimeKey, S::Event>, i64), ApplyError>
+) -> Result<AppliedCheckpoint<S>, C::Error>
 where
     S: Snapshot + ApplyEvents + 'static,
     C: ApplyWrapper<S>,
 {
-    let mut extra_events = BTreeMap::new();
-    let mut earliest_apply_time = earliest_changed_time;
-    let start = Bound::Included(first_key_at_time(earliest_changed_time));
-    let end = Bound::Included(last_key_at_time(latest_changed_time));
+    let mut event_count = 0usize;
+    let mut materialized_checkpoints = Vec::new();
+    let mut stored_first_changed_checkpoint = false;
 
-    apply_event_buckets::<S, _>(history.snapshot_id, &history.events, start, end, |_bucket_last_key, _bucket_len, batch| {
-        for extra_batch in context.extra_batches(batch).map_err(Into::into)? {
-            let Some(first_event) = extra_batch.first() else {
-                continue;
-            };
-            let batch_time = first_event.time();
-            if batch_time > batch.time {
-                return Err(ApplyError::new(format!("extra batch at {} cannot be after the input batch at {}", batch_time, batch.time)));
+    if let Some(exact_event_key) = checkpoint.exact_event_key.take() {
+        let event = history.events.get(&exact_event_key).expect("changed event must be stored before checkpoint apply");
+        let bucket = [event];
+        let batch = ApplyBatch { snapshot_id: history.snapshot_id, time: exact_event_key.time, events: &bucket };
+        context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default())?;
+        return Ok(AppliedCheckpoint {
+            stale_start: checkpoint.stale_start,
+            bytes_delta: checkpoint.bytes_delta,
+            final_key: Some(exact_event_key),
+            final_snapshot: checkpoint.snapshot,
+            materialized_checkpoints,
+        });
+    }
+
+    apply_event_buckets::<S, C::Error, _>(
+        history.snapshot_id,
+        &history.events,
+        checkpoint.start.clone(),
+        checkpoint.end.clone(),
+        |bucket_last_key, bucket_len, batch| {
+            context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default())?;
+            event_count += bucket_len;
+
+            if !checkpoint.preserve_previous_tip && !stored_first_changed_checkpoint && batch.time >= checkpoint.first_changed_time {
+                materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone()));
+                stored_first_changed_checkpoint = true;
             }
-            for event in extra_batch {
-                if event.time() != batch_time {
-                    return Err(ApplyError::new("extra batch contains events from multiple timestamps"));
+
+            if checkpoint.preserve_previous_tip && checkpoint.end == Bound::Unbounded && history.checkpoint_interval != 0 {
+                if event_count % history.checkpoint_interval == 0 {
+                    materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone()));
                 }
-                earliest_apply_time = earliest_apply_time.min(event.time());
-                extra_events.insert(ContimeKey::from_event(&event), event);
             }
-        }
-        Ok(())
-    })?;
 
-    Ok((extra_events, earliest_apply_time))
+            Ok(())
+        },
+    )?;
+
+    Ok(AppliedCheckpoint {
+        stale_start: checkpoint.stale_start,
+        bytes_delta: checkpoint.bytes_delta,
+        final_key: history.events.keys().next_back().cloned(),
+        final_snapshot: checkpoint.snapshot,
+        materialized_checkpoints,
+    })
 }
 
-fn apply_latest_event_without_recompute<S, C>(
+pub(super) fn commit_applied_checkpoint<S>(history: &mut LocalSnapshotHistory<S>, applied_checkpoint: AppliedCheckpoint<S>) -> i64
+where
+    S: Snapshot + ApplyEvents + 'static,
+{
+    let mut bytes_delta = applied_checkpoint.bytes_delta;
+
+    if let Some(stale_start) = applied_checkpoint.stale_start {
+        bytes_delta += drain_checkpoints_from(&mut history.checkpoints, stale_start);
+    }
+
+    for (key, checkpoint) in applied_checkpoint.materialized_checkpoints {
+        bytes_delta += push_checkpoint(&mut history.checkpoints, key, checkpoint);
+    }
+
+    if let Some(latest_key) = applied_checkpoint.final_key {
+        if history.checkpoints.back().map(|(key, _checkpoint)| key) != Some(&latest_key) {
+            bytes_delta += push_checkpoint(&mut history.checkpoints, latest_key, applied_checkpoint.final_snapshot);
+        }
+    }
+
+    bytes_delta
+}
+
+fn get_latest_event_checkpoint_for_apply<S>(
     history: &mut LocalSnapshotHistory<S>,
     latest_event_key_before_apply: Option<ContimeKey>,
     single_changed_event_key: ContimeKey,
-    earliest_apply_time: i64,
-    extra_events: &BTreeMap<ContimeKey, S::Event>,
-    context: &mut C,
-) -> Result<i64, ApplyError>
+) -> CheckpointForApply<S>
 where
     S: Snapshot + ApplyEvents + 'static,
-    C: ApplyWrapper<S>,
 {
     let previous_event_count = history.events.len().saturating_sub(1);
     let previous_tip_is_cadence =
         latest_event_key_before_apply.as_ref().is_some_and(|_key| is_event_count_cadence(history, previous_event_count));
 
     let mut bytes_delta = 0;
-    let mut snapshot = if let Some(previous_key) = latest_event_key_before_apply.as_ref().filter(|_key| !previous_tip_is_cadence) {
+    let snapshot = if let Some(previous_key) = latest_event_key_before_apply.as_ref().filter(|_key| !previous_tip_is_cadence) {
         match history.checkpoints.back().map(|(key, _checkpoint)| key == previous_key).unwrap_or(false) {
             true => {
                 let (_key, previous_tip) = history.checkpoints.pop_back().expect("previous tip checkpoint must exist");
@@ -183,32 +239,25 @@ where
         latest_checkpoint_or_base(history)
     };
 
-    apply_event_buckets_with_extra::<S, _>(
-        history.snapshot_id,
-        &history.events,
-        Bound::Included(first_key_at_time(earliest_apply_time)),
-        Bound::Included(single_changed_event_key.clone()),
-        extra_events,
-        |_bucket_last_key, _bucket_len, batch| {
-            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default()).map_err(Into::into)?;
-            Ok(())
-        },
-    )?;
-
-    bytes_delta += push_checkpoint(&mut history.checkpoints, single_changed_event_key, snapshot);
-    Ok(bytes_delta)
+    CheckpointForApply {
+        snapshot,
+        start: Bound::Unbounded,
+        end: Bound::Unbounded,
+        stale_start: None,
+        preserve_previous_tip: true,
+        first_changed_time: i64::MAX,
+        exact_event_key: Some(single_changed_event_key),
+        bytes_delta,
+    }
 }
 
-fn recompute_checkpoints_from<S, C>(
-    history: &mut LocalSnapshotHistory<S>,
+fn get_recomputed_checkpoint_for_apply<S>(
+    history: &LocalSnapshotHistory<S>,
     time: i64,
     preserve_previous_tip: bool,
-    extra_events: &BTreeMap<ContimeKey, S::Event>,
-    context: &mut C,
-) -> Result<i64, ApplyError>
+) -> CheckpointForApply<S>
 where
     S: Snapshot + ApplyEvents + 'static,
-    C: ApplyWrapper<S>,
 {
     let mut recompute_boundary = first_key_at_time(time);
     if !preserve_previous_tip {
@@ -222,7 +271,7 @@ where
     let checkpoint_index = latest_checkpoint_before_index(&history.checkpoints, &recompute_boundary);
     let remove_recompute_checkpoint =
         preserve_previous_tip && checkpoint_index.is_some_and(|index| !checkpoint_key_is_cadence(history, &history.checkpoints[index].0));
-    let (mut snapshot, recompute_start) = match checkpoint_index {
+    let (snapshot, start) = match checkpoint_index {
         Some(index) => {
             let (key, checkpoint) = &history.checkpoints[index];
             (checkpoint.clone(), Bound::Excluded(key.clone()))
@@ -230,50 +279,22 @@ where
         None => (history.base_snapshot.clone(), Bound::Unbounded),
     };
 
-    let mut bytes_delta = 0;
     let stale_start = if remove_recompute_checkpoint {
-        checkpoint_index.expect("remove checkpoint index must exist")
+        checkpoint_index
     } else {
-        checkpoint_partition_before(&history.checkpoints, &recompute_boundary)
+        Some(checkpoint_partition_before(&history.checkpoints, &recompute_boundary))
     };
-    bytes_delta += drain_checkpoints_from(&mut history.checkpoints, stale_start);
 
-    let mut event_count = 0usize;
-    let events = &history.events;
-    let checkpoints = &mut history.checkpoints;
-    let snapshot_id = history.snapshot_id;
-    let checkpoint_interval = history.checkpoint_interval;
-    let mut stored_first_changed_checkpoint = false;
-
-    apply_event_buckets_with_extra::<S, _>(
-        snapshot_id,
-        events,
-        recompute_start,
-        Bound::Unbounded,
-        extra_events,
-        |bucket_last_key, bucket_len, batch| {
-            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default()).map_err(Into::into)?;
-            event_count += bucket_len;
-
-            if !preserve_previous_tip && !stored_first_changed_checkpoint && batch.time >= time {
-                bytes_delta += push_checkpoint(checkpoints, bucket_last_key.clone(), snapshot.clone());
-                stored_first_changed_checkpoint = true;
-            }
-
-            if preserve_previous_tip && checkpoint_interval != 0 && event_count % checkpoint_interval == 0 {
-                bytes_delta += push_checkpoint(checkpoints, bucket_last_key.clone(), snapshot.clone());
-            }
-            Ok(())
-        },
-    )?;
-
-    if let Some(latest_key) = events.keys().next_back().cloned() {
-        if checkpoints.back().map(|(key, _checkpoint)| key) != Some(&latest_key) {
-            bytes_delta += push_checkpoint(checkpoints, latest_key, snapshot);
-        }
+    CheckpointForApply {
+        snapshot,
+        start,
+        end: Bound::Unbounded,
+        stale_start,
+        preserve_previous_tip,
+        first_changed_time: time,
+        exact_event_key: None,
+        bytes_delta: 0,
     }
-
-    Ok(bytes_delta)
 }
 
 fn latest_checkpoint_or_base<S>(history: &LocalSnapshotHistory<S>) -> S
@@ -301,16 +322,16 @@ where
     is_event_count_cadence(history, history.events.len())
 }
 
-pub(super) fn apply_event_buckets<S, F>(
+pub(super) fn apply_event_buckets<S, E, F>(
     snapshot_id: u128,
     events: &BTreeMap<ContimeKey, S::Event>,
     start: Bound<ContimeKey>,
     end: Bound<ContimeKey>,
     mut apply_bucket: F,
-) -> Result<(), ApplyError>
+) -> Result<(), E>
 where
     S: Snapshot + ApplyEvents + 'static,
-    F: FnMut(&ContimeKey, usize, ApplyBatch<'_, S::Event>) -> Result<(), ApplyError>,
+    F: FnMut(&ContimeKey, usize, ApplyBatch<'_, S::Event>) -> Result<(), E>,
 {
     let mut iter = events.range((start, end)).peekable();
     while let Some((first_key, first_event)) = iter.next() {
@@ -356,59 +377,6 @@ where
     Ok(())
 }
 
-pub(super) fn apply_event_buckets_with_extra<S, F>(
-    snapshot_id: u128,
-    events: &BTreeMap<ContimeKey, S::Event>,
-    start: Bound<ContimeKey>,
-    end: Bound<ContimeKey>,
-    extra_events: &BTreeMap<ContimeKey, S::Event>,
-    mut apply_bucket: F,
-) -> Result<(), ApplyError>
-where
-    S: Snapshot + ApplyEvents + 'static,
-    F: FnMut(&ContimeKey, usize, ApplyBatch<'_, S::Event>) -> Result<(), ApplyError>,
-{
-    let mut real_iter = events.range((start, end)).peekable();
-    let mut extra_iter = extra_events.iter().peekable();
-
-    loop {
-        let next_real_time = real_iter.peek().map(|(key, _event)| key.time);
-        let next_extra_time = extra_iter.peek().map(|(key, _event)| key.time);
-        let Some(bucket_time) = next_real_time.into_iter().chain(next_extra_time).min() else {
-            break;
-        };
-
-        let mut bucket = Vec::new();
-        let mut bucket_last_key = None;
-
-        while let Some((key, event)) = real_iter.peek() {
-            if key.time != bucket_time {
-                break;
-            }
-            bucket_last_key = Some((*key).clone());
-            bucket.push((*key, *event));
-            real_iter.next();
-        }
-
-        while let Some((key, event)) = extra_iter.peek() {
-            if key.time != bucket_time {
-                break;
-            }
-            bucket_last_key = Some((*key).clone());
-            bucket.push((*key, *event));
-            extra_iter.next();
-        }
-
-        bucket.sort_by(|(left_key, _left_event), (right_key, _right_event)| left_key.cmp(right_key));
-        let bucket_last_key = bucket_last_key.expect("bucket must contain at least one event");
-        let bucket_events: Vec<_> = bucket.into_iter().map(|(_key, event)| event).collect();
-        let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket_events };
-        apply_bucket(&bucket_last_key, bucket_events.len(), batch)?;
-    }
-
-    Ok(())
-}
-
 pub(super) fn apply_event_buckets_infallible<S, F>(
     snapshot_id: u128,
     events: &BTreeMap<ContimeKey, S::Event>,
@@ -419,7 +387,7 @@ pub(super) fn apply_event_buckets_infallible<S, F>(
     S: Snapshot + ApplyEvents + 'static,
     F: FnMut(&ContimeKey, usize, ApplyBatch<'_, S::Event>),
 {
-    let result = apply_event_buckets::<S, _>(snapshot_id, events, start, end, |bucket_last_key, bucket_len, batch| {
+    let result = apply_event_buckets::<S, Infallible, _>(snapshot_id, events, start, end, |bucket_last_key, bucket_len, batch| {
         apply_bucket(bucket_last_key, bucket_len, batch);
         Ok(())
     });
