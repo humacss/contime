@@ -20,7 +20,7 @@ trait BenchHistoryApply {
 
 impl BenchHistoryApply for SnapshotHistory<BenchSnapshot> {
     fn apply_event(&mut self, event: BenchEvent) -> Result<i64, contime::ApplyError> {
-        self.apply_event_batch(vec![event], &mut ())
+        self.apply_event_batch(vec![event], &mut ()).map_err(Into::into)
     }
 }
 

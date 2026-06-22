@@ -8,7 +8,37 @@ use std::thread::{self, JoinHandle};
 use ahash::{AHashMap, RandomState};
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::{ApplyError, ApplyEvents, ApplyWrapper, EventLanes, SnapshotHistory, SnapshotLanes};
+use crate::{ApplyEvents, ApplyWrapper, EventLanes, SnapshotHistory, SnapshotLanes};
+
+/// Error returned when a worker cannot apply an event batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyError {
+    message: String,
+}
+
+impl ApplyError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self { message: message.into() }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ApplyError {}
+
+impl From<std::convert::Infallible> for ApplyError {
+    fn from(error: std::convert::Infallible) -> Self {
+        match error {}
+    }
+}
 
 pub type SnapshotId = u128;
 
@@ -46,6 +76,7 @@ where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     EL: EventLanes<SL, C> + 'static + Send,
     C: ApplyWrapper<SL> + Send + 'static,
+    C::Error: Into<ApplyError>,
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_parts(
@@ -94,6 +125,7 @@ fn handle_worker<SL, EL, C>(
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     EL: EventLanes<SL, C>,
     C: ApplyWrapper<SL>,
+    C::Error: Into<ApplyError>,
 {
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
 
@@ -143,6 +175,7 @@ where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     EL: EventLanes<SL, C>,
     C: ApplyWrapper<SL>,
+    C::Error: Into<ApplyError>,
 {
     let history = match history_by_id.entry(snapshot_id) {
         Entry::Occupied(entry) => entry.into_mut(),
@@ -152,7 +185,7 @@ where
             entry.insert(history)
         }
     };
-    let bytes_delta = history.apply_event_batch(vec![event], apply_context)?;
+    let bytes_delta = history.apply_event_batch(vec![event], apply_context).map_err(Into::into)?;
     fetch_saturating_add_signed(memory_usage, bytes_delta, Ordering::Relaxed);
     Ok(())
 }

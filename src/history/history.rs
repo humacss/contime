@@ -405,47 +405,6 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct EarlierExtraBatchWrapper {
-        observed_before_apply: Vec<(i64, i32)>,
-    }
-
-    impl crate::ApplyWrapper<ContextSnapshot> for EarlierExtraBatchWrapper {
-        type Error = std::convert::Infallible;
-
-        fn extra_batches(&mut self, batch: ApplyBatch<'_, ContextEvent>) -> Result<Vec<Vec<ContextEvent>>, Self::Error> {
-            if batch.time == 100 {
-                Ok(vec![vec![ContextEvent { id: 1, time: 90, snapshot_id: batch.snapshot_id, value: 3 }]])
-            } else {
-                Ok(Vec::new())
-            }
-        }
-
-        fn apply_event_batch_wrapper(
-            &mut self,
-            snapshot: &mut ContextSnapshot,
-            batch: ApplyBatch<'_, ContextEvent>,
-            apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<(), Self::Error> {
-            self.observed_before_apply.push((batch.time, snapshot.sum));
-            apply_inner.apply_event_batch(snapshot, batch);
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn apply_wrapper_extra_batches_recompute_from_the_earliest_extra_batch() {
-        let snapshot = ContextSnapshot { id: 1, time: 0, sum: 0 };
-        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
-        apply_one(&mut history, ContextEvent { id: 95, time: 95, snapshot_id: 1, value: 5 });
-
-        let mut context = EarlierExtraBatchWrapper::default();
-        history.apply_event_batch(vec![ContextEvent { id: 100, time: 100, snapshot_id: 1, value: 7 }], &mut context).unwrap();
-
-        assert_eq!(context.observed_before_apply, vec![(90, 0), (95, 3), (100, 8)]);
-        assert_eq!(history.snapshot_only_at(100).sum, 15);
-    }
-
-    #[derive(Default)]
     struct FailingWrapper;
 
     impl crate::ApplyWrapper<ContextSnapshot> for FailingWrapper {

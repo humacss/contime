@@ -17,6 +17,7 @@ pub enum RouterError {
 pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = ()>
 where
     C: ApplyWrapper<SL>,
+    C::Error: Into<ApplyError>,
 {
     hasher: RandomState,
     workers: Vec<Worker<SL, EL, C>>,
@@ -30,6 +31,7 @@ impl<SL, EL> Router<SL, EL, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     (): ApplyWrapper<SL>,
+    <() as ApplyWrapper<SL>>::Error: Into<ApplyError>,
     EL: EventLanes<SL> + 'static,
 {
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
@@ -45,6 +47,7 @@ impl<SL, EL, C> Router<SL, EL, C>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + 'static,
+    C::Error: Into<ApplyError>,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {
