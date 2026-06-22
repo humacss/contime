@@ -1,5 +1,9 @@
 use contime::{ContimeError, TestEvent, TestSnapshot, TestSnapshotContime};
 
+fn query_one(contime: &TestSnapshotContime, time: i64, snapshot_id: u128) -> TestSnapshot {
+    contime.query_at(time, &[snapshot_id]).unwrap().pop().flatten().unwrap().into()
+}
+
 #[test]
 fn test_memory_full() {
     let budget = 100u64;
@@ -40,32 +44,11 @@ fn test_memory_full_then_advance_frees() {
     assert!(last_applied > 0, "should have applied at least some events");
 
     // Advance to free old data
-    c.advance(last_applied + 100).unwrap();
+    c.advance_to(last_applied + 100).unwrap();
 
     // Should be able to apply new events now
     let result = c.apply_event(TestEvent::Positive(1, last_applied + 200, (last_applied + 200) as u128, 1));
     assert!(result.is_ok(), "expected event to succeed after advance freed memory");
-}
-
-#[test]
-fn test_memory_full_on_snapshot() {
-    let budget = 100u64;
-    let c = TestSnapshotContime::new(1, budget);
-
-    // Fill memory with events first
-    for i in 0..1000u128 {
-        if c.apply_event(TestEvent::Positive(1, i as i64, i, 1)).is_err() {
-            break;
-        }
-    }
-
-    // Applying a snapshot should also fail when budget is exhausted
-    let big_snapshot = TestSnapshot { id: 2, time: 0, sum: 0, items: vec![0; 1000] };
-    match c.apply_snapshot(big_snapshot) {
-        Err(ContimeError::MemoryFull) => {}
-        Ok(()) => panic!("expected MemoryFull when applying snapshot over budget"),
-        Err(err) => panic!("unexpected error: {:?}", err),
-    }
 }
 
 #[test]
@@ -77,21 +60,20 @@ fn test_advance_basic() {
     c.apply_event(TestEvent::Positive(1, 10, 10, 30)).unwrap();
 
     // Advance should not panic or error
-    c.advance(100).unwrap();
+    c.advance_to(100).unwrap();
 }
 
 #[test]
-fn test_advance_with_handle() {
+fn test_advance_to_prunes_and_keeps_future_apply_query_working() {
     let c = TestSnapshotContime::new(2, 100000);
 
     c.apply_event(TestEvent::Positive(1, 1, 1, 10)).unwrap();
     c.apply_event(TestEvent::Positive(2, 1, 2, 20)).unwrap();
 
-    let handle = c.send_advance(100).unwrap();
-    handle.wait().unwrap();
+    c.advance_to(100).unwrap();
 
     // Should still be able to query and apply events after advance
     c.apply_event(TestEvent::Positive(1, 200, 200, 5)).unwrap();
-    let (snap, _) = c.at::<TestSnapshot>(201, 1).unwrap();
+    let snap = query_one(&c, 201, 1);
     assert_eq!(snap.sum, 15); // pruned history is carried by the promoted base snapshot
 }

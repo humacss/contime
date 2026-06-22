@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 type EventId = u128;
 type SnapshotId = u128;
@@ -68,7 +68,7 @@ impl SnapshotEvent<BenchSnapshot> for BenchEvent {
 impl ApplyEvents for BenchSnapshot {
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
         self.id = batch.snapshot_id;
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             match event {
                 BenchEvent::Positive(_snapshot_id, _time, _event_id, value) => {
                     self.sum += *value as i32;
@@ -78,8 +78,6 @@ impl ApplyEvents for BenchSnapshot {
         self.time = batch.time;
     }
 }
-
-impl<C> AfterApplyEvents<C> for BenchSnapshot {}
 
 contime::contime! {
     mod bench_lanes;

@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::thread::{self, JoinHandle};
 
-use contime::{QueryResult, SnapshotHistory};
+use contime::SnapshotHistory;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use flume::{bounded, Receiver, Sender};
 
@@ -14,11 +14,21 @@ fn new_event(snapshot_id: u128, event_id: u128, time: i64) -> BenchEvent {
     BenchEvent::Positive(snapshot_id, time, event_id, 1)
 }
 
+trait BenchHistoryApply {
+    fn apply_event(&mut self, event: BenchEvent) -> Result<i64, contime::ApplyError>;
+}
+
+impl BenchHistoryApply for SnapshotHistory<BenchSnapshot> {
+    fn apply_event(&mut self, event: BenchEvent) -> Result<i64, contime::ApplyError> {
+        self.apply_event_batch(vec![event], &mut ())
+    }
+}
+
 fn seeded_history(event_count: usize) -> SnapshotHistory<BenchSnapshot> {
     let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10_000).0;
 
     for index in 0..event_count {
-        history.apply_event(new_event(0, index as u128, index as i64));
+        history.apply_event(new_event(0, index as u128, index as i64)).expect("seed event should apply");
     }
 
     history
@@ -47,9 +57,9 @@ fn seeded_contime_many_lanes(lane_count: usize, events_per_lane: usize) -> Bench
     contime
 }
 
-fn seeded_contime_snapshot_only() -> BenchContime {
+fn seeded_contime_single_event_lane() -> BenchContime {
     let contime = BenchContime::with_history_horizon(1, MEMORY_BUDGET_BYTES, 10_000);
-    contime.apply_snapshot(BenchSnapshot { id: 0, time: 0, sum: 0 }).expect("seed snapshot should apply");
+    contime.apply_event(new_event(0, 0, 0)).expect("seed event should apply");
     contime
 }
 
@@ -138,9 +148,9 @@ fn benchmark_snapshot_at(runner: &mut Criterion) {
 
     for event_count in [32, 256] {
         group.bench_function(BenchmarkId::new("local_small_history", event_count), |bencher| {
-            let mut history = seeded_history(event_count);
+            let history = seeded_history(event_count);
             bencher.iter(|| {
-                let (snapshot, _reconciliation_rx) = history.snapshot_at((event_count / 2) as i64 + 1);
+                let snapshot = history.snapshot_at((event_count / 2) as i64 + 1);
                 black_box(snapshot);
             });
         });
@@ -149,8 +159,8 @@ fn benchmark_snapshot_at(runner: &mut Criterion) {
     group.finish();
 }
 
-fn benchmark_query_at_wait(runner: &mut Criterion) {
-    let mut group = runner.benchmark_group("query_at_wait");
+fn benchmark_query_at(runner: &mut Criterion) {
+    let mut group = runner.benchmark_group("query_at");
 
     group.bench_function("flume_bounded_create", |bencher| {
         bencher.iter(|| {
@@ -184,32 +194,29 @@ fn benchmark_query_at_wait(runner: &mut Criterion) {
 
     group.bench_function("not_found", |bencher| {
         let contime = BenchContime::with_history_horizon(1, MEMORY_BUDGET_BYTES, 10_000);
-        bencher.iter(|| match contime.query_at(1, 999).unwrap().wait().unwrap() {
-            QueryResult::Found(_, _) => panic!("expected not found"),
-            QueryResult::NotFound => {}
+        bencher.iter(|| {
+            let result = contime.query_at(1, &[999]).unwrap();
+            assert!(result[0].is_none());
         });
     });
 
-    group.bench_function("snapshot_only_lane", |bencher| {
-        let contime = seeded_contime_snapshot_only();
-        bencher.iter(|| match contime.query_at(1, 0).unwrap().wait().unwrap() {
-            QueryResult::Found(snapshot_lane, _reconciliation_rx) => {
-                let snapshot: BenchSnapshot = snapshot_lane.into();
-                black_box(snapshot);
-            }
-            QueryResult::NotFound => panic!("expected query result"),
+    group.bench_function("single_event_lane", |bencher| {
+        let contime = seeded_contime_single_event_lane();
+        bencher.iter(|| {
+            let snapshot_lane = contime.query_at(1, &[0]).unwrap().pop().flatten().expect("expected query result");
+            let snapshot: BenchSnapshot = snapshot_lane.into();
+            black_box(snapshot);
         });
     });
 
     for event_count in [32, 256] {
         group.bench_function(BenchmarkId::new("single_lane", event_count), |bencher| {
             let contime = seeded_contime_one_lane(event_count);
-            bencher.iter(|| match contime.query_at((event_count / 2) as i64 + 1, 0).unwrap().wait().unwrap() {
-                QueryResult::Found(snapshot_lane, _reconciliation_rx) => {
-                    let snapshot: BenchSnapshot = snapshot_lane.into();
-                    black_box(snapshot);
-                }
-                QueryResult::NotFound => panic!("expected query result"),
+            bencher.iter(|| {
+                let snapshot_lane =
+                    contime.query_at((event_count / 2) as i64 + 1, &[0]).unwrap().pop().flatten().expect("expected query result");
+                let snapshot: BenchSnapshot = snapshot_lane.into();
+                black_box(snapshot);
             });
         });
     }
@@ -221,13 +228,9 @@ fn benchmark_query_at_wait(runner: &mut Criterion) {
                 let mut sum = 0_i32;
 
                 for lane_id in 0..lane_count as u128 {
-                    match contime.query_at(4, lane_id).unwrap().wait().unwrap() {
-                        QueryResult::Found(snapshot_lane, _reconciliation_rx) => {
-                            let snapshot: BenchSnapshot = snapshot_lane.into();
-                            sum += snapshot.sum;
-                        }
-                        QueryResult::NotFound => panic!("expected query result"),
-                    }
+                    let snapshot_lane = contime.query_at(4, &[lane_id]).unwrap().pop().flatten().expect("expected query result");
+                    let snapshot: BenchSnapshot = snapshot_lane.into();
+                    sum += snapshot.sum;
                 }
 
                 black_box(sum);
@@ -238,7 +241,7 @@ fn benchmark_query_at_wait(runner: &mut Criterion) {
             let contime = seeded_contime_many_lanes(lane_count, 4);
             let lane_ids = (0..lane_count as u128).collect::<Vec<_>>();
             bencher.iter(|| {
-                let snapshots = contime.many_at(4, &lane_ids).unwrap();
+                let snapshots = contime.query_at(4, &lane_ids).unwrap();
                 let sum = snapshots
                     .into_iter()
                     .map(|lane| {
@@ -260,7 +263,7 @@ use pprof::criterion::{Output, PProfProfiler};
 criterion_group! {
     name = benches;
     config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
-    targets = benchmark_snapshot_at, benchmark_query_at_wait
+    targets = benchmark_snapshot_at, benchmark_query_at
 }
 
 criterion_main!(benches);

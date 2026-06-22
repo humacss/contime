@@ -4,21 +4,21 @@ version = "0.1.0"
 edition = "2021"
 autobenches = false
 license = "MIT"
-description = "Continuous-time reconciliation engine for unreliable event streams with O(log N) historical queries"
+description = "Continuous-time state engine for unreliable event streams with O(log N) historical queries"
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime"
 readme = "README.md"
 categories = ["game-development", "concurrency"]
-keywords = ["reconciliation", "event-sourcing", "snapshot", "concurrency"]
+keywords = ["time", "event-sourcing", "snapshot", "concurrency"]
 authors = ["humacss"]
 
 [dependencies]
 ahash = "0.8.12"
-flume = "0.12.0"
 crossbeam-channel = "0.5"
 contime_macros = { path = "contime_macros" }
 
 [dev-dependencies]
+flume = "0.12.0"
 rstest = "0.26.1"
 criterion = { version = "0.5", features = ["html_reports"] }
 pprof = { version = "0.15", features = ["flamegraph", "criterion"] }

@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::thread::{self, JoinHandle};
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use flume::{bounded, Receiver, Sender};
+use flume::{bounded, Sender};
 
 #[derive(Clone, Debug)]
 struct SmallSnapshot {
@@ -57,7 +57,6 @@ impl Drop for EmptyReplyWorker {
 enum QueryReply {
     NotFound,
     FoundSmall(SmallSnapshot),
-    FoundWithReceiver { snapshot: SmallSnapshot, reconciliation_rx: Receiver<()> },
 }
 
 enum QueryRequest {
@@ -82,11 +81,7 @@ impl QueryWorker {
                         } else if snapshot_id == 1 {
                             let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                         } else {
-                            let (_reconciliation_tx, reconciliation_rx) = bounded::<()>(1000);
-                            let _ = reply.send(QueryReply::FoundWithReceiver {
-                                snapshot: SmallSnapshot { id: snapshot_id, time, sum: 1 },
-                                reconciliation_rx,
-                            });
+                            let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                         }
                     }
                     QueryRequest::Shutdown => break,
@@ -116,20 +111,6 @@ impl QueryWorker {
                 black_box(snapshot.sum);
             }
             _ => panic!("expected found small"),
-        }
-    }
-
-    fn query_found_with_receiver(&self) {
-        let (reply_tx, reply_rx) = bounded::<QueryReply>(1);
-        self.request_tx.send(QueryRequest::SnapshotAt { snapshot_id: 2, time: 1, reply: reply_tx }).expect("request should send");
-        match reply_rx.recv().expect("reply should arrive") {
-            QueryReply::FoundWithReceiver { snapshot, reconciliation_rx } => {
-                black_box(snapshot.id);
-                black_box(snapshot.time);
-                black_box(snapshot.sum);
-                black_box(reconciliation_rx);
-            }
-            _ => panic!("expected found with receiver"),
         }
     }
 }
@@ -175,11 +156,6 @@ fn benchmark_flume_roundtrip(runner: &mut Criterion) {
     group.bench_function("query_found_small", |bencher| {
         let worker = QueryWorker::new();
         bencher.iter(|| worker.query_found_small());
-    });
-
-    group.bench_function("query_found_with_receiver", |bencher| {
-        let worker = QueryWorker::new();
-        bencher.iter(|| worker.query_found_with_receiver());
     });
 
     group.finish();

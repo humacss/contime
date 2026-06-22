@@ -6,7 +6,7 @@
 
 ## Current State
 
-This crate is currently in development. The API is not stable yet, but the core apply, query, reconciliation, memory-budget, and handle-based behavior is covered by tests. Documentation, benchmarks, and ergonomics are still being refined.
+This crate is currently in development. The API is not stable yet, but the core apply, query, and memory-budget behavior is covered by tests. Documentation, benchmarks, and ergonomics are still being refined.
 
 ## Continuous Time?
 
@@ -20,7 +20,7 @@ Now you can ask the question, what was the state at time `T`?
 
 This also helps handle out of order events cleanly. What if an event comes in late? 
 
-Many systems will struggle to handle this because now you need to reconcile this event with already applied state, and all you have is the current state. You don't know what the state looked like at the time the event was supposed to arrive. 
+Many systems will struggle to handle this because all you have is the current state. You don't know what the state looked like at the time the event was supposed to arrive. 
 
 With continuous-time state applying an event from the past is as natural as applying one in the present. This means we get deterministic state at all times, regardless of the order of the events coming in to the system.
 
@@ -31,17 +31,17 @@ With continuous-time state applying an event from the past is as natural as appl
 Typical good fits include:
 
 **Multiplayer game servers and clients**  
-Handle unreliable networks, lag compensation, client-side prediction, anti-cheat reconciliation, and perfect replays
+Maintain deterministic historical state for delayed, duplicated, or out-of-order player inputs
 
 **IoT & sensor network data**  
-Reconcile delayed, duplicated, or out-of-order readings from unreliable devices and networks into a consistent, queryable timeline
+Apply delayed, duplicated, or out-of-order readings from unreliable devices and networks into a consistent, queryable timeline
 
 **Audit trails & lightweight event-sourcing**  
 Provide time-travel queries and deterministic historical state without needing a full persistent event store
 
 ## How it Works
 
-**contime** works by accepting `Snapshot` and `Event` inputs from the user. 
+**contime** works by accepting `Event` inputs from the user and materializing `Snapshot` state from those events.
 
 ### Snapshots
 A `Snapshot` is a discrete state at a particular point in time, for example the state of a particular character in a game at time `T`. The `Snapshot` defines the shape of the data, and the `snapshot_id` in this case defines the character the data belongs to.
@@ -55,13 +55,13 @@ The system keeps a list of `Checkpoint`s internally to keep previous state, and 
 
 ### Flow
 
-When an `Event` or `Snapshot` input arrives from the user, it is sent to the `Router`.  
+When an `Event` input arrives from the user, it is sent to the `Router`.
 
 The `Router` extracts the `snapshot_id` from the input, hashes it, and routes everything to the correct `Worker`.
 
 Each `Worker` maintains a unique set of `snapshot_id`s and works in a dedicated thread running lockless code.
 
-The `Worker` applies the input to the continuous time state for that `snapshot_id`, and then notifies the user when state changes and reconciliation is needed.
+The `Worker` applies the input to the continuous time state for that `snapshot_id` and serves historical queries for that lane.
 
 This design lets `contime` scale across multiple threads and processors with zero lock contention.
 
@@ -73,8 +73,7 @@ The public API is small. In practice you do five things:
 2. Implement `SnapshotEvent` for routing and `ApplyEvents` so each snapshot mutates from same-millisecond event buckets.
 3. Generate `SnapshotLanes`, `EventLanes`, and a typed `Contime` alias with `contime::contime!`.
 4. Create a `Contime` instance with a worker count and memory budget.
-5. Apply events or snapshots, then query state, inspect retained snapshot-scoped
-   events, and react to reconciliation notifications.
+5. Apply events, optionally advance the retained history horizon with `advance_to`, then query state with `query_at`.
 
 ### Minimal usage flow
 
@@ -89,54 +88,48 @@ cargo run --example ordered_values
 The example defines one snapshot that stores each received value in event-time order. It then applies a late event on purpose so you can see two things clearly:
 
 - queries at different times return different ordered prefixes of the same history
-- a previously queried receiver gets a `Reconciliation` when late data changes historical state
+- re-querying after a late event returns the corrected historical state
 
 The snapshot logic in the example only appends values during replay. The ordered result comes from `contime` replaying events in chronological order, not from custom sorting in the example code.
 
-If you prefer handle-based integration instead of blocking calls, use `send_event`, `send_snapshot`, `query_at`, and `send_advance`, then wait, poll, or `await` the returned handles.
+### Apply Wrappers
 
-### Querying retained events
-
-`Contime::events_between(snapshot_id, from_time, to_time)` returns the retained
-events that affected one snapshot id. The range is half-open:
-`from_time <= event.time() < to_time`. Results are sorted deterministically by
-`(time, event_id)`.
-
-This is an in-memory retained-history query, not persistence. Events pruned by
-`advance` and the configured history horizon are gone from `contime` and are not
-returned. Use `query_events_between` when a handle-based query fits the host
-runtime better.
+`contime` applies one same-timestamp event batch to one snapshot lane at a time.
+Advanced callers can provide an `ApplyWrapper` and implement
+`apply_event_batch_wrapper` to control how that one batch is applied to the
+working snapshot. The default wrapper only calls the inner apply once. Custom
+wrappers may call the inner apply zero, one, or many times with temporary
+same-timestamp batches, and any wrapper error is returned through the normal
+apply result.
 
 ## `contime` is
 
-- A continuous-time state reconciliation engine  
+- A continuous-time state engine  
 - Handles out-of-order and duplicate events  
 - Designed for very fast operation on one server using all available processors  
 - Is in memory only and designed to never OOM with bounded memory
 
-In short: a high-performance, in-memory, continuous-time reconciliation engine.
+In short: a high-performance, in-memory, continuous-time state engine.
 
 ## `contime` is not
 
 - A persistent database or storage layer  
 - A general-purpose stream processor  
-- A real-time scheduler  
 - A full event-sourcing system
 
 `contime` is very specialized for one particular use-case. 
 
-It sits in between other systems like persistence, scheduling, and event sourcing. It does not attempt to be a general solution for event processing. 
+It maintains queryable historical state from applied events.
 
 ## Current Constraints
 
 - `contime` is in-memory only. Persistence, replay from disk, and recovery belong in surrounding systems.
 - Memory usage is bounded by the configured budget and the amount of retained history.
-- History pruning is driven by `advance` together with the configured history horizon.
-- Queries currently include events with `event.time() < query_time`, not events exactly at `query_time`.
-- Event history queries are snapshot-scoped and use half-open time ranges.
+- History pruning is driven by `advance_to` together with the configured history horizon.
+- Snapshot queries include events with `event.time() <= query_time`.
+- Public event-history inspection is intentionally not exposed by `contime`.
 - Checkpoints currently clone full snapshots, so the crate is best suited to relatively small snapshot payloads today.
 - Known deferred issues:
-  - creating a brand-new history from an authoritative snapshot still treats that snapshot as the base state from time `0`
   - memory-budget admission is still approximate and does not reserve replay/checkpoint growth up front
 
 ## Current Status
@@ -153,7 +146,6 @@ The current benchmarks are not up-to-date and accurate with the code changes ove
 ## TODO / Future Improvements
 
 - Builder-style configuration instead of positional constructor arguments
-- More ergonomic reconciliation subscription and query helpers
 - Compiled examples for more complex multi-snapshot topologies
 - Delta-based checkpoints for larger snapshots
 - Refreshed crate-wide benchmarks and performance guidance

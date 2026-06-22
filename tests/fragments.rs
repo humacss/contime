@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, SeedSnapshot, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, Event, SeedSnapshot, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct LegacyValueAt {
@@ -112,7 +112,7 @@ impl SnapshotEvent<LegacyValueAt> for LegacyValueAtEvent {
 
 impl ApplyEvents for LegacyValueAt {
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             match event {
                 LegacyValueAtEvent::OnLegacyValueChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -123,8 +123,6 @@ impl ApplyEvents for LegacyValueAt {
         self.time = batch.time;
     }
 }
-
-impl<C> AfterApplyEvents<C> for LegacyValueAt {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct FragmentValueAt {
@@ -240,7 +238,7 @@ impl SnapshotEvent<FragmentValueAt> for FragmentValueAtEvent {
 
 impl ApplyEvents for FragmentValueAt {
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             match event {
                 FragmentValueAtEvent::OnFragmentValueChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -251,8 +249,6 @@ impl ApplyEvents for FragmentValueAt {
         self.time = batch.time;
     }
 }
-
-impl<C> AfterApplyEvents<C> for FragmentValueAt {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct AlphaAt {
@@ -366,7 +362,7 @@ impl SnapshotEvent<AlphaAt> for AlphaAtEvent {
 
 impl ApplyEvents for AlphaAt {
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             match event {
                 AlphaAtEvent::OnAlphaChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -377,8 +373,6 @@ impl ApplyEvents for AlphaAt {
         self.time = batch.time;
     }
 }
-
-impl<C> AfterApplyEvents<C> for AlphaAt {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct BetaAt {
@@ -492,7 +486,7 @@ impl SnapshotEvent<BetaAt> for BetaAtEvent {
 
 impl ApplyEvents for BetaAt {
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             match event {
                 BetaAtEvent::OnBetaChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -503,8 +497,6 @@ impl ApplyEvents for BetaAt {
         self.time = batch.time;
     }
 }
-
-impl<C> AfterApplyEvents<C> for BetaAt {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SharedSourceAt {
@@ -708,7 +700,7 @@ impl SnapshotEvent<SharedMirrorAt> for SharedMirrorAtEvent {
 
 impl ApplyEvents for SharedSourceAt {
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             match event {
                 SharedSourceAtEvent::OnSharedValueChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -722,7 +714,7 @@ impl ApplyEvents for SharedSourceAt {
 
 impl ApplyEvents for SharedMirrorAt {
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             match event {
                 SharedMirrorAtEvent::OnSharedValueChanged(event) => {
                     self.entity_id = event.entity_id;
@@ -733,9 +725,6 @@ impl ApplyEvents for SharedMirrorAt {
         self.time = batch.time;
     }
 }
-
-impl<C> AfterApplyEvents<C> for SharedSourceAt {}
-impl<C> AfterApplyEvents<C> for SharedMirrorAt {}
 
 contime::fragment! {
     macro fragment_value_fragment;
@@ -831,12 +820,11 @@ contime::lanes! {
 fn snapshot_at<T, SL, EL>(contime: &contime::Contime<SL, EL>, time: i64, snapshot_id: u128) -> T
 where
     SL: contime::SnapshotLanes<Event = EL> + contime::ApplyEvents + 'static,
-    SL: contime::AfterApplyEvents<()> + 'static,
     EL: contime::EventLanes<SL> + 'static,
     T: TryFrom<SL>,
 {
     contime
-        .many_at(time, &[snapshot_id])
+        .query_at(time, &[snapshot_id])
         .expect("snapshot query should succeed")
         .into_iter()
         .next()

@@ -6,11 +6,7 @@ fn test_api() {
 
     c.apply_event(TestEvent::Positive(1, 0, 0, 5)).unwrap();
 
-    match c.at::<TestSnapshot>(1, 1) {
-        Ok((snapshot, _snapshot_rx)) => {
-            assert_eq!(snapshot.id(), 1);
-            assert_eq!(snapshot.sum, 5);
-        }
-        Err(err) => panic!("{:?}", err),
-    }
+    let snapshot: TestSnapshot = c.query_at(1, &[1]).unwrap().pop().flatten().unwrap().into();
+    assert_eq!(snapshot.id(), 1);
+    assert_eq!(snapshot.sum, 5);
 }

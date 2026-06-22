@@ -1,20 +1,20 @@
 error: route key `Shared` uses conflicting event types: `OnFirst` and `OnSecond`
-   --> tests/ui/conflicting_route_type.rs:174:1
+   --> tests/ui/conflicting_route_type.rs:171:1
     |
-174 | / contime::fragment! {
-175 | |     macro second_fragment;
-176 | |     snapshots { SecondAt, }
-177 | |     routes { Shared(OnSecond) => [SecondAt], }
-178 | | }
+171 | / contime::fragment! {
+172 | |     macro second_fragment;
+173 | |     snapshots { SecondAt, }
+174 | |     routes { Shared(OnSecond) => [SecondAt], }
+175 | | }
     | |_^
-179 |
-180 | / contime::lanes! {
-181 | |     mod broken_lanes;
-182 | |     fragments [
-183 | |         first_fragment,
-184 | |         second_fragment,
-185 | |     ];
-186 | | }
+176 |
+177 | / contime::lanes! {
+178 | |     mod broken_lanes;
+179 | |     fragments [
+180 | |         first_fragment,
+181 | |         second_fragment,
+182 | |     ];
+183 | | }
     | |_- in this macro invocation
     |
     = note: this error originates in the macro `second_fragment` which comes from the expansion of the macro `contime::lanes` (in Nightly builds, run with -Z macro-backtrace for more info)
