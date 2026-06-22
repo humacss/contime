@@ -1,39 +1,35 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
-use flume::bounded as flume_bounded;
 
-use crate::handle::{AdvanceHandle, ApplyHandle, QueryHandle, QueryResult, TimeAdvance, TimeAdvanceSubscription};
-use crate::{AfterApplyEvents, ApplyEvents, EventLanes, SnapshotLanes, Worker, WorkerInbound};
-
-const SUBSCRIPTION_CHANNEL_CAPACITY: usize = 1_000_000;
+use crate::{ApplyError, ApplyEvents, ApplyWrapper, EventLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
 pub enum RouterError {
     MemoryFull,
+    ApplyFailed(ApplyError),
     Error,
 }
 
 pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = ()>
 where
-    SL: AfterApplyEvents<C>,
+    C: ApplyWrapper<SL>,
 {
     hasher: RandomState,
     workers: Vec<Worker<SL, EL, C>>,
     memory_budget: Arc<AtomicU64>,
     memory_usage: Arc<AtomicU64>,
     current_time: Arc<AtomicI64>,
-    time_advance_subscribers: Arc<Mutex<Vec<flume::Sender<TimeAdvance>>>>,
     _context: PhantomData<C>,
 }
 
 impl<SL, EL> Router<SL, EL, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
-    SL: AfterApplyEvents<()> + 'static,
+    (): ApplyWrapper<SL>,
     EL: EventLanes<SL> + 'static,
 {
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
@@ -48,7 +44,7 @@ where
 impl<SL, EL, C> Router<SL, EL, C>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
-    SL: AfterApplyEvents<C> + 'static,
+    C: ApplyWrapper<SL> + 'static,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {
@@ -89,18 +85,10 @@ where
             ));
         }
 
-        Self {
-            hasher,
-            workers,
-            memory_budget,
-            memory_usage,
-            current_time: Arc::new(AtomicI64::new(0)),
-            time_advance_subscribers: Arc::new(Mutex::new(Vec::new())),
-            _context: PhantomData,
-        }
+        Self { hasher, workers, memory_budget, memory_usage, current_time: Arc::new(AtomicI64::new(0)), _context: PhantomData }
     }
 
-    pub fn send_event(&self, event_lane: EL) -> Result<ApplyHandle, RouterError> {
+    pub fn apply_event(&self, event_lane: EL) -> Result<(), RouterError> {
         let usage = self.memory_usage.load(Ordering::Relaxed);
         let budget = self.memory_budget.load(Ordering::Relaxed);
         if usage + event_lane.conservative_size() >= budget {
@@ -119,86 +107,13 @@ where
             rxs.push(rx);
         }
 
-        Ok(ApplyHandle::new(rxs))
-    }
-
-    pub fn apply_event(&self, event_lane: EL) -> Result<(), RouterError> {
-        self.send_event(event_lane)?.wait().map_err(|_| RouterError::Error)
-    }
-
-    pub fn replace_context_events(&self, source_key: u128, from_time: i64, events: Vec<EL>) -> Result<(), RouterError> {
-        let mut events_by_worker = Vec::with_capacity(self.workers.len());
-        events_by_worker.resize_with(self.workers.len(), Vec::new);
-        for event in events {
-            let mut target_workers = Vec::new();
-            for routed in event.routed_snapshots() {
-                let worker_index = self.worker_index(routed.snapshot_id);
-                if !target_workers.contains(&worker_index) {
-                    target_workers.push(worker_index);
-                }
-            }
-            for worker_index in target_workers {
-                events_by_worker[worker_index].push(event.clone());
-            }
-        }
-
-        let mut rxs = Vec::with_capacity(self.workers.len());
-        for (worker_index, worker) in self.workers.iter().enumerate() {
-            let (tx, rx) = bounded(1);
-            worker
-                .worker_inbound_tx
-                .send(WorkerInbound::ReplaceContextEvents {
-                    source_key,
-                    from_time,
-                    events: events_by_worker[worker_index].clone(),
-                    reply: tx,
-                })
-                .map_err(|_| RouterError::Error)?;
-            rxs.push(rx);
-        }
         for rx in rxs {
-            rx.recv().map_err(|_| RouterError::Error)?;
+            rx.recv().map_err(|_| RouterError::Error)?.map_err(RouterError::ApplyFailed)?;
         }
         Ok(())
     }
 
-    pub fn send_snapshot(&self, snapshot_lane: SL) -> Result<ApplyHandle, RouterError> {
-        let usage = self.memory_usage.load(Ordering::Relaxed);
-        let budget = self.memory_budget.load(Ordering::Relaxed);
-        if usage + snapshot_lane.conservative_size() >= budget {
-            return Err(RouterError::MemoryFull);
-        }
-
-        let index = self.worker_index(snapshot_lane.id());
-        let (tx, rx) = bounded(1);
-        self.workers[index]
-            .worker_inbound_tx
-            .send(WorkerInbound::Snapshot { snapshot: snapshot_lane, reply: tx })
-            .map_err(|_| RouterError::Error)?;
-
-        Ok(ApplyHandle::new(vec![rx]))
-    }
-
-    pub fn apply_snapshot(&self, snapshot_lane: SL) -> Result<(), RouterError> {
-        self.send_snapshot(snapshot_lane)?.wait().map_err(|_| RouterError::Error)
-    }
-
-    pub fn query_at(&self, time: i64, snapshot_id: u128) -> Result<QueryHandle<SL>, RouterError> {
-        let index = self.worker_index(snapshot_id);
-        let (tx, rx) = bounded(1);
-        self.workers[index]
-            .worker_inbound_tx
-            .send(WorkerInbound::SnapshotAt { snapshot_id, time, reply: tx })
-            .map_err(|_| RouterError::Error)?;
-
-        Ok(QueryHandle::new(rx))
-    }
-
-    pub fn at(&self, time: i64, snapshot_id: u128) -> Result<QueryResult<SL>, RouterError> {
-        self.query_at(time, snapshot_id)?.wait().map_err(|_| RouterError::Error)
-    }
-
-    pub fn many_at(&self, time: i64, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError> {
+    pub fn query_at(&self, time: i64, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError> {
         if snapshot_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -238,25 +153,18 @@ where
         Ok(results)
     }
 
-    pub fn snapshot_lanes_by_worker(&self, time: i64) -> Result<Vec<Vec<SL>>, RouterError> {
-        let mut rxs = Vec::with_capacity(self.workers.len());
-        for worker in &self.workers {
-            let (tx, rx) = bounded(1);
-            worker.worker_inbound_tx.send(WorkerInbound::SnapshotLanesAt { time, reply: tx }).map_err(|_| RouterError::Error)?;
-            rxs.push(rx);
+    pub fn advance_to(&self, time: i64) -> Result<(), RouterError> {
+        let mut current = self.current_time.load(Ordering::Relaxed);
+        loop {
+            if time <= current {
+                return Ok(());
+            }
+            match self.current_time.compare_exchange_weak(current, time, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
         }
 
-        let mut lanes_by_worker = Vec::with_capacity(rxs.len());
-        for rx in rxs {
-            lanes_by_worker.push(rx.recv().map_err(|_| RouterError::Error)?);
-        }
-
-        Ok(lanes_by_worker)
-    }
-
-    pub fn send_advance(&self, time: i64) -> Result<AdvanceHandle, RouterError> {
-        let subscribers = Arc::clone(&self.time_advance_subscribers);
-        let advanced_to = self.current_time.fetch_add(time, Ordering::Relaxed).saturating_add(time);
         let mut rxs = Vec::new();
         for worker in &self.workers {
             let (tx, rx) = bounded(1);
@@ -264,53 +172,19 @@ where
             rxs.push(rx);
         }
 
-        Ok(AdvanceHandle::new_with_completion(
-            rxs,
-            Box::new(move || {
-                notify_time_advances(&subscribers, TimeAdvance { current_time: advanced_to, delta: time });
-            }),
-        ))
-    }
-
-    pub fn advance(&self, time: i64) -> Result<(), RouterError> {
-        self.send_advance(time)?.wait().map_err(|_| RouterError::Error)
-    }
-
-    pub fn send_advance_to(&self, time: i64) -> Result<AdvanceHandle, RouterError> {
-        let current = self.current_time.load(Ordering::Relaxed);
-        let delta = time.saturating_sub(current);
-        if delta <= 0 {
-            return Ok(AdvanceHandle::new(Vec::new()));
+        for rx in rxs {
+            rx.recv().map_err(|_| RouterError::Error)?;
         }
-        self.send_advance(delta)
-    }
-
-    pub fn advance_to(&self, time: i64) -> Result<(), RouterError> {
-        self.send_advance_to(time)?.wait().map_err(|_| RouterError::Error)
+        Ok(())
     }
 
     pub fn current_time(&self) -> i64 {
         self.current_time.load(Ordering::Relaxed)
     }
 
-    pub fn subscribe_time_advances(&self) -> Result<TimeAdvanceSubscription, RouterError> {
-        let (tx, rx) = flume_bounded(SUBSCRIPTION_CHANNEL_CAPACITY);
-        self.time_advance_subscribers.lock().map_err(|_| RouterError::Error)?.push(tx);
-        Ok(TimeAdvanceSubscription::new(rx))
-    }
-
     fn worker_index(&self, snapshot_id: u128) -> usize {
         let hash = self.hasher.hash_one(snapshot_id);
 
         hash as usize % self.workers.len()
-    }
-}
-
-fn notify_time_advances(subscribers: &Arc<Mutex<Vec<flume::Sender<TimeAdvance>>>>, advance: TimeAdvance) {
-    if let Ok(mut subscribers) = subscribers.lock() {
-        subscribers.retain(|tx| match tx.send(advance) {
-            Ok(()) => true,
-            Err(flume::SendError(_)) => false,
-        });
     }
 }

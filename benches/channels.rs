@@ -1,10 +1,10 @@
 use std::hint::black_box;
-use std::sync::mpsc::{sync_channel, Receiver as StdReceiver, SyncSender};
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::thread::{self, JoinHandle};
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use crossbeam_channel::{bounded as crossbeam_bounded, Receiver as CrossbeamReceiver, Sender as CrossbeamSender};
-use flume::{bounded as flume_bounded, Receiver as FlumeReceiver, Sender as FlumeSender};
+use crossbeam_channel::{bounded as crossbeam_bounded, Sender as CrossbeamSender};
+use flume::{bounded as flume_bounded, Sender as FlumeSender};
 
 #[derive(Clone, Debug)]
 struct SmallSnapshot {
@@ -62,7 +62,6 @@ mod flume_impl {
     enum QueryReply {
         NotFound,
         FoundSmall(SmallSnapshot),
-        FoundWithReceiver { snapshot: SmallSnapshot, reconciliation_rx: FlumeReceiver<()> },
     }
 
     enum QueryRequest {
@@ -87,11 +86,7 @@ mod flume_impl {
                             } else if snapshot_id == 1 {
                                 let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             } else {
-                                let (_reconciliation_tx, reconciliation_rx) = flume_bounded::<()>(1000);
-                                let _ = reply.send(QueryReply::FoundWithReceiver {
-                                    snapshot: SmallSnapshot { id: snapshot_id, time, sum: 1 },
-                                    reconciliation_rx,
-                                });
+                                let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             }
                         }
                         QueryRequest::Shutdown => break,
@@ -123,20 +118,6 @@ mod flume_impl {
                     black_box(snapshot.sum);
                 }
                 _ => panic!("expected found small"),
-            }
-        }
-
-        pub fn query_found_with_receiver(&self) {
-            let (reply_tx, reply_rx) = flume_bounded::<QueryReply>(1);
-            self.request_tx.send(QueryRequest::SnapshotAt { snapshot_id: 2, time: 1, reply: reply_tx }).expect("request should send");
-            match reply_rx.recv().expect("reply should arrive") {
-                QueryReply::FoundWithReceiver { snapshot, reconciliation_rx } => {
-                    black_box(snapshot.id);
-                    black_box(snapshot.time);
-                    black_box(snapshot.sum);
-                    black_box(reconciliation_rx);
-                }
-                _ => panic!("expected found with receiver"),
             }
         }
     }
@@ -212,7 +193,6 @@ mod crossbeam_impl {
     enum QueryReply {
         NotFound,
         FoundSmall(SmallSnapshot),
-        FoundWithReceiver { snapshot: SmallSnapshot, reconciliation_rx: CrossbeamReceiver<()> },
     }
 
     enum QueryRequest {
@@ -237,11 +217,7 @@ mod crossbeam_impl {
                             } else if snapshot_id == 1 {
                                 let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             } else {
-                                let (_reconciliation_tx, reconciliation_rx) = crossbeam_bounded::<()>(1000);
-                                let _ = reply.send(QueryReply::FoundWithReceiver {
-                                    snapshot: SmallSnapshot { id: snapshot_id, time, sum: 1 },
-                                    reconciliation_rx,
-                                });
+                                let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             }
                         }
                         QueryRequest::Shutdown => break,
@@ -273,20 +249,6 @@ mod crossbeam_impl {
                     black_box(snapshot.sum);
                 }
                 _ => panic!("expected found small"),
-            }
-        }
-
-        pub fn query_found_with_receiver(&self) {
-            let (reply_tx, reply_rx) = crossbeam_bounded::<QueryReply>(1);
-            self.request_tx.send(QueryRequest::SnapshotAt { snapshot_id: 2, time: 1, reply: reply_tx }).expect("request should send");
-            match reply_rx.recv().expect("reply should arrive") {
-                QueryReply::FoundWithReceiver { snapshot, reconciliation_rx } => {
-                    black_box(snapshot.id);
-                    black_box(snapshot.time);
-                    black_box(snapshot.sum);
-                    black_box(reconciliation_rx);
-                }
-                _ => panic!("expected found with receiver"),
             }
         }
     }
@@ -362,7 +324,6 @@ mod std_sync_impl {
     enum QueryReply {
         NotFound,
         FoundSmall(SmallSnapshot),
-        FoundWithReceiver { snapshot: SmallSnapshot, reconciliation_rx: StdReceiver<()> },
     }
 
     enum QueryRequest {
@@ -387,11 +348,7 @@ mod std_sync_impl {
                             } else if snapshot_id == 1 {
                                 let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             } else {
-                                let (_reconciliation_tx, reconciliation_rx) = sync_channel::<()>(1000);
-                                let _ = reply.send(QueryReply::FoundWithReceiver {
-                                    snapshot: SmallSnapshot { id: snapshot_id, time, sum: 1 },
-                                    reconciliation_rx,
-                                });
+                                let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             }
                         }
                         QueryRequest::Shutdown => break,
@@ -423,20 +380,6 @@ mod std_sync_impl {
                     black_box(snapshot.sum);
                 }
                 _ => panic!("expected found small"),
-            }
-        }
-
-        pub fn query_found_with_receiver(&self) {
-            let (reply_tx, reply_rx) = sync_channel::<QueryReply>(1);
-            self.request_tx.send(QueryRequest::SnapshotAt { snapshot_id: 2, time: 1, reply: reply_tx }).expect("request should send");
-            match reply_rx.recv().expect("reply should arrive") {
-                QueryReply::FoundWithReceiver { snapshot, reconciliation_rx } => {
-                    black_box(snapshot.id);
-                    black_box(snapshot.time);
-                    black_box(snapshot.sum);
-                    black_box(reconciliation_rx);
-                }
-                _ => panic!("expected found with receiver"),
             }
         }
     }
@@ -484,11 +427,6 @@ fn benchmark_channel_roundtrip(runner: &mut Criterion) {
         let worker = flume_impl::QueryWorker::new();
         bencher.iter(|| worker.query_found_small());
     });
-    group.bench_function("flume/query_found_with_receiver", |bencher| {
-        let worker = flume_impl::QueryWorker::new();
-        bencher.iter(|| worker.query_found_with_receiver());
-    });
-
     group.bench_function("crossbeam/bounded_create", |bencher| {
         bencher.iter(crossbeam_impl::bounded_create);
     });
@@ -507,11 +445,6 @@ fn benchmark_channel_roundtrip(runner: &mut Criterion) {
         let worker = crossbeam_impl::QueryWorker::new();
         bencher.iter(|| worker.query_found_small());
     });
-    group.bench_function("crossbeam/query_found_with_receiver", |bencher| {
-        let worker = crossbeam_impl::QueryWorker::new();
-        bencher.iter(|| worker.query_found_with_receiver());
-    });
-
     group.bench_function("std_sync/bounded_create", |bencher| {
         bencher.iter(std_sync_impl::bounded_create);
     });
@@ -530,11 +463,6 @@ fn benchmark_channel_roundtrip(runner: &mut Criterion) {
         let worker = std_sync_impl::QueryWorker::new();
         bencher.iter(|| worker.query_found_small());
     });
-    group.bench_function("std_sync/query_found_with_receiver", |bencher| {
-        let worker = std_sync_impl::QueryWorker::new();
-        bencher.iter(|| worker.query_found_with_receiver());
-    });
-
     group.finish();
 }
 

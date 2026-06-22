@@ -1,5 +1,5 @@
 error: expected square brackets
-  --> tests/ui/malformed_fragment.rs:89:34
+  --> tests/ui/malformed_fragment.rs:87:34
    |
-89 |     routes { Shared(OnBroken) => BrokenAt, }
+87 |     routes { Shared(OnBroken) => BrokenAt, }
    |                                  ^^^^^^^^

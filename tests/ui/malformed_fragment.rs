@@ -1,4 +1,4 @@
-use contime::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct BrokenAt {
@@ -72,7 +72,7 @@ impl SnapshotEvent<BrokenAt> for BrokenAtEvent {
 
 impl ApplyEvents for BrokenAt {
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             match event {
                 BrokenAtEvent::OnBroken(event) => self.id = event.id,
             }
@@ -80,8 +80,6 @@ impl ApplyEvents for BrokenAt {
         self.time = batch.time;
     }
 }
-
-impl<C> AfterApplyEvents<C> for BrokenAt {}
 
 contime::fragment! {
     macro broken_fragment;

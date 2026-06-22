@@ -10,8 +10,8 @@
 //! usually needs to see first:
 //!
 //! 1. Queries are historical: you ask for the state of one snapshot at a chosen time.
-//! 2. Late events are handled by replaying history in event-time order, which can trigger
-//!    reconciliation for readers that already queried a later point in time.
+//! 2. Late events are handled by replaying history in event-time order, so later queries
+//!    reflect the corrected historical state.
 //!
 //! The domain model here is deliberately simple:
 //!
@@ -28,14 +28,12 @@
 //! - Apply value `100` at `t=10`
 //! - Query at `t=11`, which initially yields `[50, 100]`
 //! - Apply a late value `70` at `t=7`
-//! - Observe reconciliation and re-query historical points
+//! - Re-query historical points
 //!
 //! After the late event arrives, querying at `t=11` yields `[50, 70, 100]`, even though the
 //! event with value `70` was applied last in wall-clock order.
 
-use std::time::Duration;
-
-use contime::{AfterApplyEvents, ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
 
 /// Point-in-time state for one logical stream of received values.
 ///
@@ -128,14 +126,12 @@ impl ApplyEvents for OrderedValuesSnapshot {
     /// ordered because `contime` replays events in event-time order.
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
         self.id = batch.snapshot_id;
-        for event in batch.events {
+        for event in batch.events.iter().copied() {
             self.values.push(event.value);
         }
         self.time = batch.time;
     }
 }
-
-impl<C> AfterApplyEvents<C> for OrderedValuesSnapshot {}
 
 // Generate the lane enums and a typed `Contime` alias for this single-snapshot example.
 contime::contime! {
@@ -155,13 +151,17 @@ fn show_snapshot(label: &str, snapshot: &OrderedValuesSnapshot) {
     println!("{label}: t={} values={:?}", snapshot.time, snapshot.values);
 }
 
+fn query_snapshot(contime: &ordered_values_lanes::Contime, time: i64, snapshot_id: u128) -> OrderedValuesSnapshot {
+    contime.query_at(time, &[snapshot_id]).expect("query should succeed").pop().flatten().expect("snapshot should exist").into()
+}
+
 fn main() {
     // One worker is enough for this example. The memory budget only needs to be large enough
     // for a handful of small events and snapshots.
     let contime = ordered_values_lanes::Contime::new(1, 4_096);
 
     println!("Building continuous-time history for snapshot 1.");
-    println!("Query times are exclusive, so query one tick after the last event you want included.");
+    println!("Query times are inclusive, so querying at an event time includes that event.");
 
     // Start with two in-order events so the baseline history is easy to reason about.
     println!("Applying event at t=5 with value 50.");
@@ -171,9 +171,7 @@ fn main() {
     contime.apply_event(receive_value(1, 10, 101, 100)).expect("second event should apply");
 
     // Query after both events. At this point the observed history is [50, 100].
-    // Keep the reconciliation receiver so we can detect later historical changes.
-    let (before_late_event, reconciliation_rx) =
-        contime.at::<OrderedValuesSnapshot>(11, 1).expect("snapshot should exist after initial events");
+    let before_late_event = query_snapshot(&contime, 11, 1);
     assert_eq!(before_late_event.values, vec![50, 100]);
     show_snapshot("Before the late event", &before_late_event);
 
@@ -182,30 +180,19 @@ fn main() {
     println!("Applying a late event at t=7 with value 70.");
     contime.apply_event(receive_value(1, 7, 102, 70)).expect("late event should apply");
 
-    // Because we already queried a later time, `contime` reports that the historical range
-    // from t=7 through the previous latest event time must be reconsidered.
-    let reconciliation = reconciliation_rx.recv_timeout(Duration::from_secs(1)).expect("late event should trigger reconciliation");
-    assert_eq!(reconciliation.snapshot_id, 1);
-    assert_eq!(reconciliation.from_time, 7);
-    assert_eq!(reconciliation.to_time, 10);
-    println!(
-        "Reconciliation requested for snapshot {} from t={} to t={}.",
-        reconciliation.snapshot_id, reconciliation.from_time, reconciliation.to_time
-    );
-
     // Query before the late event's time: only the first value is visible.
-    let (at_6, _) = contime.at::<OrderedValuesSnapshot>(6, 1).expect("query at t=6 should succeed");
+    let at_6 = query_snapshot(&contime, 6, 1);
     assert_eq!(at_6.values, vec![50]);
     show_snapshot("Values visible at t=6", &at_6);
 
     // Query just after the late event: the new value appears between the two original events.
-    let (at_8, _) = contime.at::<OrderedValuesSnapshot>(8, 1).expect("query at t=8 should succeed");
+    let at_8 = query_snapshot(&contime, 8, 1);
     assert_eq!(at_8.values, vec![50, 70]);
     show_snapshot("Values visible at t=8", &at_8);
 
     // Query the later time again. The final history is now chronologically ordered even
     // though value 70 was the last event applied in real time.
-    let (at_11, _) = contime.at::<OrderedValuesSnapshot>(11, 1).expect("query at t=11 should succeed");
+    let at_11 = query_snapshot(&contime, 11, 1);
     assert_eq!(at_11.values, vec![50, 70, 100]);
     show_snapshot("Values visible at t=11 after replay", &at_11);
 

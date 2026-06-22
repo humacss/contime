@@ -126,49 +126,19 @@ macro_rules! contime {
                     match self {
                         SnapshotLanes::$snapshot(snapshot) => {
                             let mut bucket = Vec::new();
-                            for event in batch.events {
+                            for event in batch.events.iter().copied() {
                                 match event {
                                     EventLanes::$event(event) => bucket.push(event.clone().into()),
                                 }
                             }
+                            let bucket = bucket.iter().collect::<Vec<_>>();
                             <$snapshot as $crate::ApplyEvents>::apply_events(
                                 snapshot,
                                 $crate::ApplyBatch {
                                     snapshot_id: batch.snapshot_id,
                                     time: batch.time,
                                     events: &bucket,
-                                    bucket_revision: batch.bucket_revision,
                                 },
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Generic over C so it works with any context (including StreamContext)
-            impl<C> $crate::AfterApplyEvents<C> for SnapshotLanes
-            where
-                $snapshot: $crate::AfterApplyEvents<C>,
-                <$snapshot as $crate::Snapshot>::Event: From<$event>,
-            {
-                fn after_apply_events(&self, batch: $crate::ApplyBatch<'_, Self::Event>, context: &mut C) {
-                    match self {
-                        SnapshotLanes::$snapshot(snapshot) => {
-                            let mut bucket = Vec::new();
-                            for event in batch.events {
-                                match event {
-                                    EventLanes::$event(event) => bucket.push(event.clone().into()),
-                                }
-                            }
-                            <$snapshot as $crate::AfterApplyEvents<C>>::after_apply_events(
-                                snapshot,
-                                $crate::ApplyBatch {
-                                    snapshot_id: batch.snapshot_id,
-                                    time: batch.time,
-                                    events: &bucket,
-                                    bucket_revision: batch.bucket_revision,
-                                },
-                                context,
                             );
                         }
                     }

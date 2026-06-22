@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 /// A point-in-time state for one logical entity in `contime`.
 ///
-/// Snapshots are the states that get queried, checkpointed, and reconciled over time.
+/// Snapshots are the states that get queried and checkpointed over time.
 pub trait Snapshot: Send + Sync + Clone + Debug + PartialEq + Eq {
     /// The event type that mutates this snapshot.
     type Event: Event + Clone + PartialEq + Eq;
@@ -73,8 +73,7 @@ pub trait Event: Send + Sync + Debug {
 pub struct ApplyBatch<'a, E> {
     pub snapshot_id: u128,
     pub time: i64,
-    pub events: &'a [E],
-    pub bucket_revision: u64,
+    pub events: &'a [&'a E],
 }
 
 impl<'a, E> Clone for ApplyBatch<'a, E> {
@@ -88,40 +87,6 @@ impl<'a, E> Copy for ApplyBatch<'a, E> {}
 pub trait ApplyEvents: Snapshot {
     /// Mutates the snapshot with all events for one routed `time` bucket.
     fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>);
-}
-
-/// Runs context-aware work after one event bucket applies to a snapshot.
-pub trait AfterApplyEvents<C = ()>: Snapshot {
-    /// Runs after [`ApplyEvents::apply_events`] against the final post-bucket
-    /// snapshot.
-    fn after_apply_events(&self, _batch: ApplyBatch<'_, Self::Event>, _context: &mut C) {}
-}
-
-/// Neutral extension seam for events produced while applying an event bucket.
-///
-/// Public `contime` does not interpret why these events were produced. It only
-/// drains them after the current apply completes and routes them through normal
-/// event application.
-pub trait ApplyContextEvents<E> {
-    fn emit_after_apply_event(&self, _event: E) {}
-
-    fn replace_after_apply_events(&self, _source_key: u128, _from_time: i64, _events: Vec<E>) {}
-
-    fn drain_after_apply_events(&self) -> Vec<E> {
-        Vec::new()
-    }
-
-    fn drain_after_apply_replacements(&self) -> Vec<ApplyContextEventReplacement<E>> {
-        Vec::new()
-    }
-}
-
-impl<E> ApplyContextEvents<E> for () {}
-
-pub struct ApplyContextEventReplacement<E> {
-    pub source_key: u128,
-    pub from_time: i64,
-    pub events: Vec<E>,
 }
 
 /// Marker trait for the generated or user-defined event lane enum.

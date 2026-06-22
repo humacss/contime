@@ -7,12 +7,11 @@
 //! # Workflow
 //!
 //! 1. Implement [`Snapshot`], [`Event`], and [`ApplyEvents`] for your domain types.
-//! 2. Generate lane enums with [`contime!`], or assemble larger runtimes with
+//! 2. Generate lane enums with [`contime!`], or assemble larger lane sets with
 //!    [`fragment!`] and [`lanes!`], or define compatible lane types manually.
 //! 3. Construct a [`Contime`] with a worker count and memory budget.
-//! 4. Apply events or authoritative snapshots.
-//! 5. Query state with [`Contime::at`] or [`Contime::query_at`] and listen for
-//!    [`Reconciliation`] notifications when late data changes previously queried history.
+//! 4. Apply events.
+//! 5. Query state with [`Contime::query_at`].
 //!
 //! Point queries include all events at the queried millisecond.
 //!
@@ -21,7 +20,7 @@
 //! For a runnable custom-type setup, see `examples/ordered_values.rs` and run
 //! `cargo run --example ordered_values`.
 //!
-//! The quick doctest below uses the exported test fixtures to show the runtime flow end to end
+//! The quick doctest below uses the exported test fixtures to show the `contime` flow end to end
 //! with the current public API.
 //!
 //! ```rust
@@ -31,18 +30,15 @@
 //!
 //! contime.apply_event(TestEvent::Positive(1, 5, 10, 3)).unwrap();
 //!
-//! let (snapshot, reconciliation_rx) = contime.at::<TestSnapshot>(6, 1).unwrap();
+//! let snapshot: TestSnapshot = contime.query_at(6, &[1]).unwrap().pop().flatten().unwrap().into();
 //! assert_eq!(snapshot.sum, 3);
 //!
 //! contime.apply_event(TestEvent::Positive(1, 4, 11, 2)).unwrap();
 //!
-//! let reconciliation = reconciliation_rx.recv().unwrap();
-//! assert_eq!(reconciliation.snapshot_id, 1);
-//! assert_eq!(reconciliation.from_time, 4);
-//! assert_eq!(reconciliation.to_time, 5);
+//! let snapshot: TestSnapshot = contime.query_at(6, &[1]).unwrap().pop().flatten().unwrap().into();
+//! assert_eq!(snapshot.sum, 5);
 //! ```
 mod api;
-mod handle;
 mod history;
 mod key;
 mod macros;
@@ -60,12 +56,8 @@ pub use api::{Contime, ContimeError};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::fragment;
-pub use handle::{AdvanceHandle, ApplyHandle, HandleError, QueryHandle, QueryResult, TimeAdvance, TimeAdvanceSubscription};
-pub use history::{ApplyOutcome, Reconciliation, SnapshotHistory};
-pub use traits::{
-    AfterApplyEvents, ApplyBatch, ApplyContextEventReplacement, ApplyContextEvents, ApplyEvents, Event, EventLanes, RoutedSnapshot,
-    SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes,
-};
+pub use history::{ApplyError, ApplyInner, ApplyWrapper, SnapshotHistory};
+pub use traits::{ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
 
 mod test;
 pub use test::*;
