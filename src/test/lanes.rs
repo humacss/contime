@@ -1,9 +1,11 @@
 use crate::{TestEvent, TestSnapshot};
 
-crate::contime! {
-    TestSnapshot {
-        TestEvent,
-    }
+crate::lanes! {
+    mod __contime;
+    snapshots [TestSnapshot];
+    routes [
+        TestEvent => [TestSnapshot],
+    ];
 }
 
 pub use __contime::Contime as TestSnapshotContime;

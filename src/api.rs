@@ -27,7 +27,7 @@ impl From<RouterError> for ContimeError {
 
 /// Main entry point for building and querying continuous-time state.
 ///
-/// `SL` and `EL` are usually generated with [`crate::contime!`].
+/// `SL` and `EL` are usually generated with [`crate::lanes!`].
 pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = ()>
 where
     C: ApplyWrapper<SL>,
@@ -47,7 +47,7 @@ where
 {
     /// Creates a `contime` instance with `worker_count` workers and a shared memory budget.
     ///
-    /// Most users generate `SL` and `EL` with [`crate::contime!`].
+    /// Most users generate `SL` and `EL` with [`crate::lanes!`].
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
         let router = Router::<SL, EL>::new(worker_count, memory_budget_bytes);
 

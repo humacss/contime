@@ -138,10 +138,12 @@ impl ApplyWrapper<ContextValueAt> for ApplyBatchTrace {
     }
 }
 
-contime::contime! {
+contime::lanes! {
     mod context_contime;
-    snapshots { ContextValueAt },
-    OnContextValueChanged(OnContextValueChanged) => [ContextValueAt],
+    snapshots [ContextValueAt];
+    routes [
+        OnContextValueChanged => [ContextValueAt],
+    ];
 }
 
 use context_contime::{EventLanes, SnapshotLanes};
