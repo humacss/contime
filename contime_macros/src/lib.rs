@@ -1,7 +1,6 @@
 //! Hidden proc-macro helpers for `contime`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::str::FromStr;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -9,7 +8,9 @@ use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Error, Ident, Path, Result, Token, Type, parse_macro_input};
+use syn::{
+    Block, DeriveInput, Error, Expr, Fields, Ident, Path, Result, Token, Type, parse_macro_input,
+};
 
 #[proc_macro]
 pub fn __lanes_merge(input: TokenStream) -> TokenStream {
@@ -20,14 +21,31 @@ pub fn __lanes_merge(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
-pub fn fragment(input: TokenStream) -> TokenStream {
-    match expand_fragment(parse_macro_input!(input as FragmentDecl)) {
+pub fn lanes(input: TokenStream) -> TokenStream {
+    match expand_lanes(parse_macro_input!(input as NewLanesManifest)) {
         Ok(tokens) => tokens.into(),
         Err(error) => error.to_compile_error().into(),
     }
 }
 
-fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
+#[proc_macro_derive(ContimeEvent, attributes(contime_event))]
+pub fn derive_contime_event(input: TokenStream) -> TokenStream {
+    match expand_contime_event(parse_macro_input!(input as DeriveInput)) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(ContimeSnapshot, attributes(contime_snapshot))]
+pub fn derive_contime_snapshot(input: TokenStream) -> TokenStream {
+    match expand_contime_snapshot(parse_macro_input!(input as DeriveInput)) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
+fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
+    let input = input.into();
     let snapshots = dedupe_snapshots(&input.snapshots)?;
     let routes = merge_routes(&input.routes)?;
     validate_route_targets(&snapshots, &routes)?;
@@ -110,13 +128,15 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
                     }
                 }
 
-                impl TryFrom<SnapshotLanes> for #ty {
-                    type Error = SnapshotLanes;
-
-                    fn try_from(lane: SnapshotLanes) -> Result<Self, Self::Error> {
+                impl From<SnapshotLanes> for #ty {
+                    fn from(lane: SnapshotLanes) -> Self {
                         match lane {
-                            SnapshotLanes::#variant(snapshot) => Ok(snapshot),
-                            other => Err(other),
+                            SnapshotLanes::#variant(snapshot) => snapshot,
+                            other => panic!(
+                                "cannot convert snapshot lane {:?} into {}",
+                                other,
+                                stringify!(#ty)
+                            ),
                         }
                     }
                 }
@@ -306,6 +326,10 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
         .collect::<Vec<_>>();
 
     let modname = input.modname;
+    let context_ty = input
+        .context
+        .map(|context| quote! { #context })
+        .unwrap_or_else(|| quote! { () });
 
     Ok(quote! {
         mod #modname {
@@ -422,7 +446,321 @@ fn expand_lanes(input: LanesManifest) -> Result<TokenStream2> {
 
             #( #event_from_impls )*
 
-            pub type Contime = ::contime::Contime<SnapshotLanes, EventLanes>;
+            pub type Contime = ::contime::Contime<SnapshotLanes, EventLanes, #context_ty>;
+        }
+    })
+}
+
+fn expand_contime_event(input: DeriveInput) -> Result<TokenStream2> {
+    let name = input.ident;
+    let attr = input
+        .attrs
+        .iter()
+        .find(|attr| attr.path().is_ident("contime_event"))
+        .ok_or_else(|| Error::new(name.span(), "missing `#[contime_event(...)]` attribute"))?;
+    let config = attr.parse_args::<EventDeriveConfig>()?;
+    let id = config
+        .id
+        .ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `id = ...`"))?;
+    let time = config
+        .time
+        .ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `time = ...`"))?;
+    let bytes = config
+        .bytes
+        .ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `bytes = ...`"))?;
+
+    Ok(quote! {
+        impl ::contime::Event for #name {
+            fn id(&self) -> u128 {
+                #id
+            }
+
+            fn time(&self) -> i64 {
+                #time
+            }
+
+            fn conservative_size(&self) -> u64 {
+                #bytes
+            }
+        }
+    })
+}
+
+fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
+    let name = input.ident;
+    let attr = input
+        .attrs
+        .iter()
+        .find(|attr| attr.path().is_ident("contime_snapshot"))
+        .ok_or_else(|| Error::new(name.span(), "missing `#[contime_snapshot(...)]` attribute"))?;
+    match input.data {
+        syn::Data::Struct(data) => match data.fields {
+            Fields::Named(_) => {}
+            other => {
+                return Err(Error::new(
+                    other.span(),
+                    "`ContimeSnapshot` currently requires a struct with named fields",
+                ));
+            }
+        },
+        other => {
+            let _ = other;
+            return Err(Error::new(
+                name.span(),
+                "`ContimeSnapshot` can only be derived for structs",
+            ));
+        }
+    }
+
+    let config = attr.parse_args::<SnapshotDeriveConfig>()?;
+    let events = config
+        .events
+        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `events = [...]`"))?;
+    if events.is_empty() {
+        return Err(Error::new(attr.span(), "`contime_snapshot` requires at least one event"));
+    }
+    let ids = config
+        .ids
+        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `id = [...]`"))?;
+    if ids.len() != 1 {
+        return Err(Error::new(
+            attr.span(),
+            "`ContimeSnapshot` currently supports exactly one id field",
+        ));
+    }
+    let id = ids
+        .first()
+        .expect("checked len")
+        .clone();
+    let time = config
+        .time
+        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `time = ...`"))?;
+    let bytes = config
+        .bytes
+        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `bytes = ...`"))?;
+    let apply = config
+        .apply
+        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `apply = { ... }`"))?;
+
+    let event_enum = Ident::new(&format!("{name}Event"), name.span());
+    let snapshot_lanes_macro = Ident::new(&format!("__ao_{name}_snapshot_lanes"), name.span());
+    let event_lanes_macro = Ident::new(&format!("__ao_{name}_event_lanes"), name.span());
+    let snapshot_fragment_macro = Ident::new(&format!("__ao_snapshot_fragment_{name}"), name.span());
+    let event_variants = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event);
+            variant.map(|variant| quote! { #variant(#event), })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let event_id_arms = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event)?;
+            Ok(quote! { Self::#variant(event) => <#event as ::contime::Event>::id(event), })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let event_time_arms = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event)?;
+            Ok(quote! { Self::#variant(event) => <#event as ::contime::Event>::time(event), })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let event_size_arms = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event)?;
+            Ok(quote! { Self::#variant(event) => <#event as ::contime::Event>::conservative_size(event), })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let event_from_impls = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event)?;
+            Ok(quote! {
+                impl From<#event> for #event_enum {
+                    fn from(event: #event) -> Self {
+                        Self::#variant(event)
+                    }
+                }
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let event_snapshot_impls = events
+        .iter()
+        .map(|event| {
+            let id = &id;
+            Ok(quote! {
+                impl ::contime::SnapshotEvent<#name> for #event {
+                    fn snapshot_id(&self) -> u128 {
+                        self.#id
+                    }
+                }
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let seed_snapshot_impls = events
+        .iter()
+        .map(|event| {
+            let id = &id;
+            Ok(quote! {
+                impl ::contime::SeedSnapshot<#event> for #name {
+                    fn seed_from_event(event: &#event) -> Self {
+                        Self {
+                            #id: event.#id,
+                            time: ::contime::Event::time(event),
+                            ..Default::default()
+                        }
+                    }
+                }
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let from_event_arms = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event)?;
+            let id = &id;
+            Ok(quote! {
+                #event_enum::#variant(event) => Self {
+                    #id: event.#id,
+                    time: ::contime::Event::time(event),
+                    ..Default::default()
+                },
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(quote! {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub enum #event_enum {
+            #( #event_variants )*
+        }
+
+        impl ::contime::Event for #event_enum {
+            fn id(&self) -> u128 {
+                match self {
+                    #( #event_id_arms )*
+                }
+            }
+
+            fn time(&self) -> i64 {
+                match self {
+                    #( #event_time_arms )*
+                }
+            }
+
+            fn conservative_size(&self) -> u64 {
+                match self {
+                    #( #event_size_arms )*
+                }
+            }
+        }
+
+        #( #event_from_impls )*
+        #( #event_snapshot_impls )*
+        #( #seed_snapshot_impls )*
+
+        impl ::contime::Snapshot for #name {
+            type Event = #event_enum;
+
+            fn id(&self) -> u128 {
+                self.#id
+            }
+
+            fn time(&self) -> i64 {
+                #time
+            }
+
+            fn set_time(&mut self, time: i64) {
+                self.time = time;
+            }
+
+            fn conservative_size(&self) -> u64 {
+                #bytes
+            }
+
+            fn from_event(event: &Self::Event) -> Self {
+                match event {
+                    #( #from_event_arms )*
+                }
+            }
+        }
+
+        impl ::contime::ApplyEvents for #name {
+            fn apply_events(&mut self, batch: ::contime::ApplyBatch<'_, Self::Event>) {
+                let batch = batch;
+                #apply
+            }
+        }
+
+        macro_rules! #snapshot_lanes_macro {
+            (
+                @ao_collect_enum
+                enum $name:ident
+                vis { $vis:vis }
+                attrs { $($attrs:tt)* }
+                variants { $($variants:tt)* }
+                rest [ $next:path $(, $rest:path)* $(,)? ]
+            ) => {
+                $next! {
+                    @ao_collect_enum
+                    enum $name
+                    vis { $vis }
+                    attrs { $($attrs)* }
+                    variants {
+                        $($variants)*
+                        #name(#name),
+                    }
+                    rest [ $($rest),* ]
+                }
+            };
+        }
+
+        macro_rules! #event_lanes_macro {
+            (
+                @ao_collect_enum
+                enum $name:ident
+                vis { $vis:vis }
+                attrs { $($attrs:tt)* }
+                variants { $($variants:tt)* }
+                rest [ $next:path $(, $rest:path)* $(,)? ]
+            ) => {
+                $next! {
+                    @ao_collect_enum
+                    enum $name
+                    vis { $vis }
+                    attrs { $($attrs)* }
+                    variants {
+                        $($variants)*
+                        #name(#event_enum),
+                    }
+                    rest [ $($rest),* ]
+                }
+            };
+        }
+
+        macro_rules! #snapshot_fragment_macro {
+            (
+                @append
+                snapshots { $($snapshots:tt)* }
+                event_routes { $($event_routes:tt)* }
+                fragments [ $next:path $(, $rest:path)* $(,)? ]
+            ) => {
+                $next! {
+                    @append
+                    snapshots {
+                        $($snapshots)*
+                        #name,
+                    }
+                    event_routes {
+                        $($event_routes)*
+                        #event_enum(#event_enum) => #event_enum => [#name],
+                    }
+                    fragments [ $($rest),* ]
+                }
+            };
         }
     })
 }
@@ -578,48 +916,30 @@ struct RouteSpec {
 
 struct LanesManifest {
     modname: Ident,
+    context: Option<Type>,
     snapshots: Vec<Path>,
     routes: Vec<RouteEntry>,
 }
 
-struct FragmentDecl {
-    name: Ident,
+struct NewLanesManifest {
+    modname: Ident,
+    context: Option<Type>,
     snapshots: Vec<Path>,
     routes: Vec<RouteEntry>,
 }
 
-impl Parse for FragmentDecl {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        input.parse::<Token![macro]>()?;
-        let name = input.parse::<Ident>()?;
-        input.parse::<Token![;]>()?;
+struct EventDeriveConfig {
+    id: Option<Expr>,
+    time: Option<Expr>,
+    bytes: Option<Expr>,
+}
 
-        let snapshots_label = input.parse::<Ident>()?;
-        if snapshots_label != "snapshots" {
-            return Err(Error::new(snapshots_label.span(), "expected `snapshots`"));
-        }
-        let snapshots_content;
-        syn::braced!(snapshots_content in input);
-        let snapshots = Punctuated::<Path, Token![,]>::parse_terminated(&snapshots_content)?
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        let routes_label = input.parse::<Ident>()?;
-        if routes_label != "routes" {
-            return Err(Error::new(routes_label.span(), "expected `routes`"));
-        }
-        let routes_content;
-        syn::braced!(routes_content in input);
-        let routes = Punctuated::<RouteEntry, Token![,]>::parse_terminated(&routes_content)?
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        Ok(Self {
-            name,
-            snapshots,
-            routes,
-        })
-    }
+struct SnapshotDeriveConfig {
+    events: Option<Vec<Path>>,
+    ids: Option<Vec<Ident>>,
+    time: Option<Expr>,
+    bytes: Option<Expr>,
+    apply: Option<Block>,
 }
 
 impl Parse for LanesManifest {
@@ -649,15 +969,81 @@ impl Parse for LanesManifest {
 
         Ok(Self {
             modname,
+            context: None,
             snapshots,
             routes,
         })
     }
 }
 
+impl Parse for NewLanesManifest {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        input.parse::<Token![mod]>()?;
+        let modname = input.parse::<Ident>()?;
+        input.parse::<Token![;]>()?;
+
+        let mut context = None;
+        if input.peek(Ident) {
+            let fork = input.fork();
+            let label = fork.parse::<Ident>()?;
+            if label == "context" {
+                input.parse::<Ident>()?;
+                context = Some(input.parse::<Type>()?);
+                input.parse::<Token![;]>()?;
+            }
+        }
+
+        let snapshots_label = input.parse::<Ident>()?;
+        if snapshots_label != "snapshots" {
+            return Err(Error::new(snapshots_label.span(), "expected `snapshots`"));
+        }
+        let snapshots_content;
+        syn::bracketed!(snapshots_content in input);
+        let snapshots = Punctuated::<Path, Token![,]>::parse_terminated(&snapshots_content)?
+            .into_iter()
+            .collect::<Vec<_>>();
+        input.parse::<Token![;]>()?;
+
+        let routes_label = input.parse::<Ident>()?;
+        if routes_label != "routes" {
+            return Err(Error::new(routes_label.span(), "expected `routes`"));
+        }
+        let routes_content;
+        syn::bracketed!(routes_content in input);
+        let routes = Punctuated::<NewRouteEntry, Token![,]>::parse_terminated(&routes_content)?
+            .into_iter()
+            .map(RouteEntry::from)
+            .collect::<Vec<_>>();
+        input.parse::<Token![;]>()?;
+
+        Ok(Self {
+            modname,
+            context,
+            snapshots,
+            routes,
+        })
+    }
+}
+
+impl From<NewLanesManifest> for LanesManifest {
+    fn from(value: NewLanesManifest) -> Self {
+        Self {
+            modname: value.modname,
+            context: value.context,
+            snapshots: value.snapshots,
+            routes: value.routes,
+        }
+    }
+}
+
 struct RouteEntry {
     key: Ident,
     event_ty: Type,
+    targets: Vec<Path>,
+}
+
+struct NewRouteEntry {
+    event_ty: Path,
     targets: Vec<Path>,
 }
 
@@ -681,68 +1067,109 @@ impl Parse for RouteEntry {
     }
 }
 
-fn expand_fragment(input: FragmentDecl) -> Result<TokenStream2> {
-    let snapshots = input
-        .snapshots
-        .iter()
-        .map(|snapshot| format!("{},", snapshot.to_token_stream()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let routes = input
-        .routes
-        .iter()
-        .map(|route| {
-            let targets = route
-                .targets
-                .iter()
-                .map(|target| target.to_token_stream().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "{}({}) => [{}],",
-                route.key,
-                route.event_ty.to_token_stream(),
-                targets
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let source = format!(
-        r#"
-            macro_rules! {name} {{
-                (
-                    @append
-                    mod $modname:ident;
-                    snapshots {{ $( $existing_snapshot:tt )* }}
-                    routes {{ $( $existing_route:tt )* }}
-                    fragments [ $( $rest:ident ),* $(,)? ]
-                ) => {{
-                    ::contime::__contime_collect_fragments! {{
-                        @collect
-                        mod $modname;
-                        snapshots {{
-                            $( $existing_snapshot )*
-                            {snapshots}
-                        }}
-                        routes {{
-                            $( $existing_route )*
-                            {routes}
-                        }}
-                        fragments [ $( $rest ),* ]
-                    }}
-                }};
-            }}
+impl Parse for NewRouteEntry {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let event_ty = input.parse::<Path>()?;
+        input.parse::<Token![=>]>()?;
+        let targets_content;
+        syn::bracketed!(targets_content in input);
+        let targets = Punctuated::<Path, Token![,]>::parse_terminated(&targets_content)?
+            .into_iter()
+            .collect::<Vec<_>>();
+        Ok(Self { event_ty, targets })
+    }
+}
 
-            pub(crate) use {name};
-        "#,
-        name = input.name,
-        snapshots = snapshots,
-        routes = routes,
-    );
-    TokenStream2::from_str(&source).map_err(|error| {
-        Error::new(
-            Span::call_site(),
-            format!("failed to generate fragment macro: {error}"),
-        )
-    })
+impl From<NewRouteEntry> for RouteEntry {
+    fn from(value: NewRouteEntry) -> Self {
+        let key = trailing_ident(&value.event_ty).expect("parsed path has a trailing ident");
+        let event_ty = Type::Path(syn::TypePath {
+            qself: None,
+            path: value.event_ty,
+        });
+        Self {
+            key,
+            event_ty,
+            targets: value.targets,
+        }
+    }
+}
+
+impl Parse for EventDeriveConfig {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut config = Self {
+            id: None,
+            time: None,
+            bytes: None,
+        };
+        while !input.is_empty() {
+            let key = input.parse::<Ident>()?;
+            input.parse::<Token![=]>()?;
+            let expr = input.parse::<Expr>()?;
+            match key.to_string().as_str() {
+                "id" => config.id = Some(expr),
+                "time" => config.time = Some(expr),
+                "bytes" => config.bytes = Some(expr),
+                other => {
+                    return Err(Error::new(
+                        key.span(),
+                        format!("unknown contime_event option `{other}`"),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(config)
+    }
+}
+
+impl Parse for SnapshotDeriveConfig {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut config = Self {
+            events: None,
+            ids: None,
+            time: None,
+            bytes: None,
+            apply: None,
+        };
+        while !input.is_empty() {
+            let key = input.parse::<Ident>()?;
+            input.parse::<Token![=]>()?;
+            match key.to_string().as_str() {
+                "events" => {
+                    let content;
+                    syn::bracketed!(content in input);
+                    config.events = Some(
+                        Punctuated::<Path, Token![,]>::parse_terminated(&content)?
+                            .into_iter()
+                            .collect(),
+                    );
+                }
+                "id" => {
+                    let content;
+                    syn::bracketed!(content in input);
+                    config.ids = Some(
+                        Punctuated::<Ident, Token![,]>::parse_terminated(&content)?
+                            .into_iter()
+                            .collect(),
+                    );
+                }
+                "time" => config.time = Some(input.parse::<Expr>()?),
+                "bytes" => config.bytes = Some(input.parse::<Expr>()?),
+                "apply" => config.apply = Some(input.parse::<Block>()?),
+                other => {
+                    return Err(Error::new(
+                        key.span(),
+                        format!("unknown contime_snapshot option `{other}`"),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(config)
+    }
 }

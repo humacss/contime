@@ -134,11 +134,12 @@ impl ApplyEvents for OrderedValuesSnapshot {
 }
 
 // Generate the lane enums and a typed `Contime` alias for this single-snapshot example.
-contime::contime! {
+contime::lanes! {
     mod ordered_values_lanes;
-    OrderedValuesSnapshot {
-        ReceiveValue,
-    }
+    snapshots [OrderedValuesSnapshot];
+    routes [
+        ReceiveValue => [OrderedValuesSnapshot],
+    ];
 }
 
 /// Small constructor helper to keep the timeline in `main` easy to scan.

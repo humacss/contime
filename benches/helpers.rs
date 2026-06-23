@@ -79,9 +79,12 @@ impl ApplyEvents for BenchSnapshot {
     }
 }
 
-contime::contime! {
+contime::lanes! {
     mod bench_lanes;
-    BenchSnapshot { BenchEvent }
+    snapshots [BenchSnapshot];
+    routes [
+        BenchEvent => [BenchSnapshot],
+    ];
 }
 
 #[allow(dead_code)]

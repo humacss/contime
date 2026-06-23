@@ -726,94 +726,43 @@ impl ApplyEvents for SharedMirrorAt {
     }
 }
 
-contime::fragment! {
-    macro fragment_value_fragment;
-
-    snapshots {
-        FragmentValueAt,
-    }
-
-    routes {
-        OnFragmentValueChanged(OnFragmentValueChanged) => [FragmentValueAt],
-    }
-}
-
-contime::fragment! {
-    macro alpha_fragment;
-
-    snapshots {
-        AlphaAt,
-    }
-
-    routes {
-        OnAlphaChanged(OnAlphaChanged) => [AlphaAt],
-    }
-}
-
-contime::fragment! {
-    macro beta_fragment;
-
-    snapshots {
-        BetaAt,
-    }
-
-    routes {
-        OnBetaChanged(OnBetaChanged) => [BetaAt],
-    }
-}
-
-contime::fragment! {
-    macro shared_primary_fragment;
-
-    snapshots {
-        SharedSourceAt,
-        SharedMirrorAt,
-    }
-
-    routes {
-        OnSharedValueChanged(OnSharedValueChanged) => [SharedSourceAt],
-    }
-}
-
-contime::fragment! {
-    macro shared_secondary_fragment;
-
-    snapshots {
-        SharedSourceAt,
-        SharedMirrorAt,
-    }
-
-    routes {
-        OnSharedValueChanged(OnSharedValueChanged) => [SharedMirrorAt],
-    }
-}
-
-contime::contime! {
+contime::lanes! {
     mod legacy_lanes;
-    snapshots { LegacyValueAt },
-    OnLegacyValueChanged(OnLegacyValueChanged) => [LegacyValueAt],
+    snapshots [LegacyValueAt];
+    routes [
+        OnLegacyValueChanged => [LegacyValueAt],
+    ];
 }
 
 contime::lanes! {
     mod fragment_lanes;
-    fragments [
-        fragment_value_fragment,
+    snapshots [FragmentValueAt];
+    routes [
+        OnFragmentValueChanged => [FragmentValueAt],
     ];
 }
 
 contime::lanes! {
     mod distinct_fragment_lanes;
-    fragments [
-        alpha_fragment,
-        beta_fragment,
+    snapshots [
+        AlphaAt,
+        BetaAt,
+    ];
+    routes [
+        OnAlphaChanged => [AlphaAt],
+        OnBetaChanged => [BetaAt],
     ];
 }
 
 contime::lanes! {
     mod merged_route_lanes;
-    fragments [
-        shared_primary_fragment,
-        shared_secondary_fragment,
+    snapshots [
+        SharedSourceAt,
+        SharedMirrorAt,
+    ];
+    routes [
+        OnSharedValueChanged => [SharedSourceAt],
+        OnSharedValueChanged => [SharedMirrorAt],
     ];
 }
 

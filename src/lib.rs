@@ -6,9 +6,9 @@
 //!
 //! # Workflow
 //!
-//! 1. Implement [`Snapshot`], [`Event`], and [`ApplyEvents`] for your domain types.
-//! 2. Generate lane enums with [`contime!`], or assemble larger lane sets with
-//!    [`fragment!`] and [`lanes!`], or define compatible lane types manually.
+//! 1. Derive [`ContimeEvent`] and [`ContimeSnapshot`] for your domain types, or implement
+//!    [`Snapshot`], [`Event`], and [`ApplyEvents`] manually.
+//! 2. Generate lane enums with [`lanes!`], or define compatible lane types manually.
 //! 3. Construct a [`Contime`] with a worker count and memory budget.
 //! 4. Apply events.
 //! 5. Query state with [`Contime::query_at`].
@@ -41,7 +41,6 @@
 mod api;
 mod history;
 mod key;
-mod macros;
 mod router;
 mod traits;
 mod worker;
@@ -55,7 +54,7 @@ use worker::{Worker, WorkerInbound};
 pub use api::{Contime, ContimeError};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
-pub use contime_macros::fragment;
+pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
 pub use history::{ApplyInner, ApplyWrapper, SnapshotHistory};
 pub use traits::{ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
 pub use worker::ApplyError;
