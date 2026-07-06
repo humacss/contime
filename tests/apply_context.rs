@@ -37,6 +37,17 @@ struct WorkerIdTraceSender {
     tx: flume::Sender<usize>,
 }
 
+struct GlobalTrace {
+    label: &'static str,
+    tx: flume::Sender<(&'static str, usize)>,
+}
+
+struct GlobalWorkerTraceSender {
+    worker_id: usize,
+    label: &'static str,
+    tx: flume::Sender<(&'static str, usize)>,
+}
+
 impl ContextValueAt {
     fn lane_id(entity_id: u128) -> u128 {
         entity_id
@@ -203,6 +214,21 @@ impl ApplyWrapper<SnapshotLanes> for WorkerIdTraceSender {
     }
 }
 
+impl ApplyWrapper<SnapshotLanes> for GlobalWorkerTraceSender {
+    type Error = Infallible;
+
+    fn apply_event_batch_wrapper(
+        &mut self,
+        snapshot: &mut SnapshotLanes,
+        batch: ApplyBatch<'_, EventLanes>,
+        apply_inner: ApplyInner<SnapshotLanes>,
+    ) -> Result<ApplyDecision, Self::Error> {
+        apply_inner.apply_event_batch(snapshot, batch);
+        self.tx.send((self.label, self.worker_id)).unwrap();
+        Ok(ApplyDecision::Continue)
+    }
+}
+
 impl ApplyWrapper<SnapshotLanes> for ApplyBatchTrace {
     type Error = Infallible;
 
@@ -359,6 +385,31 @@ fn contime_can_initialize_apply_context_per_worker() {
         worker_ids.insert(worker_id);
     }
 
+    assert_eq!(worker_ids, std::collections::BTreeSet::from([0, 1]));
+}
+
+#[test]
+fn contime_can_initialize_worker_contexts_from_global_context() {
+    let (tx, rx) = flume::bounded(64);
+    let global_context = GlobalTrace { label: "global", tx };
+    let contime = contime::Contime::<SnapshotLanes, EventLanes, GlobalWorkerTraceSender, GlobalTrace>::new_with_contexts(
+        2,
+        100_000,
+        global_context,
+        |worker_id, global| GlobalWorkerTraceSender { worker_id, label: global.label, tx: global.tx.clone() },
+    );
+
+    for entity_id in 0..64 {
+        contime.apply_event(OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }).unwrap();
+    }
+
+    let mut worker_ids = std::collections::BTreeSet::new();
+    while let Ok((label, worker_id)) = rx.try_recv() {
+        assert_eq!(label, "global");
+        worker_ids.insert(worker_id);
+    }
+
+    assert_eq!(contime.global_context().label, "global");
     assert_eq!(worker_ids, std::collections::BTreeSet::from([0, 1]));
 }
 

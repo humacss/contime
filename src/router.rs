@@ -14,7 +14,7 @@ pub enum RouterError {
     Error,
 }
 
-pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = ()>
+pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = (), G = ()>
 where
     C: ApplyWrapper<SL>,
     C::Error: Into<ApplyError>,
@@ -24,6 +24,7 @@ where
     memory_budget: Arc<AtomicU64>,
     memory_usage: Arc<AtomicU64>,
     current_time: Arc<AtomicI64>,
+    global_context: Arc<G>,
     _context: PhantomData<C>,
 }
 
@@ -52,7 +53,7 @@ where
     C: Clone + Send + 'static,
 {
     pub fn new_with_apply_context(worker_count: usize, memory_budget_bytes: u64, apply_context: C) -> Self {
-        Self::new_with_apply_context_factory(worker_count, memory_budget_bytes, move |_| apply_context.clone())
+        Self::new_with_contexts(worker_count, memory_budget_bytes, (), move |_, _| apply_context.clone())
     }
 
     pub fn with_history_horizon_and_apply_context(
@@ -61,37 +62,40 @@ where
         lower_time_horizon_delta: i64,
         apply_context: C,
     ) -> Self {
-        Self::with_history_horizon_and_apply_context_factory(worker_count, memory_budget_bytes, lower_time_horizon_delta, move |_| {
+        Self::with_history_horizon_and_contexts(worker_count, memory_budget_bytes, lower_time_horizon_delta, (), move |_, _| {
             apply_context.clone()
         })
     }
 }
 
-impl<SL, EL, C> Router<SL, EL, C>
+impl<SL, EL, C, G> Router<SL, EL, C, G>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + Send + 'static,
     C::Error: Into<ApplyError>,
     EL: EventLanes<SL, C> + Send + 'static,
+    G: Send + Sync + 'static,
 {
-    pub fn new_with_apply_context_factory<F>(worker_count: usize, memory_budget_bytes: u64, make_apply_context: F) -> Self
+    pub fn new_with_contexts<F>(worker_count: usize, memory_budget_bytes: u64, global_context: G, make_apply_context: F) -> Self
     where
-        F: FnMut(usize) -> C,
+        F: FnMut(usize, Arc<G>) -> C,
     {
-        Self::with_history_horizon_and_apply_context_factory(worker_count, memory_budget_bytes, 0, make_apply_context)
+        Self::with_history_horizon_and_contexts(worker_count, memory_budget_bytes, 0, global_context, make_apply_context)
     }
 
-    pub fn with_history_horizon_and_apply_context_factory<F>(
+    pub fn with_history_horizon_and_contexts<F>(
         worker_count: usize,
         memory_budget_bytes: u64,
         lower_time_horizon_delta: i64,
+        global_context: G,
         mut make_apply_context: F,
     ) -> Self
     where
-        F: FnMut(usize) -> C,
+        F: FnMut(usize, Arc<G>) -> C,
     {
         let hasher = RandomState::new();
 
+        let global_context = Arc::new(global_context);
         let memory_budget = Arc::new(AtomicU64::new(memory_budget_bytes));
         let memory_usage = Arc::new(AtomicU64::new(0));
         let mut worker_txs = Vec::<Sender<WorkerInbound<SL, EL>>>::with_capacity(worker_count);
@@ -113,11 +117,23 @@ where
                 hasher.clone(),
                 Arc::clone(&memory_usage),
                 lower_time_horizon_delta,
-                make_apply_context(worker_index),
+                make_apply_context(worker_index, Arc::clone(&global_context)),
             ));
         }
 
-        Self { hasher, workers, memory_budget, memory_usage, current_time: Arc::new(AtomicI64::new(0)), _context: PhantomData }
+        Self {
+            hasher,
+            workers,
+            memory_budget,
+            memory_usage,
+            current_time: Arc::new(AtomicI64::new(0)),
+            global_context,
+            _context: PhantomData,
+        }
+    }
+
+    pub fn global_context(&self) -> Arc<G> {
+        Arc::clone(&self.global_context)
     }
 
     pub fn apply_event(&self, event_lane: EL) -> Result<(), RouterError> {

@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use crate::{ApplyError, ApplyEvents, ApplyWrapper, Event, EventLanes, Router, RouterError, SnapshotLanes};
 
@@ -28,13 +29,14 @@ impl From<RouterError> for ContimeError {
 /// Main entry point for building and querying continuous-time state.
 ///
 /// `SL` and `EL` are usually generated with [`crate::lanes!`].
-pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = ()>
+pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = (), G = ()>
 where
     C: ApplyWrapper<SL>,
     C::Error: Into<ApplyError>,
 {
-    router: Router<SL, EL, C>,
+    router: Router<SL, EL, C, G>,
     apply_context: Option<C>,
+    global_context: Arc<G>,
     _context: PhantomData<C>,
 }
 
@@ -51,7 +53,7 @@ where
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
         let router = Router::<SL, EL>::new(worker_count, memory_budget_bytes);
 
-        Self { router, apply_context: Some(()), _context: PhantomData }
+        Self { router, apply_context: Some(()), global_context: Arc::new(()), _context: PhantomData }
     }
 
     /// Creates a `contime` instance that retains a bounded amount of history behind the
@@ -62,11 +64,11 @@ where
     pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: i64) -> Self {
         let router = Router::<SL, EL>::with_history_horizon(worker_count, memory_budget_bytes, lower_time_horizon_delta);
 
-        Self { router, apply_context: Some(()), _context: PhantomData }
+        Self { router, apply_context: Some(()), global_context: Arc::new(()), _context: PhantomData }
     }
 }
 
-impl<SL, EL, C> Contime<SL, EL, C>
+impl<SL, EL, C> Contime<SL, EL, C, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + 'static,
@@ -78,7 +80,7 @@ where
     pub fn new_with_apply_context(worker_count: usize, memory_budget_bytes: u64, apply_context: C) -> Self {
         let router = Router::<SL, EL, C>::new_with_apply_context(worker_count, memory_budget_bytes, apply_context.clone());
 
-        Self { router, apply_context: Some(apply_context), _context: PhantomData }
+        Self { router, apply_context: Some(apply_context), global_context: Arc::new(()), _context: PhantomData }
     }
 
     /// Creates a history-bounded `contime` instance with an explicit per-worker apply context.
@@ -95,7 +97,7 @@ where
             apply_context.clone(),
         );
 
-        Self { router, apply_context: Some(apply_context), _context: PhantomData }
+        Self { router, apply_context: Some(apply_context), global_context: Arc::new(()), _context: PhantomData }
     }
 
     /// Returns a clone of the apply context attached to this `contime`.
@@ -109,7 +111,7 @@ where
     }
 }
 
-impl<SL, EL, C> Contime<SL, EL, C>
+impl<SL, EL, C> Contime<SL, EL, C, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + Send + 'static,
@@ -117,13 +119,11 @@ where
     EL: EventLanes<SL, C> + Send + 'static,
 {
     /// Creates a `contime` instance with one apply context initialized per worker.
-    pub fn new_with_apply_context_factory<F>(worker_count: usize, memory_budget_bytes: u64, make_apply_context: F) -> Self
+    pub fn new_with_apply_context_factory<F>(worker_count: usize, memory_budget_bytes: u64, mut make_apply_context: F) -> Self
     where
         F: FnMut(usize) -> C,
     {
-        let router = Router::<SL, EL, C>::new_with_apply_context_factory(worker_count, memory_budget_bytes, make_apply_context);
-
-        Self { router, apply_context: None, _context: PhantomData }
+        Self::new_with_contexts(worker_count, memory_budget_bytes, (), move |worker_id, _global_context| make_apply_context(worker_id))
     }
 
     /// Creates a history-bounded `contime` instance with one apply context initialized per worker.
@@ -131,19 +131,65 @@ where
         worker_count: usize,
         memory_budget_bytes: u64,
         lower_time_horizon_delta: i64,
-        make_apply_context: F,
+        mut make_apply_context: F,
     ) -> Self
     where
         F: FnMut(usize) -> C,
     {
-        let router = Router::<SL, EL, C>::with_history_horizon_and_apply_context_factory(
+        Self::with_history_horizon_and_contexts(
             worker_count,
             memory_budget_bytes,
             lower_time_horizon_delta,
+            (),
+            move |worker_id, _global_context| make_apply_context(worker_id),
+        )
+    }
+}
+
+impl<SL, EL, C, G> Contime<SL, EL, C, G>
+where
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
+    C: ApplyWrapper<SL> + Send + 'static,
+    C::Error: Into<ApplyError>,
+    EL: EventLanes<SL, C> + Send + 'static,
+    G: Send + Sync + 'static,
+{
+    /// Creates a `contime` instance with shared global context and one apply context
+    /// initialized per worker.
+    pub fn new_with_contexts<F>(worker_count: usize, memory_budget_bytes: u64, global_context: G, make_apply_context: F) -> Self
+    where
+        F: FnMut(usize, Arc<G>) -> C,
+    {
+        Self::with_history_horizon_and_contexts(worker_count, memory_budget_bytes, 0, global_context, make_apply_context)
+    }
+
+    /// Creates a history-bounded `contime` instance with shared global context and one
+    /// apply context initialized per worker.
+    pub fn with_history_horizon_and_contexts<F>(
+        worker_count: usize,
+        memory_budget_bytes: u64,
+        lower_time_horizon_delta: i64,
+        global_context: G,
+        make_apply_context: F,
+    ) -> Self
+    where
+        F: FnMut(usize, Arc<G>) -> C,
+    {
+        let router = Router::<SL, EL, C, G>::with_history_horizon_and_contexts(
+            worker_count,
+            memory_budget_bytes,
+            lower_time_horizon_delta,
+            global_context,
             make_apply_context,
         );
+        let global_context = router.global_context();
 
-        Self { router, apply_context: None, _context: PhantomData }
+        Self { router, apply_context: None, global_context, _context: PhantomData }
+    }
+
+    /// Returns the shared global context attached to this `contime`.
+    pub fn global_context(&self) -> Arc<G> {
+        Arc::clone(&self.global_context)
     }
 
     /// Advances the internal current time to `time` if it is newer.
