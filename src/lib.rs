@@ -55,7 +55,7 @@ pub use api::{Contime, ContimeError};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
-pub use history::{ApplyInner, ApplyWrapper, SnapshotHistory};
+pub use history::{ApplyDecision, ApplyInner, ApplyWrapper, SnapshotHistory};
 pub use traits::{ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
 pub use worker::ApplyError;
 

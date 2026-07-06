@@ -202,10 +202,10 @@ mod tests {
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<crate::ApplyDecision, Self::Error> {
             apply_inner.apply_event_batch(snapshot, batch);
             self.push(snapshot.sum);
-            Ok(())
+            Ok(crate::ApplyDecision::Continue)
         }
     }
 
@@ -346,10 +346,10 @@ mod tests {
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<crate::ApplyDecision, Self::Error> {
             self.batches.push((batch.time, batch.events.iter().copied().map(|event| event.value).collect()));
             apply_inner.apply_event_batch(snapshot, batch);
-            Ok(())
+            Ok(crate::ApplyDecision::Continue)
         }
     }
 
@@ -378,7 +378,7 @@ mod tests {
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<crate::ApplyDecision, Self::Error> {
             let earlier = [ContextEvent { id: 1, time: batch.time - 10, snapshot_id: batch.snapshot_id, value: 3 }];
             let earlier_refs = [&earlier[0]];
             let earlier_batch = ApplyBatch { snapshot_id: batch.snapshot_id, time: batch.time - 10, events: &earlier_refs };
@@ -388,7 +388,7 @@ mod tests {
 
             self.batches.push((batch.time, batch.events.iter().copied().map(|event| event.value).collect()));
             apply_inner.apply_event_batch(snapshot, batch);
-            Ok(())
+            Ok(crate::ApplyDecision::Continue)
         }
     }
 
@@ -415,7 +415,7 @@ mod tests {
             _snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             _apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<(), Self::Error> {
+        ) -> Result<crate::ApplyDecision, Self::Error> {
             Err(crate::ApplyError::new(format!("rejected batch at {}", batch.time)))
         }
     }
