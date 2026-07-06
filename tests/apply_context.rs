@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::sync::{Arc, Mutex};
 
 use contime::{ApplyBatch, ApplyDecision, ApplyEvents, ApplyInner, ApplyWrapper, Event, Snapshot, SnapshotEvent};
 
@@ -46,6 +47,13 @@ struct GlobalWorkerTraceSender {
     worker_id: usize,
     label: &'static str,
     tx: flume::Sender<(&'static str, usize)>,
+}
+
+#[derive(Clone)]
+struct BlockingApplyTrace {
+    entered_tx: flume::Sender<()>,
+    release_rx: flume::Receiver<()>,
+    applied: Arc<Mutex<Vec<u128>>>,
 }
 
 impl ContextValueAt {
@@ -225,6 +233,23 @@ impl ApplyWrapper<SnapshotLanes> for GlobalWorkerTraceSender {
     ) -> Result<ApplyDecision, Self::Error> {
         apply_inner.apply_event_batch(snapshot, batch);
         self.tx.send((self.label, self.worker_id)).unwrap();
+        Ok(ApplyDecision::Continue)
+    }
+}
+
+impl ApplyWrapper<SnapshotLanes> for BlockingApplyTrace {
+    type Error = Infallible;
+
+    fn apply_event_batch_wrapper(
+        &mut self,
+        snapshot: &mut SnapshotLanes,
+        batch: ApplyBatch<'_, EventLanes>,
+        apply_inner: ApplyInner<SnapshotLanes>,
+    ) -> Result<ApplyDecision, Self::Error> {
+        self.entered_tx.send(()).unwrap();
+        self.release_rx.recv().unwrap();
+        apply_inner.apply_event_batch(snapshot, batch);
+        self.applied.lock().unwrap().push(batch.snapshot_id);
         Ok(ApplyDecision::Continue)
     }
 }
@@ -458,4 +483,25 @@ fn query_materialization_does_not_run_after_apply() {
     let snapshot = contime.query_at(11, &[3]).unwrap().pop().flatten().unwrap();
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 11, value: 10 }));
     assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn send_event_returns_after_enqueue_without_waiting_for_apply() {
+    let (entered_tx, entered_rx) = flume::bounded(1);
+    let (release_tx, release_rx) = flume::bounded(1);
+    let applied = Arc::new(Mutex::new(Vec::new()));
+    let contime = contime::Contime::<SnapshotLanes, EventLanes, BlockingApplyTrace>::new_with_apply_context(
+        1,
+        100_000,
+        BlockingApplyTrace { entered_tx, release_rx, applied: Arc::clone(&applied) },
+    );
+
+    contime.send_event(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }).unwrap();
+
+    entered_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+    assert!(applied.lock().unwrap().is_empty());
+
+    release_tx.send(()).unwrap();
+    let snapshot = contime.query_at(11, &[3]).unwrap().pop().flatten().unwrap();
+    assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 11, value: 10 }));
 }

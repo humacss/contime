@@ -161,6 +161,26 @@ where
         Ok(())
     }
 
+    pub fn send_event(&self, event_lane: EL) -> Result<(), RouterError> {
+        let usage = self.memory_usage.load(Ordering::Relaxed);
+        let budget = self.memory_budget.load(Ordering::Relaxed);
+        if usage + event_lane.conservative_size() >= budget {
+            return Err(RouterError::MemoryFull);
+        }
+
+        for routed in event_lane.routed_snapshots() {
+            let snapshot_id = routed.snapshot_id;
+            let index = self.worker_index(snapshot_id);
+            let (tx, _rx) = bounded(1);
+            self.workers[index]
+                .worker_inbound_tx
+                .send(WorkerInbound::Event { snapshot_id, event: event_lane.clone(), initial_snapshot: routed.initial_snapshot, reply: tx })
+                .map_err(|_| RouterError::Error)?;
+        }
+
+        Ok(())
+    }
+
     pub fn query_at(&self, time: i64, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError> {
         if snapshot_ids.is_empty() {
             return Ok(Vec::new());
