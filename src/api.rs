@@ -34,7 +34,7 @@ where
     C::Error: Into<ApplyError>,
 {
     router: Router<SL, EL, C>,
-    apply_context: C,
+    apply_context: Option<C>,
     _context: PhantomData<C>,
 }
 
@@ -51,7 +51,7 @@ where
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
         let router = Router::<SL, EL>::new(worker_count, memory_budget_bytes);
 
-        Self { router, apply_context: (), _context: PhantomData }
+        Self { router, apply_context: Some(()), _context: PhantomData }
     }
 
     /// Creates a `contime` instance that retains a bounded amount of history behind the
@@ -62,7 +62,7 @@ where
     pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: i64) -> Self {
         let router = Router::<SL, EL>::with_history_horizon(worker_count, memory_budget_bytes, lower_time_horizon_delta);
 
-        Self { router, apply_context: (), _context: PhantomData }
+        Self { router, apply_context: Some(()), _context: PhantomData }
     }
 }
 
@@ -78,7 +78,7 @@ where
     pub fn new_with_apply_context(worker_count: usize, memory_budget_bytes: u64, apply_context: C) -> Self {
         let router = Router::<SL, EL, C>::new_with_apply_context(worker_count, memory_budget_bytes, apply_context.clone());
 
-        Self { router, apply_context, _context: PhantomData }
+        Self { router, apply_context: Some(apply_context), _context: PhantomData }
     }
 
     /// Creates a history-bounded `contime` instance with an explicit per-worker apply context.
@@ -95,7 +95,55 @@ where
             apply_context.clone(),
         );
 
-        Self { router, apply_context, _context: PhantomData }
+        Self { router, apply_context: Some(apply_context), _context: PhantomData }
+    }
+
+    /// Returns a clone of the apply context attached to this `contime`.
+    ///
+    /// This is available for clone-based contexts passed to
+    /// [`Contime::new_with_apply_context`]. Contexts created through
+    /// [`Contime::new_with_apply_context_factory`] live on their workers and do
+    /// not have a single inspectable root context.
+    pub fn apply_context(&self) -> C {
+        self.apply_context.as_ref().expect("factory-created worker contexts do not expose a root apply context").clone()
+    }
+}
+
+impl<SL, EL, C> Contime<SL, EL, C>
+where
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
+    C: ApplyWrapper<SL> + Send + 'static,
+    C::Error: Into<ApplyError>,
+    EL: EventLanes<SL, C> + Send + 'static,
+{
+    /// Creates a `contime` instance with one apply context initialized per worker.
+    pub fn new_with_apply_context_factory<F>(worker_count: usize, memory_budget_bytes: u64, make_apply_context: F) -> Self
+    where
+        F: FnMut(usize) -> C,
+    {
+        let router = Router::<SL, EL, C>::new_with_apply_context_factory(worker_count, memory_budget_bytes, make_apply_context);
+
+        Self { router, apply_context: None, _context: PhantomData }
+    }
+
+    /// Creates a history-bounded `contime` instance with one apply context initialized per worker.
+    pub fn with_history_horizon_and_apply_context_factory<F>(
+        worker_count: usize,
+        memory_budget_bytes: u64,
+        lower_time_horizon_delta: i64,
+        make_apply_context: F,
+    ) -> Self
+    where
+        F: FnMut(usize) -> C,
+    {
+        let router = Router::<SL, EL, C>::with_history_horizon_and_apply_context_factory(
+            worker_count,
+            memory_budget_bytes,
+            lower_time_horizon_delta,
+            make_apply_context,
+        );
+
+        Self { router, apply_context: None, _context: PhantomData }
     }
 
     /// Advances the internal current time to `time` if it is newer.
@@ -108,14 +156,6 @@ where
     /// Returns the latest internal current time observed by this `contime`.
     pub fn current_time(&self) -> i64 {
         self.router.current_time()
-    }
-
-    /// Returns a clone of the apply context attached to this `contime`.
-    ///
-    /// Callers that provide a custom apply wrapper can use this to inspect
-    /// context-owned state after public `contime` operations complete.
-    pub fn apply_context(&self) -> C {
-        self.apply_context.clone()
     }
 
     /// Applies an event synchronously and waits for all affected workers to finish.

@@ -32,6 +32,11 @@ struct ApplyTraceSender {
     tx: flume::Sender<(u128, i64, i32, i32)>,
 }
 
+struct WorkerIdTraceSender {
+    worker_id: usize,
+    tx: flume::Sender<usize>,
+}
+
 impl ContextValueAt {
     fn lane_id(entity_id: u128) -> u128 {
         entity_id
@@ -183,6 +188,21 @@ impl ApplyWrapper<SnapshotLanes> for ApplyTraceSender {
     }
 }
 
+impl ApplyWrapper<SnapshotLanes> for WorkerIdTraceSender {
+    type Error = Infallible;
+
+    fn apply_event_batch_wrapper(
+        &mut self,
+        snapshot: &mut SnapshotLanes,
+        batch: ApplyBatch<'_, EventLanes>,
+        apply_inner: ApplyInner<SnapshotLanes>,
+    ) -> Result<ApplyDecision, Self::Error> {
+        apply_inner.apply_event_batch(snapshot, batch);
+        self.tx.send(self.worker_id).unwrap();
+        Ok(ApplyDecision::Continue)
+    }
+}
+
 impl ApplyWrapper<SnapshotLanes> for ApplyBatchTrace {
     type Error = Infallible;
 
@@ -320,6 +340,26 @@ fn contime_workers_use_configured_apply_context() {
     assert_eq!(rx.try_recv().unwrap(), (3, 2, 4, 4));
     let snapshot = contime.query_at(3, &[3]).unwrap().pop().flatten().unwrap();
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 3, value: 4 }));
+}
+
+#[test]
+fn contime_can_initialize_apply_context_per_worker() {
+    let (tx, rx) = flume::bounded(64);
+    let contime =
+        contime::Contime::<SnapshotLanes, EventLanes, WorkerIdTraceSender>::new_with_apply_context_factory(2, 100_000, |worker_id| {
+            WorkerIdTraceSender { worker_id, tx: tx.clone() }
+        });
+
+    for entity_id in 0..64 {
+        contime.apply_event(OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }).unwrap();
+    }
+
+    let mut worker_ids = std::collections::BTreeSet::new();
+    while let Ok(worker_id) = rx.try_recv() {
+        worker_ids.insert(worker_id);
+    }
+
+    assert_eq!(worker_ids, std::collections::BTreeSet::from([0, 1]));
 }
 
 #[test]
