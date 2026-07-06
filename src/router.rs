@@ -52,7 +52,7 @@ where
     C: Clone + Send + 'static,
 {
     pub fn new_with_apply_context(worker_count: usize, memory_budget_bytes: u64, apply_context: C) -> Self {
-        Self::with_history_horizon_and_apply_context(worker_count, memory_budget_bytes, 0, apply_context)
+        Self::new_with_apply_context_factory(worker_count, memory_budget_bytes, move |_| apply_context.clone())
     }
 
     pub fn with_history_horizon_and_apply_context(
@@ -61,6 +61,35 @@ where
         lower_time_horizon_delta: i64,
         apply_context: C,
     ) -> Self {
+        Self::with_history_horizon_and_apply_context_factory(worker_count, memory_budget_bytes, lower_time_horizon_delta, move |_| {
+            apply_context.clone()
+        })
+    }
+}
+
+impl<SL, EL, C> Router<SL, EL, C>
+where
+    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
+    C: ApplyWrapper<SL> + Send + 'static,
+    C::Error: Into<ApplyError>,
+    EL: EventLanes<SL, C> + Send + 'static,
+{
+    pub fn new_with_apply_context_factory<F>(worker_count: usize, memory_budget_bytes: u64, make_apply_context: F) -> Self
+    where
+        F: FnMut(usize) -> C,
+    {
+        Self::with_history_horizon_and_apply_context_factory(worker_count, memory_budget_bytes, 0, make_apply_context)
+    }
+
+    pub fn with_history_horizon_and_apply_context_factory<F>(
+        worker_count: usize,
+        memory_budget_bytes: u64,
+        lower_time_horizon_delta: i64,
+        mut make_apply_context: F,
+    ) -> Self
+    where
+        F: FnMut(usize) -> C,
+    {
         let hasher = RandomState::new();
 
         let memory_budget = Arc::new(AtomicU64::new(memory_budget_bytes));
@@ -84,7 +113,7 @@ where
                 hasher.clone(),
                 Arc::clone(&memory_usage),
                 lower_time_horizon_delta,
-                apply_context.clone(),
+                make_apply_context(worker_index),
             ));
         }
 
