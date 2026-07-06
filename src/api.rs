@@ -213,6 +213,20 @@ where
         Ok(())
     }
 
+    /// Sends an event to affected workers without waiting for them to apply it.
+    ///
+    /// This returns after the event has been routed and enqueued into the worker
+    /// channels. It can report routing, memory-budget, or worker-channel errors,
+    /// but it cannot report apply-wrapper errors because apply happens after this
+    /// function returns.
+    pub fn send_event<E: Event>(&self, event: E) -> Result<(), ContimeError>
+    where
+        EL: From<E>,
+    {
+        self.router.send_event(event.into())?;
+        Ok(())
+    }
+
     /// Returns snapshot lanes for many snapshot ids at the same query time.
     ///
     /// Events at exactly `time` are included.
