@@ -46,6 +46,17 @@ where
     }
 }
 
+/// Decision returned by an apply wrapper after observing one same-timestamp
+/// batch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplyDecision {
+    /// Continue applying later batches in this replay/apply pass.
+    Continue,
+    /// Exit the current replay/apply pass early because the wrapper knows
+    /// continuing would not produce new state.
+    EarlyExit,
+}
+
 /// Neutral extension seam around normal same-timestamp batch application.
 pub trait ApplyWrapper<S>
 where
@@ -58,7 +69,7 @@ where
         snapshot: &mut S,
         batch: ApplyBatch<'_, S::Event>,
         apply_inner: ApplyInner<S>,
-    ) -> Result<(), Self::Error>;
+    ) -> Result<ApplyDecision, Self::Error>;
 }
 
 impl<S> ApplyWrapper<S> for ()
@@ -72,9 +83,9 @@ where
         snapshot: &mut S,
         batch: ApplyBatch<'_, S::Event>,
         apply_inner: ApplyInner<S>,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<ApplyDecision, Self::Error> {
         apply_inner.apply_event_batch(snapshot, batch);
-        Ok(())
+        Ok(ApplyDecision::Continue)
     }
 }
 

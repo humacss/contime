@@ -3,7 +3,7 @@ use std::ops::Bound;
 
 use std::convert::Infallible;
 
-use crate::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, Snapshot};
+use crate::{ApplyBatch, ApplyDecision, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, Snapshot};
 
 use super::history::LocalSnapshotHistory;
 
@@ -163,7 +163,9 @@ where
         checkpoint.start.clone(),
         checkpoint.end.clone(),
         |bucket_last_key, bucket_len, batch| {
-            context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default())?;
+            if context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default())? == ApplyDecision::EarlyExit {
+                return Ok(false);
+            }
             event_count += bucket_len;
 
             if !checkpoint.preserve_previous_tip && !stored_first_changed_checkpoint && batch.time >= checkpoint.first_changed_time {
@@ -177,7 +179,7 @@ where
                 }
             }
 
-            Ok(())
+            Ok(true)
         },
     )?;
 
@@ -331,7 +333,7 @@ pub(super) fn apply_event_buckets<S, E, F>(
 ) -> Result<(), E>
 where
     S: Snapshot + ApplyEvents + 'static,
-    F: FnMut(&ContimeKey, usize, ApplyBatch<'_, S::Event>) -> Result<(), E>,
+    F: FnMut(&ContimeKey, usize, ApplyBatch<'_, S::Event>) -> Result<bool, E>,
 {
     let mut iter = events.range((start, end)).peekable();
     while let Some((first_key, first_event)) = iter.next() {
@@ -341,7 +343,9 @@ where
         if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
             let bucket = [first_event];
             let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-            apply_bucket(bucket_last_key, 1, batch)?;
+            if !apply_bucket(bucket_last_key, 1, batch)? {
+                break;
+            }
             continue;
         }
 
@@ -351,7 +355,9 @@ where
         if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
             let bucket = [first_event, second_event];
             let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-            apply_bucket(bucket_last_key, 2, batch)?;
+            if !apply_bucket(bucket_last_key, 2, batch)? {
+                break;
+            }
             continue;
         }
 
@@ -371,7 +377,9 @@ where
 
         let bucket_len = bucket.len();
         let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-        apply_bucket(bucket_last_key, bucket_len, batch)?;
+        if !apply_bucket(bucket_last_key, bucket_len, batch)? {
+            break;
+        }
     }
 
     Ok(())
@@ -389,7 +397,7 @@ pub(super) fn apply_event_buckets_infallible<S, F>(
 {
     let result = apply_event_buckets::<S, Infallible, _>(snapshot_id, events, start, end, |bucket_last_key, bucket_len, batch| {
         apply_bucket(bucket_last_key, bucket_len, batch);
-        Ok(())
+        Ok(true)
     });
     debug_assert!(result.is_ok());
     if let Err(error) = result {

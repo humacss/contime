@@ -278,13 +278,13 @@ impl contime::ApplyWrapper<CallbackSnapshot> for CallbackContext {
         snapshot: &mut CallbackSnapshot,
         batch: contime::ApplyBatch<'_, CallbackEvent>,
         apply_inner: contime::ApplyInner<CallbackSnapshot>,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<contime::ApplyDecision, Self::Error> {
         let event_ids = batch.events.iter().map(|event| event.event_id).collect::<Vec<_>>();
         apply_inner.apply_event_batch(snapshot, batch);
         for event_id in event_ids {
             self.sink = self.sink.wrapping_add(event_id).wrapping_add(snapshot.sum as u128);
         }
-        Ok(())
+        Ok(contime::ApplyDecision::Continue)
     }
 }
 
