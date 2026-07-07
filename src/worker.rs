@@ -51,7 +51,7 @@ pub struct WorkerEvent<SL, EL> {
 
 pub enum WorkerInbound<SL: SnapshotLanes, EL> {
     Events { events: Vec<WorkerEvent<SL, EL>>, reply: Sender<Result<(), ApplyError>> },
-    SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: i64, reply: Sender<Vec<(usize, Option<SL>)>> },
+    SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: i64, reply: Sender<Result<Vec<(usize, Option<SL>)>, ApplyError>> },
     AdvanceTime { time: i64, reply: Sender<()> },
     Shutdown,
 }
@@ -159,11 +159,24 @@ fn handle_worker<SL, EL, C>(
             }
             Ok(WorkerInbound::SnapshotsAt { snapshot_requests, time, reply }) => {
                 let mut results = Vec::with_capacity(snapshot_requests.len());
+                let mut error = None;
                 for (position, snapshot_id) in snapshot_requests {
-                    let snapshot = history_by_id.get(&snapshot_id).map(|history| history.snapshot_only_at(time));
+                    let snapshot = match history_by_id.get(&snapshot_id) {
+                        Some(history) => match history.snapshot_only_at_with_context(time, &mut apply_context) {
+                            Ok(snapshot) => Some(snapshot),
+                            Err(err) => {
+                                error = Some(err.into());
+                                break;
+                            }
+                        },
+                        None => None,
+                    };
                     results.push((position, snapshot));
                 }
-                let _ = reply.send(results);
+                let _ = reply.send(match error {
+                    Some(error) => Err(error),
+                    None => Ok(results),
+                });
             }
             Ok(WorkerInbound::Shutdown) | Err(_) => return,
         }

@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::Bound;
 
-use std::convert::Infallible;
-
 use crate::{ApplyBatch, ApplyDecision, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, Snapshot};
 
 use super::history::LocalSnapshotHistory;
@@ -385,29 +383,18 @@ where
     Ok(())
 }
 
-pub(super) fn apply_event_buckets_infallible<S, F>(
-    snapshot_id: u128,
-    events: &BTreeMap<ContimeKey, S::Event>,
-    start: Bound<ContimeKey>,
-    end: Bound<ContimeKey>,
-    mut apply_bucket: F,
-) where
-    S: Snapshot + ApplyEvents + 'static,
-    F: FnMut(&ContimeKey, usize, ApplyBatch<'_, S::Event>),
-{
-    let result = apply_event_buckets::<S, Infallible, _>(snapshot_id, events, start, end, |bucket_last_key, bucket_len, batch| {
-        apply_bucket(bucket_last_key, bucket_len, batch);
-        Ok(true)
-    });
-    debug_assert!(result.is_ok());
-    if let Err(error) = result {
-        unreachable!("infallible bucket apply returned an error: {error}");
-    }
-}
-
 pub(super) fn get_checkpoint_at<S>(history: &LocalSnapshotHistory<S>, time: i64) -> S
 where
     S: Snapshot + ApplyEvents + 'static,
+{
+    let mut context = ();
+    get_checkpoint_at_with_context(history, time, &mut context).expect("unit apply wrapper cannot fail")
+}
+
+pub(super) fn get_checkpoint_at_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: i64, context: &mut C) -> Result<S, C::Error>
+where
+    S: Snapshot + ApplyEvents + 'static,
+    C: ApplyWrapper<S>,
 {
     let checkpoint_boundary = last_key_at_time(time);
 
@@ -420,18 +407,19 @@ where
 
     let end_key = last_key_at_time(time);
 
-    apply_event_buckets_infallible::<S, _>(
+    apply_event_buckets::<S, C::Error, _>(
         history.snapshot_id,
         &history.events,
         recompute_start,
         Bound::Included(end_key),
         |_bucket_last_key, _bucket_len, batch| {
-            snapshot.apply_events(batch);
+            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default())?;
             snapshot.set_time(batch.time);
+            Ok(true)
         },
-    );
+    )?;
 
     snapshot.set_time(time);
 
-    snapshot
+    Ok(snapshot)
 }

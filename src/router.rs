@@ -245,7 +245,7 @@ where
         results.resize_with(snapshot_ids.len(), || None);
 
         for rx in rxs {
-            let batch = rx.recv().map_err(|_| RouterError::Error)?;
+            let batch = rx.recv().map_err(|_| RouterError::Error)?.map_err(RouterError::ApplyFailed)?;
             for (position, snapshot_lane) in batch {
                 results[position] = snapshot_lane;
             }
