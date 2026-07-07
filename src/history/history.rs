@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use crate::{ApplyEvents, ContimeKey, Event, Snapshot};
 
-use super::checkpoints::get_checkpoint_at;
+use super::checkpoints::{get_checkpoint_at, get_checkpoint_at_with_context};
 
 type SnapshotId = u128;
 
@@ -111,6 +111,16 @@ where
     /// Events at exactly `time` are included in the returned snapshot.
     pub fn snapshot_only_at(&self, time: i64) -> S {
         get_checkpoint_at(self, time)
+    }
+
+    /// Reconstructs the snapshot state at `time` using the provided apply wrapper.
+    ///
+    /// Events at exactly `time` are included in the returned snapshot.
+    pub(crate) fn snapshot_only_at_with_context<C>(&self, time: i64, context: &mut C) -> Result<S, C::Error>
+    where
+        C: crate::ApplyWrapper<S>,
+    {
+        get_checkpoint_at_with_context(self, time, context)
     }
 }
 
