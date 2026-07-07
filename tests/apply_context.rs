@@ -327,6 +327,23 @@ fn apply_wrapper_can_exit_replay_early() {
 }
 
 #[test]
+fn plural_apply_events_are_one_replay_batch() {
+    let contime = contime::Contime::<SnapshotLanes, EventLanes, EarlyExitAtTime>::new_with_apply_context_factory(1, 10_000, |_| {
+        EarlyExitAtTime { exit_time: 10, batches: Vec::new() }
+    });
+
+    contime
+        .apply_events([
+            OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 },
+            OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 },
+        ])
+        .unwrap();
+
+    let snapshot = contime.query_at(21, &[3]).unwrap().pop().flatten().unwrap();
+    assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 21, value: 10 }));
+}
+
+#[test]
 fn apply_wrapper_receives_snapshot_after_inner_apply_without_changing_snapshot_semantics() {
     let event = OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 };
     let mut snapshot = ContextValueAt::default();
@@ -386,7 +403,7 @@ fn contime_workers_use_configured_apply_context() {
     let contime =
         contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
 
-    contime.apply_event(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 }).unwrap();
+    contime.apply_events([OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 }]).unwrap();
 
     assert_eq!(rx.try_recv().unwrap(), (3, 2, 4, 4));
     let snapshot = contime.query_at(3, &[3]).unwrap().pop().flatten().unwrap();
@@ -402,7 +419,7 @@ fn contime_can_initialize_apply_context_per_worker() {
         });
 
     for entity_id in 0..64 {
-        contime.apply_event(OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }).unwrap();
+        contime.apply_events([OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }]).unwrap();
     }
 
     let mut worker_ids = std::collections::BTreeSet::new();
@@ -425,7 +442,7 @@ fn contime_can_initialize_worker_contexts_from_global_context() {
     );
 
     for entity_id in 0..64 {
-        contime.apply_event(OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }).unwrap();
+        contime.apply_events([OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }]).unwrap();
     }
 
     let mut worker_ids = std::collections::BTreeSet::new();
@@ -444,12 +461,12 @@ fn out_of_order_apply_runs_after_apply_for_replayed_events() {
     let contime =
         contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
 
-    contime.apply_event(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }).unwrap();
-    contime.apply_event(OnContextValueChanged { event_id: 30, time: 30, entity_id: 3, value: 30 }).unwrap();
+    contime.apply_events([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }]).unwrap();
+    contime.apply_events([OnContextValueChanged { event_id: 30, time: 30, entity_id: 3, value: 30 }]).unwrap();
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
     assert_eq!(rx.try_recv().unwrap(), (3, 30, 30, 30));
 
-    contime.apply_event(OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 }).unwrap();
+    contime.apply_events([OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 }]).unwrap();
 
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
     assert_eq!(rx.try_recv().unwrap(), (3, 20, 20, 20));
@@ -464,8 +481,8 @@ fn duplicate_apply_does_not_run_after_apply() {
         contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
     let event = OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 };
 
-    contime.apply_event(event.clone()).unwrap();
-    contime.apply_event(event).unwrap();
+    contime.apply_events([event.clone()]).unwrap();
+    contime.apply_events([event]).unwrap();
 
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
     assert!(rx.try_recv().is_err());
@@ -477,7 +494,7 @@ fn query_materialization_does_not_run_after_apply() {
     let contime =
         contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
 
-    contime.apply_event(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }).unwrap();
+    contime.apply_events([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }]).unwrap();
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
 
     let snapshot = contime.query_at(11, &[3]).unwrap().pop().flatten().unwrap();
@@ -496,7 +513,7 @@ fn send_event_returns_after_enqueue_without_waiting_for_apply() {
         BlockingApplyTrace { entered_tx, release_rx, applied: Arc::clone(&applied) },
     );
 
-    contime.send_event(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }).unwrap();
+    contime.send_events([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }]).unwrap();
 
     entered_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
     assert!(applied.lock().unwrap().is_empty());

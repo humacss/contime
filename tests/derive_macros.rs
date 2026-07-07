@@ -45,7 +45,7 @@ contime::lanes! {
 fn derives_generate_event_snapshot_and_lanes() {
     let contime = derived_lanes::Contime::new(1, 2_048);
 
-    contime.apply_event(OnDerivedValueChanged { event_id: 10, entity_id: 7, time: 5, value: 99 }).expect("event should apply");
+    contime.apply_events([OnDerivedValueChanged { event_id: 10, entity_id: 7, time: 5, value: 99 }]).expect("event should apply");
 
     let snapshot: DerivedValueAt = contime
         .query_at(6, &[7])

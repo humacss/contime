@@ -204,26 +204,30 @@ where
         self.router.current_time()
     }
 
-    /// Applies an event synchronously and waits for all affected workers to finish.
-    pub fn apply_event<E: Event>(&self, event: E) -> Result<(), ContimeError>
+    /// Applies events synchronously and waits for all affected workers to finish.
+    pub fn apply_events<I, E>(&self, events: I) -> Result<(), ContimeError>
     where
+        I: IntoIterator<Item = E>,
+        E: Event,
         EL: From<E>,
     {
-        self.router.apply_event(event.into())?;
+        self.router.apply_events(events.into_iter().map(Into::into))?;
         Ok(())
     }
 
-    /// Sends an event to affected workers without waiting for them to apply it.
+    /// Sends events to affected workers without waiting for them to apply.
     ///
-    /// This returns after the event has been routed and enqueued into the worker
+    /// This returns after the events have been routed and enqueued into the worker
     /// channels. It can report routing, memory-budget, or worker-channel errors,
     /// but it cannot report apply-wrapper errors because apply happens after this
     /// function returns.
-    pub fn send_event<E: Event>(&self, event: E) -> Result<(), ContimeError>
+    pub fn send_events<I, E>(&self, events: I) -> Result<(), ContimeError>
     where
+        I: IntoIterator<Item = E>,
+        E: Event,
         EL: From<E>,
     {
-        self.router.send_event(event.into())?;
+        self.router.send_events(events.into_iter().map(Into::into))?;
         Ok(())
     }
 
