@@ -166,10 +166,10 @@ fn main() {
 
     // Start with two in-order events so the baseline history is easy to reason about.
     println!("Applying event at t=5 with value 50.");
-    contime.apply_event(receive_value(1, 5, 100, 50)).expect("first event should apply");
+    contime.apply_events([receive_value(1, 5, 100, 50)]).expect("first event should apply");
 
     println!("Applying event at t=10 with value 100.");
-    contime.apply_event(receive_value(1, 10, 101, 100)).expect("second event should apply");
+    contime.apply_events([receive_value(1, 10, 101, 100)]).expect("second event should apply");
 
     // Query after both events. At this point the observed history is [50, 100].
     let before_late_event = query_snapshot(&contime, 11, 1);
@@ -179,7 +179,7 @@ fn main() {
     // Apply a late event whose event time belongs between the two earlier events.
     // Wall-clock arrival order is now different from event-time order.
     println!("Applying a late event at t=7 with value 70.");
-    contime.apply_event(receive_value(1, 7, 102, 70)).expect("late event should apply");
+    contime.apply_events([receive_value(1, 7, 102, 70)]).expect("late event should apply");
 
     // Query before the late event's time: only the first value is visible.
     let at_6 = query_snapshot(&contime, 6, 1);

@@ -787,8 +787,10 @@ fn one_fragment_matches_the_one_shot_macro_behavior() {
     let legacy = legacy_lanes::Contime::new(1, 2_048);
     let fragmented = fragment_lanes::Contime::new(1, 2_048);
 
-    legacy.apply_event(OnLegacyValueChanged { event_id: 10, time: 5, entity_id: 1, value: 7 }).expect("legacy event should apply");
-    fragmented.apply_event(OnFragmentValueChanged { event_id: 20, time: 5, entity_id: 1, value: 7 }).expect("fragment event should apply");
+    legacy.apply_events([OnLegacyValueChanged { event_id: 10, time: 5, entity_id: 1, value: 7 }]).expect("legacy event should apply");
+    fragmented
+        .apply_events([OnFragmentValueChanged { event_id: 20, time: 5, entity_id: 1, value: 7 }])
+        .expect("fragment event should apply");
 
     let legacy_snapshot = snapshot_at::<LegacyValueAt, _, _>(&legacy, 6, LegacyValueAt::lane_id(1));
     let fragmented_snapshot = snapshot_at::<FragmentValueAt, _, _>(&fragmented, 6, FragmentValueAt::lane_id(1));
@@ -800,8 +802,8 @@ fn one_fragment_matches_the_one_shot_macro_behavior() {
 fn distinct_routes_merge_into_one_lane_universe() {
     let contime = distinct_fragment_lanes::Contime::new(1, 2_048);
 
-    contime.apply_event(OnAlphaChanged { event_id: 11, time: 5, entity_id: 1, alpha: 3 }).expect("alpha event should apply");
-    contime.apply_event(OnBetaChanged { event_id: 12, time: 5, entity_id: 1, beta: 9 }).expect("beta event should apply");
+    contime.apply_events([OnAlphaChanged { event_id: 11, time: 5, entity_id: 1, alpha: 3 }]).expect("alpha event should apply");
+    contime.apply_events([OnBetaChanged { event_id: 12, time: 5, entity_id: 1, beta: 9 }]).expect("beta event should apply");
 
     let alpha = snapshot_at::<AlphaAt, _, _>(&contime, 6, AlphaAt::lane_id(1));
     let beta = snapshot_at::<BetaAt, _, _>(&contime, 6, BetaAt::lane_id(1));
@@ -814,7 +816,7 @@ fn distinct_routes_merge_into_one_lane_universe() {
 fn repeated_route_keys_merge_targets_across_fragments() {
     let contime = merged_route_lanes::Contime::new(1, 2_048);
 
-    contime.apply_event(OnSharedValueChanged { event_id: 13, time: 5, entity_id: 1, value: 21 }).expect("shared event should apply");
+    contime.apply_events([OnSharedValueChanged { event_id: 13, time: 5, entity_id: 1, value: 21 }]).expect("shared event should apply");
 
     let source = snapshot_at::<SharedSourceAt, _, _>(&contime, 6, SharedSourceAt::lane_id(1));
     let mirror = snapshot_at::<SharedMirrorAt, _, _>(&contime, 6, SharedMirrorAt::lane_id(1));

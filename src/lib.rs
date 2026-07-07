@@ -28,12 +28,12 @@
 //!
 //! let contime = TestSnapshotContime::new(1, 1_024);
 //!
-//! contime.apply_event(TestEvent::Positive(1, 5, 10, 3)).unwrap();
+//! contime.apply_events([TestEvent::Positive(1, 5, 10, 3)]).unwrap();
 //!
 //! let snapshot: TestSnapshot = contime.query_at(6, &[1]).unwrap().pop().flatten().unwrap().into();
 //! assert_eq!(snapshot.sum, 3);
 //!
-//! contime.apply_event(TestEvent::Positive(1, 4, 11, 2)).unwrap();
+//! contime.apply_events([TestEvent::Positive(1, 4, 11, 2)]).unwrap();
 //!
 //! let snapshot: TestSnapshot = contime.query_at(6, &[1]).unwrap().pop().flatten().unwrap().into();
 //! assert_eq!(snapshot.sum, 5);

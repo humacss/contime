@@ -5,6 +5,7 @@ use std::sync::Arc;
 use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 
+use crate::worker::WorkerEvent;
 use crate::{ApplyError, ApplyEvents, ApplyWrapper, EventLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
@@ -136,21 +137,22 @@ where
         Arc::clone(&self.global_context)
     }
 
-    pub fn apply_event(&self, event_lane: EL) -> Result<(), RouterError> {
-        let usage = self.memory_usage.load(Ordering::Relaxed);
-        let budget = self.memory_budget.load(Ordering::Relaxed);
-        if usage + event_lane.conservative_size() >= budget {
-            return Err(RouterError::MemoryFull);
-        }
-
+    pub fn apply_events<I>(&self, event_lanes: I) -> Result<(), RouterError>
+    where
+        I: IntoIterator<Item = EL>,
+    {
+        let worker_events = self.route_events(event_lanes)?;
         let mut rxs = Vec::new();
-        for routed in event_lane.routed_snapshots() {
-            let snapshot_id = routed.snapshot_id;
-            let index = self.worker_index(snapshot_id);
+
+        for (worker_index, events) in worker_events.into_iter().enumerate() {
+            if events.is_empty() {
+                continue;
+            }
+
             let (tx, rx) = bounded(1);
-            self.workers[index]
+            self.workers[worker_index]
                 .worker_inbound_tx
-                .send(WorkerInbound::Event { snapshot_id, event: event_lane.clone(), initial_snapshot: routed.initial_snapshot, reply: tx })
+                .send(WorkerInbound::Events { events, reply: tx })
                 .map_err(|_| RouterError::Error)?;
             rxs.push(rx);
         }
@@ -161,24 +163,55 @@ where
         Ok(())
     }
 
-    pub fn send_event(&self, event_lane: EL) -> Result<(), RouterError> {
-        let usage = self.memory_usage.load(Ordering::Relaxed);
-        let budget = self.memory_budget.load(Ordering::Relaxed);
-        if usage + event_lane.conservative_size() >= budget {
-            return Err(RouterError::MemoryFull);
-        }
+    pub fn send_events<I>(&self, event_lanes: I) -> Result<(), RouterError>
+    where
+        I: IntoIterator<Item = EL>,
+    {
+        let worker_events = self.route_events(event_lanes)?;
 
-        for routed in event_lane.routed_snapshots() {
-            let snapshot_id = routed.snapshot_id;
-            let index = self.worker_index(snapshot_id);
+        for (worker_index, events) in worker_events.into_iter().enumerate() {
+            if events.is_empty() {
+                continue;
+            }
+
             let (tx, _rx) = bounded(1);
-            self.workers[index]
+            self.workers[worker_index]
                 .worker_inbound_tx
-                .send(WorkerInbound::Event { snapshot_id, event: event_lane.clone(), initial_snapshot: routed.initial_snapshot, reply: tx })
+                .send(WorkerInbound::Events { events, reply: tx })
                 .map_err(|_| RouterError::Error)?;
         }
 
         Ok(())
+    }
+
+    fn route_events<I>(&self, event_lanes: I) -> Result<Vec<Vec<WorkerEvent<SL, EL>>>, RouterError>
+    where
+        I: IntoIterator<Item = EL>,
+    {
+        let mut worker_events = Vec::with_capacity(self.workers.len());
+        worker_events.resize_with(self.workers.len(), Vec::new);
+
+        let mut event_size = 0u64;
+        for event_lane in event_lanes {
+            event_size = event_size.saturating_add(event_lane.conservative_size());
+            for routed in event_lane.routed_snapshots() {
+                let snapshot_id = routed.snapshot_id;
+                let index = self.worker_index(snapshot_id);
+                worker_events[index].push(WorkerEvent {
+                    snapshot_id,
+                    event: event_lane.clone(),
+                    initial_snapshot: routed.initial_snapshot,
+                });
+            }
+        }
+
+        let usage = self.memory_usage.load(Ordering::Relaxed);
+        let budget = self.memory_budget.load(Ordering::Relaxed);
+        if usage + event_size >= budget {
+            return Err(RouterError::MemoryFull);
+        }
+
+        Ok(worker_events)
     }
 
     pub fn query_at(&self, time: i64, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError> {
