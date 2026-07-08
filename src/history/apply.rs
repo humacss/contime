@@ -107,6 +107,7 @@ where
             applied_batch.earliest_changed_time,
             applied_batch.latest_event_key_before_apply,
             applied_batch.single_changed_event_key,
+            applied_batch.changed_event_count,
         );
         let applied_checkpoint = self.apply_events_to_checkpoint(checkpoint, context)?;
         let bytes_delta = applied_batch.bytes_delta + self.commit_applied_checkpoint(applied_checkpoint);
@@ -119,8 +120,9 @@ where
         earliest_changed_time: i64,
         latest_event_key_before_apply: Option<ContimeKey>,
         single_changed_event_key: Option<ContimeKey>,
+        changed_event_count: usize,
     ) -> CheckpointForApply<S> {
-        get_checkpoint_for_apply(self, earliest_changed_time, latest_event_key_before_apply, single_changed_event_key)
+        get_checkpoint_for_apply(self, earliest_changed_time, latest_event_key_before_apply, single_changed_event_key, changed_event_count)
     }
 
     fn apply_events_to_checkpoint<C>(&self, checkpoint: CheckpointForApply<S>, context: &mut C) -> Result<AppliedCheckpoint<S>, C::Error>
@@ -165,6 +167,7 @@ where
             earliest_changed_time,
             latest_event_key_before_apply,
             single_changed_event_key,
+            changed_event_count,
         }
     }
 }
@@ -175,4 +178,5 @@ struct InsertedEventBatch {
     earliest_changed_time: i64,
     latest_event_key_before_apply: Option<ContimeKey>,
     single_changed_event_key: Option<ContimeKey>,
+    changed_event_count: usize,
 }

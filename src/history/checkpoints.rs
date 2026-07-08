@@ -93,7 +93,6 @@ where
     stale_start: Option<usize>,
     preserve_previous_tip: bool,
     first_changed_time: i64,
-    exact_event_key: Option<ContimeKey>,
     bytes_delta: i64,
 }
 
@@ -112,20 +111,18 @@ pub(super) fn get_checkpoint_for_apply<S>(
     history: &mut LocalSnapshotHistory<S>,
     earliest_changed_time: i64,
     latest_event_key_before_apply: Option<ContimeKey>,
-    single_changed_event_key: Option<ContimeKey>,
+    _single_changed_event_key: Option<ContimeKey>,
+    changed_event_count: usize,
 ) -> CheckpointForApply<S>
 where
     S: Snapshot + ApplyEvents + 'static,
 {
     let preserve_previous_tip = latest_event_key_before_apply.as_ref().is_none_or(|latest| earliest_changed_time > latest.time);
+    let previous_event_count = history.events.len().saturating_sub(changed_event_count);
+    let protected_previous_tip =
+        latest_event_key_before_apply.as_ref().filter(|_| preserve_previous_tip && is_event_count_cadence(history, previous_event_count));
 
-    if preserve_previous_tip {
-        if let Some(single_changed_event_key) = single_changed_event_key {
-            return get_latest_event_checkpoint_for_apply(history, latest_event_key_before_apply, single_changed_event_key);
-        }
-    }
-
-    get_recomputed_checkpoint_for_apply(history, earliest_changed_time, preserve_previous_tip)
+    get_recomputed_checkpoint_for_apply(history, earliest_changed_time, preserve_previous_tip, protected_previous_tip)
 }
 
 pub(super) fn apply_events_to_checkpoint<S, C>(
@@ -140,20 +137,6 @@ where
     let mut event_count = 0usize;
     let mut materialized_checkpoints = Vec::new();
     let mut stored_first_changed_checkpoint = false;
-
-    if let Some(exact_event_key) = checkpoint.exact_event_key.take() {
-        let event = history.events.get(&exact_event_key).expect("changed event must be stored before checkpoint apply");
-        let bucket = [event];
-        let batch = ApplyBatch { snapshot_id: history.snapshot_id, time: exact_event_key.time, events: &bucket };
-        context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default())?;
-        return Ok(AppliedCheckpoint {
-            stale_start: checkpoint.stale_start,
-            bytes_delta: checkpoint.bytes_delta,
-            final_key: Some(exact_event_key),
-            final_snapshot: checkpoint.snapshot,
-            materialized_checkpoints,
-        });
-    }
 
     apply_event_buckets::<S, C::Error, _>(
         history.snapshot_id,
@@ -213,48 +196,11 @@ where
     bytes_delta
 }
 
-fn get_latest_event_checkpoint_for_apply<S>(
-    history: &mut LocalSnapshotHistory<S>,
-    latest_event_key_before_apply: Option<ContimeKey>,
-    single_changed_event_key: ContimeKey,
-) -> CheckpointForApply<S>
-where
-    S: Snapshot + ApplyEvents + 'static,
-{
-    let previous_event_count = history.events.len().saturating_sub(1);
-    let previous_tip_is_cadence =
-        latest_event_key_before_apply.as_ref().is_some_and(|_key| is_event_count_cadence(history, previous_event_count));
-
-    let mut bytes_delta = 0;
-    let snapshot = if let Some(previous_key) = latest_event_key_before_apply.as_ref().filter(|_key| !previous_tip_is_cadence) {
-        match history.checkpoints.back().map(|(key, _checkpoint)| key == previous_key).unwrap_or(false) {
-            true => {
-                let (_key, previous_tip) = history.checkpoints.pop_back().expect("previous tip checkpoint must exist");
-                bytes_delta -= previous_tip.conservative_size() as i64;
-                previous_tip
-            }
-            false => latest_checkpoint_or_base(history),
-        }
-    } else {
-        latest_checkpoint_or_base(history)
-    };
-
-    CheckpointForApply {
-        snapshot,
-        start: Bound::Unbounded,
-        end: Bound::Unbounded,
-        stale_start: None,
-        preserve_previous_tip: true,
-        first_changed_time: i64::MAX,
-        exact_event_key: Some(single_changed_event_key),
-        bytes_delta,
-    }
-}
-
 fn get_recomputed_checkpoint_for_apply<S>(
     history: &LocalSnapshotHistory<S>,
     time: i64,
     preserve_previous_tip: bool,
+    protected_previous_tip: Option<&ContimeKey>,
 ) -> CheckpointForApply<S>
 where
     S: Snapshot + ApplyEvents + 'static,
@@ -269,8 +215,12 @@ where
     }
 
     let checkpoint_index = latest_checkpoint_before_index(&history.checkpoints, &recompute_boundary);
-    let remove_recompute_checkpoint =
-        preserve_previous_tip && checkpoint_index.is_some_and(|index| !checkpoint_key_is_cadence(history, &history.checkpoints[index].0));
+    let remove_recompute_checkpoint = preserve_previous_tip
+        && checkpoint_index.is_some_and(|index| {
+            let key = &history.checkpoints[index].0;
+            protected_previous_tip != Some(key)
+                && history.checkpoints.back().map(|(back_key, _checkpoint)| back_key == key).unwrap_or(false)
+        });
     let (snapshot, start) = match checkpoint_index {
         Some(index) => {
             let (key, checkpoint) = &history.checkpoints[index];
@@ -292,16 +242,8 @@ where
         stale_start,
         preserve_previous_tip,
         first_changed_time: time,
-        exact_event_key: None,
         bytes_delta: 0,
     }
-}
-
-fn latest_checkpoint_or_base<S>(history: &LocalSnapshotHistory<S>) -> S
-where
-    S: Snapshot,
-{
-    history.checkpoints.back().map(|(_key, checkpoint)| checkpoint.clone()).unwrap_or_else(|| history.base_snapshot.clone())
 }
 
 fn is_event_count_cadence<S>(history: &LocalSnapshotHistory<S>, event_count: usize) -> bool
