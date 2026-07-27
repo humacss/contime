@@ -74,3 +74,48 @@ fn test_advance_to_prunes_and_keeps_future_apply_query_working() {
     let snap = query_one(&c, 201, 1);
     assert_eq!(snap.sum, 15); // pruned history is carried by the promoted base snapshot
 }
+
+#[test]
+fn test_event_before_history_horizon_is_rejected() {
+    let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
+    c.advance_to(100).unwrap();
+
+    let error = c.apply_events([TestEvent::Positive(1, 49, 1, 10)]).unwrap_err();
+
+    assert!(matches!(error, ContimeError::EventBeforeHistoryHorizon { event_time: 49, earliest_time: 50 }));
+}
+
+#[test]
+fn test_event_at_history_horizon_is_accepted() {
+    let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
+    c.advance_to(100).unwrap();
+
+    c.apply_events([TestEvent::Positive(1, 50, 1, 10)]).unwrap();
+
+    assert_eq!(query_one(&c, 100, 1).sum, 10);
+}
+
+#[test]
+fn test_repeated_advance_to_uses_absolute_time() {
+    let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
+    c.apply_events([TestEvent::Positive(1, 30, 30, 30)]).unwrap();
+
+    c.advance_to(60).unwrap();
+    c.advance_to(70).unwrap();
+    c.apply_events([TestEvent::Positive(1, 25, 25, 5)]).unwrap();
+
+    assert_eq!(query_one(&c, 70, 1).items, vec![5, 30]);
+}
+
+#[test]
+fn test_pruning_preserves_effects_without_a_checkpoint_before_horizon() {
+    let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
+    c.apply_events([TestEvent::Positive(1, 10, 10, 10), TestEvent::Positive(1, 100, 100, 100)]).unwrap();
+
+    c.advance_to(100).unwrap();
+    c.apply_events([TestEvent::Positive(1, 60, 60, 60)]).unwrap();
+
+    let snapshot = query_one(&c, 100, 1);
+    assert_eq!(snapshot.sum, 170);
+    assert_eq!(snapshot.items, vec![10, 60, 100]);
+}
