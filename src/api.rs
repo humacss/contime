@@ -1,7 +1,8 @@
 use std::marker::PhantomData;
+use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::{ApplyError, ApplyEvents, ApplyWrapper, Event, EventLanes, Router, RouterError, SnapshotLanes};
+use crate::{ApplyError, ApplyEvents, ApplyWrapper, Event, EventJournalEntry, EventLanes, Router, RouterError, SnapshotLanes};
 
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
@@ -234,6 +235,17 @@ where
     {
         self.router.send_events(events.into_iter().map(Into::into))?;
         Ok(())
+    }
+
+    /// Returns canonical original events whose timestamps are within `range`.
+    ///
+    /// Results are ordered by event time and id. Each event appears once even
+    /// when it routes to multiple snapshots or is submitted repeatedly.
+    pub fn inspect_events<R>(&self, range: R) -> Result<Vec<EventJournalEntry<EL>>, ContimeError>
+    where
+        R: RangeBounds<i64>,
+    {
+        Ok(self.router.inspect_events(range)?)
     }
 
     /// Returns snapshot lanes for many snapshot ids at the same query time.

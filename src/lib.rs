@@ -40,6 +40,7 @@
 //! ```
 mod api;
 mod history;
+mod journal;
 mod key;
 mod router;
 mod traits;
@@ -56,6 +57,7 @@ pub use api::{Contime, ContimeError};
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
 pub use history::{ApplyDecision, ApplyInner, ApplyWrapper, SnapshotHistory};
+pub use journal::EventJournalEntry;
 pub use traits::{ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
 pub use worker::ApplyError;
 
