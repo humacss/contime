@@ -237,10 +237,13 @@ where
         Ok(())
     }
 
-    /// Returns canonical original events whose timestamps are within `range`.
+    /// Returns retained canonical original events whose timestamps are within `range`.
     ///
     /// Results are ordered by event time and id. Each event appears once even
     /// when it routes to multiple snapshots or is submitted repeatedly.
+    ///
+    /// Events pruned from the retained history are no longer available for
+    /// inspection.
     pub fn inspect_events<R>(&self, range: R) -> Result<Vec<EventJournalEntry<EL>>, ContimeError>
     where
         R: RangeBounds<i64>,

@@ -1,6 +1,9 @@
 use crate::Event;
 
 /// One canonical original event retained for inspection.
+///
+/// Journal entries follow the same horizon-based retention as snapshot
+/// history and are not a persistent event store.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventJournalEntry<E> {
     /// The original event lane submitted to ConTime.
