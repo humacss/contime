@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use std::ops::{Bound, RangeBounds};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -6,7 +7,7 @@ use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 
 use crate::worker::WorkerEvent;
-use crate::{ApplyError, ApplyEvents, ApplyWrapper, EventLanes, SnapshotLanes, Worker, WorkerInbound};
+use crate::{ApplyError, ApplyEvents, ApplyWrapper, ContimeKey, EventJournalEntry, EventLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
 pub enum RouterError {
@@ -196,14 +197,23 @@ where
 
         let earliest_time = self.current_time.load(Ordering::Relaxed).saturating_sub(self.lower_time_horizon_delta);
         let mut event_size = 0u64;
+        let mut journal_size = 0u64;
         for event_lane in event_lanes {
             if event_lane.time() < earliest_time {
                 return Err(RouterError::EventBeforeHistoryHorizon { event_time: event_lane.time(), earliest_time });
             }
-            event_size = event_size.saturating_add(event_lane.conservative_size());
-            for routed in event_lane.routed_snapshots() {
+            let lane_size = event_lane.conservative_size();
+            event_size = event_size.saturating_add(lane_size);
+            let routed_snapshots = event_lane.routed_snapshots();
+            let mut routed_worker_indexes = Vec::new();
+            for routed in routed_snapshots {
                 let snapshot_id = routed.snapshot_id;
                 let index = self.worker_index(snapshot_id);
+                if !routed_worker_indexes.contains(&index) {
+                    routed_worker_indexes.push(index);
+                    journal_size = journal_size.saturating_add(lane_size);
+                }
+                journal_size = journal_size.saturating_add(size_of::<u128>() as u64);
                 worker_events[index].push(WorkerEvent {
                     snapshot_id,
                     event: event_lane.clone(),
@@ -214,11 +224,39 @@ where
 
         let usage = self.memory_usage.load(Ordering::Relaxed);
         let budget = self.memory_budget.load(Ordering::Relaxed);
-        if usage + event_size >= budget {
+        if usage.saturating_add(event_size).saturating_add(journal_size) >= budget {
             return Err(RouterError::MemoryFull);
         }
 
         Ok(worker_events)
+    }
+
+    pub fn inspect_events<R>(&self, range: R) -> Result<Vec<EventJournalEntry<EL>>, RouterError>
+    where
+        R: RangeBounds<i64>,
+    {
+        let start = owned_bound(range.start_bound());
+        let end = owned_bound(range.end_bound());
+        let mut rxs = Vec::with_capacity(self.workers.len());
+
+        for worker in &self.workers {
+            let (tx, rx) = bounded(1);
+            worker.worker_inbound_tx.send(WorkerInbound::EventsInRange { start, end, reply: tx }).map_err(|_| RouterError::Error)?;
+            rxs.push(rx);
+        }
+
+        let mut merged = Vec::<EventJournalEntry<EL>>::new();
+        for rx in rxs {
+            for entry in rx.recv().map_err(|_| RouterError::Error)? {
+                let key = ContimeKey::from_event(&entry.event);
+                match merged.binary_search_by_key(&key, |entry| ContimeKey::from_event(&entry.event)) {
+                    Ok(index) => merge_snapshot_ids(&mut merged[index].routed_snapshot_ids, entry.routed_snapshot_ids),
+                    Err(index) => merged.insert(index, entry),
+                }
+            }
+        }
+
+        Ok(merged)
     }
 
     pub fn query_at(&self, time: i64, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError> {
@@ -294,5 +332,21 @@ where
         let hash = self.hasher.hash_one(snapshot_id);
 
         hash as usize % self.workers.len()
+    }
+}
+
+fn owned_bound(bound: Bound<&i64>) -> Bound<i64> {
+    match bound {
+        Bound::Included(value) => Bound::Included(*value),
+        Bound::Excluded(value) => Bound::Excluded(*value),
+        Bound::Unbounded => Bound::Unbounded,
+    }
+}
+
+fn merge_snapshot_ids(existing: &mut Vec<u128>, incoming: Vec<u128>) {
+    for snapshot_id in incoming {
+        if let Err(index) = existing.binary_search(&snapshot_id) {
+            existing.insert(index, snapshot_id);
+        }
     }
 }

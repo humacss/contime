@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
+use std::ops::Bound;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use std::thread::{self, JoinHandle};
 use ahash::{AHashMap, RandomState};
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::{ApplyEvents, ApplyWrapper, EventLanes, SnapshotHistory, SnapshotLanes};
+use crate::{ApplyEvents, ApplyWrapper, ContimeKey, Event, EventJournalEntry, EventLanes, SnapshotHistory, SnapshotLanes};
 
 /// Error returned when a worker cannot apply an event batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +52,7 @@ pub struct WorkerEvent<SL, EL> {
 
 pub enum WorkerInbound<SL: SnapshotLanes, EL> {
     Events { events: Vec<WorkerEvent<SL, EL>>, reply: Sender<Result<(), ApplyError>> },
+    EventsInRange { start: Bound<i64>, end: Bound<i64>, reply: Sender<Vec<EventJournalEntry<EL>>> },
     SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: i64, reply: Sender<Result<Vec<(usize, Option<SL>)>, ApplyError>> },
     AdvanceTime { time: i64, reply: Sender<Result<(), ApplyError>> },
     Shutdown,
@@ -135,6 +137,7 @@ fn handle_worker<SL, EL, C>(
     C::Error: Into<ApplyError>,
 {
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
+    let mut event_log = Vec::<EventJournalEntry<EL>>::new();
     let mut pending_inbound = VecDeque::new();
 
     while is_running.load(Ordering::Relaxed) {
@@ -154,15 +157,26 @@ fn handle_worker<SL, EL, C>(
                         }
                     }
                 }
+                if result.is_ok() {
+                    let drop_time = new_time.saturating_sub(lower_time_horizon_delta);
+                    let bytes_removed = prune_event_log(&mut event_log, drop_time);
+                    fetch_saturating_add_signed(&memory_usage, -bytes_removed, Ordering::Relaxed);
+                }
                 let _ = reply.send(result);
             }
             Ok(WorkerInbound::Events { events, reply }) => {
                 let (events, replies) = collect_replay_batch(events, reply, &worker_inbound_rx, &mut pending_inbound);
+                let bytes_added = record_worker_events(&mut event_log, &events);
+                fetch_saturating_add_signed(&memory_usage, bytes_added, Ordering::Relaxed);
                 let result =
                     apply_events_to_histories(&mut history_by_id, &memory_usage, lower_time_horizon_delta, &mut apply_context, events);
                 for reply in replies {
                     let _ = reply.send(result.clone());
                 }
+            }
+            Ok(WorkerInbound::EventsInRange { start, end, reply }) => {
+                let events = event_log.iter().filter(|entry| time_is_in_range(entry.event.time(), &start, &end)).cloned().collect();
+                let _ = reply.send(events);
             }
             Ok(WorkerInbound::SnapshotsAt { snapshot_requests, time, reply }) => {
                 let mut results = Vec::with_capacity(snapshot_requests.len());
@@ -188,6 +202,57 @@ fn handle_worker<SL, EL, C>(
             Ok(WorkerInbound::Shutdown) | Err(_) => return,
         }
     }
+}
+
+fn record_worker_events<SL, EL>(event_log: &mut Vec<EventJournalEntry<EL>>, events: &[WorkerEvent<SL, EL>]) -> i64
+where
+    SL: SnapshotLanes,
+    EL: Event + Clone,
+{
+    let mut bytes_added = 0i64;
+    for routed_event in events {
+        let key = ContimeKey::from_event(&routed_event.event);
+        match event_log.binary_search_by_key(&key, |entry| ContimeKey::from_event(&entry.event)) {
+            Ok(index) => {
+                let snapshot_ids = &mut event_log[index].routed_snapshot_ids;
+                if let Err(route_index) = snapshot_ids.binary_search(&routed_event.snapshot_id) {
+                    snapshot_ids.insert(route_index, routed_event.snapshot_id);
+                    bytes_added = bytes_added.saturating_add(size_of::<u128>() as i64);
+                }
+            }
+            Err(index) => {
+                let entry = EventJournalEntry { event: routed_event.event.clone(), routed_snapshot_ids: vec![routed_event.snapshot_id] };
+                bytes_added = bytes_added.saturating_add(entry.conservative_size() as i64);
+                event_log.insert(index, entry);
+            }
+        }
+    }
+    bytes_added
+}
+
+fn prune_event_log<EL>(event_log: &mut Vec<EventJournalEntry<EL>>, time: i64) -> i64
+where
+    EL: Event,
+{
+    let drop_key = ContimeKey { time, id: u128::MIN };
+    let first_kept = event_log.partition_point(|entry| ContimeKey::from_event(&entry.event) < drop_key);
+    let bytes_removed = event_log[..first_kept].iter().fold(0i64, |size, entry| size.saturating_add(entry.conservative_size() as i64));
+    event_log.drain(..first_kept);
+    bytes_removed
+}
+
+fn time_is_in_range(time: i64, start: &Bound<i64>, end: &Bound<i64>) -> bool {
+    let after_start = match start {
+        Bound::Included(start) => time >= *start,
+        Bound::Excluded(start) => time > *start,
+        Bound::Unbounded => true,
+    };
+    let before_end = match end {
+        Bound::Included(end) => time <= *end,
+        Bound::Excluded(end) => time < *end,
+        Bound::Unbounded => true,
+    };
+    after_start && before_end
 }
 
 fn collect_replay_batch<SL, EL>(

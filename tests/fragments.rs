@@ -814,7 +814,7 @@ fn distinct_routes_merge_into_one_lane_universe() {
 
 #[test]
 fn repeated_route_keys_merge_targets_across_fragments() {
-    let contime = merged_route_lanes::Contime::new(1, 2_048);
+    let contime = merged_route_lanes::Contime::new(2, 2_048);
 
     contime.apply_events([OnSharedValueChanged { event_id: 13, time: 5, entity_id: 1, value: 21 }]).expect("shared event should apply");
 
@@ -823,6 +823,12 @@ fn repeated_route_keys_merge_targets_across_fragments() {
 
     assert_eq!(source.value, 21);
     assert_eq!(mirror.mirrored, 21);
+
+    let entries = contime.inspect_events(5..=5).expect("event inspection should succeed");
+    let mut expected_snapshot_ids = vec![SharedSourceAt::lane_id(1), SharedMirrorAt::lane_id(1)];
+    expected_snapshot_ids.sort_unstable();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].routed_snapshot_ids, expected_snapshot_ids);
 }
 
 #[test]
