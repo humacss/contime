@@ -11,6 +11,7 @@ use crate::{ApplyError, ApplyEvents, ApplyWrapper, EventLanes, SnapshotLanes, Wo
 #[derive(Debug)]
 pub enum RouterError {
     MemoryFull,
+    EventBeforeHistoryHorizon { event_time: i64, earliest_time: i64 },
     ApplyFailed(ApplyError),
     Error,
 }
@@ -25,6 +26,7 @@ where
     memory_budget: Arc<AtomicU64>,
     memory_usage: Arc<AtomicU64>,
     current_time: Arc<AtomicI64>,
+    lower_time_horizon_delta: i64,
     global_context: Arc<G>,
     _context: PhantomData<C>,
 }
@@ -128,6 +130,7 @@ where
             memory_budget,
             memory_usage,
             current_time: Arc::new(AtomicI64::new(0)),
+            lower_time_horizon_delta,
             global_context,
             _context: PhantomData,
         }
@@ -191,8 +194,12 @@ where
         let mut worker_events = Vec::with_capacity(self.workers.len());
         worker_events.resize_with(self.workers.len(), Vec::new);
 
+        let earliest_time = self.current_time.load(Ordering::Relaxed).saturating_sub(self.lower_time_horizon_delta);
         let mut event_size = 0u64;
         for event_lane in event_lanes {
+            if event_lane.time() < earliest_time {
+                return Err(RouterError::EventBeforeHistoryHorizon { event_time: event_lane.time(), earliest_time });
+            }
             event_size = event_size.saturating_add(event_lane.conservative_size());
             for routed in event_lane.routed_snapshots() {
                 let snapshot_id = routed.snapshot_id;
@@ -274,7 +281,7 @@ where
         }
 
         for rx in rxs {
-            rx.recv().map_err(|_| RouterError::Error)?;
+            rx.recv().map_err(|_| RouterError::Error)?.map_err(RouterError::ApplyFailed)?;
         }
         Ok(())
     }

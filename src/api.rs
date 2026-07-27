@@ -8,6 +8,8 @@ use crate::{ApplyError, ApplyEvents, ApplyWrapper, Event, EventLanes, Router, Ro
 pub enum ContimeError {
     /// Applying the input would exceed the configured memory budget.
     MemoryFull,
+    /// The event predates the earliest time retained by this instance.
+    EventBeforeHistoryHorizon { event_time: i64, earliest_time: i64 },
     /// The requested snapshot id has no known history.
     NotFound,
     /// The apply wrapper rejected the event batch.
@@ -20,6 +22,9 @@ impl From<RouterError> for ContimeError {
     fn from(err: RouterError) -> Self {
         match err {
             RouterError::MemoryFull => ContimeError::MemoryFull,
+            RouterError::EventBeforeHistoryHorizon { event_time, earliest_time } => {
+                ContimeError::EventBeforeHistoryHorizon { event_time, earliest_time }
+            }
             RouterError::ApplyFailed(error) => ContimeError::ApplyFailed(error),
             other => ContimeError::RouterError(other),
         }

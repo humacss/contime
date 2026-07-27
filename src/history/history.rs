@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use crate::{ApplyEvents, ContimeKey, Event, Snapshot};
 
-use super::checkpoints::{get_checkpoint_at, get_checkpoint_at_with_context};
+use super::checkpoints::{get_checkpoint_at, get_checkpoint_at_with_context, get_checkpoint_before_with_context};
 
 type SnapshotId = u128;
 
@@ -45,8 +45,7 @@ where
     pub fn new_with_snapshot_id(snapshot_id: u128, snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
         let checkpoints = VecDeque::new();
         let events = BTreeMap::new();
-        let mut base_snapshot = snapshot.clone();
-        base_snapshot.set_time(0);
+        let base_snapshot = snapshot.clone();
 
         let base_size = base_snapshot.conservative_size() as i64;
 
@@ -64,39 +63,44 @@ where
         )
     }
 
-    /// Advances the internal current time and prunes history outside the configured horizon.
+    /// Advances the internal current time to `time` and prunes history outside the configured horizon.
     pub fn advance(&mut self, time: i64) -> i64 {
-        self.current_time += time;
-        let drop_time = self.current_time - self.lower_time_horizon_delta;
+        let mut context = ();
+        self.advance_with_context(time, &mut context).expect("unit apply wrapper cannot fail")
+    }
 
+    pub(crate) fn advance_with_context<C>(&mut self, time: i64, context: &mut C) -> Result<i64, C::Error>
+    where
+        C: crate::ApplyWrapper<S>,
+    {
+        if time <= self.current_time {
+            return Ok(0);
+        }
+
+        self.current_time = time;
+        let drop_time = self.current_time.saturating_sub(self.lower_time_horizon_delta);
         let drop_key = ContimeKey { time: drop_time, id: u128::MIN };
 
         let mut bytes_delta: i64 = 0;
 
-        // Split off events and checkpoints at the drop boundary
-        let kept_events = self.events.split_off(&drop_key);
-        for (_key, event) in &self.events {
-            bytes_delta -= event.conservative_size() as i64;
+        if self.events.range(..drop_key.clone()).next().is_some() {
+            let new_base = get_checkpoint_before_with_context(self, drop_time, context)?;
+            bytes_delta += new_base.conservative_size() as i64 - self.base_snapshot.conservative_size() as i64;
+            self.base_snapshot = new_base;
         }
 
-        while self.checkpoints.len() > 1 {
-            let second_key = &self.checkpoints[1].0;
-            if second_key >= &drop_key {
-                break;
-            }
-            let (_key, checkpoint) = self.checkpoints.pop_front().expect("checkpoint length checked");
-            self.base_snapshot = checkpoint.clone();
+        let first_kept_checkpoint = self.checkpoints.partition_point(|(key, _checkpoint)| key < &drop_key);
+        for (_key, checkpoint) in self.checkpoints.drain(..first_kept_checkpoint) {
             bytes_delta -= checkpoint.conservative_size() as i64;
         }
-        if let Some((key, checkpoint)) = self.checkpoints.front() {
-            if key < &drop_key {
-                self.base_snapshot = checkpoint.clone();
-            }
-        }
 
+        let kept_events = self.events.split_off(&drop_key);
+        for event in self.events.values() {
+            bytes_delta -= event.conservative_size() as i64;
+        }
         self.events = kept_events;
 
-        bytes_delta
+        Ok(bytes_delta)
     }
 
     /// Reconstructs the snapshot state at `time`.
@@ -445,6 +449,47 @@ mod tests {
     // --- advance tests ---
 
     #[test]
+    fn advance_folds_next_event_into_base_at_event_time() {
+        let base = TestSnapshot { id: 1, time: 20, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(base, 20, 0);
+        apply_one(&mut history, TestEvent::Positive(1, 30, 30, 5));
+
+        history.advance(40);
+
+        assert_eq!(history.base_snapshot.sum, 5);
+        assert_eq!(history.base_snapshot.items, vec![5]);
+        assert_eq!(history.base_snapshot.time, 30);
+        assert!(history.events.is_empty());
+    }
+
+    #[test]
+    fn advance_folds_multiple_events_into_base_in_order() {
+        let base = TestSnapshot { id: 1, time: 20, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(base, 20, 0);
+        apply_one(&mut history, TestEvent::Positive(1, 30, 30, 5));
+        apply_one(&mut history, TestEvent::Positive(1, 35, 35, 10));
+        apply_one(&mut history, TestEvent::Positive(1, 45, 45, 20));
+
+        history.advance(40);
+
+        assert_eq!(history.base_snapshot.sum, 15);
+        assert_eq!(history.base_snapshot.items, vec![5, 10]);
+        assert_eq!(history.base_snapshot.time, 35);
+        assert_eq!(history.events.keys().map(|key| key.time).collect::<Vec<_>>(), vec![45]);
+        assert_eq!(history.snapshot_only_at(45).items, vec![5, 10, 20]);
+    }
+
+    #[test]
+    fn advance_without_pruned_events_preserves_base_time() {
+        let base = TestSnapshot { id: 1, time: 20, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(base, 20, 0);
+
+        history.advance(40);
+
+        assert_eq!(history.base_snapshot.time, 20);
+    }
+
+    #[test]
     fn test_advance_drops_old_events() {
         let base = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
         let (mut history, _) = SnapshotHistory::new(base, 100, 50);
@@ -456,9 +501,9 @@ mod tests {
         apply_one(&mut history, TestEvent::Positive(1, 60, 60, 2));
         apply_one(&mut history, TestEvent::Positive(1, 80, 80, 3));
 
-        // Advance by 20 → current_time = 120, drop_time = 70
+        // Advance to 120, making drop_time = 70.
         // Events at t=40 should be dropped, t=60 is also < 70 so dropped
-        let delta = history.advance(20);
+        let delta = history.advance(120);
         assert!(delta < 0);
         assert_eq!(history.events.len(), 1); // only t=80 remains
     }
@@ -474,7 +519,7 @@ mod tests {
         apply_one(&mut history, TestEvent::Positive(1, 20, 20, 10));
         apply_one(&mut history, TestEvent::Positive(1, 30, 30, 15));
 
-        // current_time=0, advance by 80 → current_time=80, drop_time=30
+        // Advance to 80, making drop_time = 30.
         // Events at t=10, t=20 dropped. Checkpoint at t=20 becomes base.
         history.advance(80);
 

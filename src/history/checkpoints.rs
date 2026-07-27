@@ -365,3 +365,31 @@ where
 
     Ok(snapshot)
 }
+
+pub(super) fn get_checkpoint_before_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: i64, context: &mut C) -> Result<S, C::Error>
+where
+    S: Snapshot + ApplyEvents + 'static,
+    C: ApplyWrapper<S>,
+{
+    let boundary = first_key_at_time(time);
+    let checkpoint_entry = latest_checkpoint_before(&history.checkpoints, &boundary);
+
+    let (mut snapshot, recompute_start) = match checkpoint_entry {
+        Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
+        None => (history.base_snapshot.clone(), Bound::Unbounded),
+    };
+
+    apply_event_buckets::<S, C::Error, _>(
+        history.snapshot_id,
+        &history.events,
+        recompute_start,
+        Bound::Excluded(boundary),
+        |_bucket_last_key, _bucket_len, batch| {
+            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default())?;
+            snapshot.set_time(batch.time);
+            Ok(true)
+        },
+    )?;
+
+    Ok(snapshot)
+}

@@ -52,7 +52,7 @@ pub struct WorkerEvent<SL, EL> {
 pub enum WorkerInbound<SL: SnapshotLanes, EL> {
     Events { events: Vec<WorkerEvent<SL, EL>>, reply: Sender<Result<(), ApplyError>> },
     SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: i64, reply: Sender<Result<Vec<(usize, Option<SL>)>, ApplyError>> },
-    AdvanceTime { time: i64, reply: Sender<()> },
+    AdvanceTime { time: i64, reply: Sender<Result<(), ApplyError>> },
     Shutdown,
 }
 
@@ -144,10 +144,17 @@ fn handle_worker<SL, EL, C>(
         };
         match inbound {
             Ok(WorkerInbound::AdvanceTime { time: new_time, reply }) => {
+                let mut result = Ok(());
                 for history in history_by_id.values_mut() {
-                    fetch_saturating_add_signed(&memory_usage, history.advance(new_time), Ordering::Relaxed);
+                    match history.advance_with_context(new_time, &mut apply_context) {
+                        Ok(bytes_delta) => fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed),
+                        Err(error) => {
+                            result = Err(error.into());
+                            break;
+                        }
+                    }
                 }
-                let _ = reply.send(());
+                let _ = reply.send(result);
             }
             Ok(WorkerInbound::Events { events, reply }) => {
                 let (events, replies) = collect_replay_batch(events, reply, &worker_inbound_rx, &mut pending_inbound);
