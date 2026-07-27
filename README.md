@@ -73,7 +73,7 @@ The public API is small. In practice you do five things:
 2. Derive `ContimeEvent` and `ContimeSnapshot`, or implement `Event`, `SnapshotEvent`, `Snapshot`, and `ApplyEvents` manually.
 3. Generate `SnapshotLanes`, `EventLanes`, and a typed `Contime` alias with `contime::lanes!`.
 4. Create a `Contime` instance with a worker count and memory budget.
-5. Apply events, optionally advance the retained history horizon with `advance_to`, then query state with `query_at`.
+5. Apply events, optionally advance the retained history horizon with `advance_to`, then query state with `query_at` or inspect retained original events with `inspect_events`.
 
 ### Minimal usage flow
 
@@ -102,6 +102,23 @@ wrappers may call the inner apply zero, one, or many times with temporary
 same-timestamp batches, and any wrapper error is returned through the normal
 apply result.
 
+### Event Inspection
+
+`inspect_events` returns the canonical original events currently retained by
+`contime` within a requested time range:
+
+```rust
+let entries = contime.inspect_events(1_000..=2_000)?;
+```
+
+Results are ordered by event time and id. Repeated submissions of the same
+event appear once, and each `EventJournalEntry` includes the snapshot ids
+selected when the event was routed.
+
+Inspection follows the same retention rules as snapshot history. Events removed
+when the history horizon advances are no longer returned. Persistence and
+loading events for replay remain responsibilities of the surrounding system.
+
 ## `contime` is
 
 - A continuous-time state engine  
@@ -127,7 +144,7 @@ It maintains queryable historical state from applied events.
 - Memory usage is bounded by the configured budget and the amount of retained history.
 - History pruning is driven by `advance_to` together with the configured history horizon.
 - Snapshot queries include events with `event.time() <= query_time`.
-- Public event-history inspection is intentionally not exposed by `contime`.
+- `inspect_events` exposes only original events still retained in memory; pruned events must be loaded from an external persistent source.
 - Checkpoints currently clone full snapshots, so the crate is best suited to relatively small snapshot payloads today.
 - Known deferred issues:
   - memory-budget admission is still approximate and does not reserve replay/checkpoint growth up front

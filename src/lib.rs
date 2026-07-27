@@ -11,7 +11,8 @@
 //! 2. Generate lane enums with [`lanes!`], or define compatible lane types manually.
 //! 3. Construct a [`Contime`] with a worker count and memory budget.
 //! 4. Apply events.
-//! 5. Query state with [`Contime::query_at`].
+//! 5. Query state with [`Contime::query_at`] or inspect retained original events
+//!    with [`Contime::inspect_events`].
 //!
 //! Point queries include all events at the queried millisecond.
 //!
@@ -24,7 +25,7 @@
 //! with the current public API.
 //!
 //! ```rust
-//! use contime::{TestEvent, TestSnapshot, TestSnapshotContime};
+//! use contime::{Event, TestEvent, TestSnapshot, TestSnapshotContime};
 //!
 //! let contime = TestSnapshotContime::new(1, 1_024);
 //!
@@ -37,6 +38,11 @@
 //!
 //! let snapshot: TestSnapshot = contime.query_at(6, &[1]).unwrap().pop().flatten().unwrap().into();
 //! assert_eq!(snapshot.sum, 5);
+//!
+//! let events = contime.inspect_events(4..=5).unwrap();
+//! assert_eq!(events.len(), 2);
+//! assert_eq!(events[0].event.time(), 4);
+//! assert_eq!(events[1].event.time(), 5);
 //! ```
 mod api;
 mod history;
