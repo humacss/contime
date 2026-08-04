@@ -7,22 +7,18 @@ use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 
 use crate::worker::WorkerEvent;
-use crate::{
-    ApplyError, ApplyEvents, ApplyWrapper, ContimeKey, ContimeTime, EventJournalEntry, EventLanes, SnapshotLanes, Worker, WorkerInbound,
-};
+use crate::{ApplyEvents, ApplyWrapper, ContimeKey, ContimeTime, EventJournalEntry, EventLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
 pub enum RouterError<T: ContimeTime> {
     MemoryFull,
     EventBeforeHistoryHorizon { event_time: T, earliest_time: T },
-    ApplyFailed(ApplyError),
     Error,
 }
 
 pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = (), G = ()>
 where
     C: ApplyWrapper<SL>,
-    C::Error: Into<ApplyError>,
 {
     hasher: RandomState,
     workers: Vec<Worker<SL, EL, C>>,
@@ -38,7 +34,6 @@ impl<SL, EL> Router<SL, EL, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     (): ApplyWrapper<SL>,
-    <() as ApplyWrapper<SL>>::Error: Into<ApplyError>,
     EL: EventLanes<SL> + 'static,
 {
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
@@ -54,7 +49,6 @@ impl<SL, EL, C> Router<SL, EL, C>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + 'static,
-    C::Error: Into<ApplyError>,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {
@@ -78,7 +72,6 @@ impl<SL, EL, C, G> Router<SL, EL, C, G>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + Send + 'static,
-    C::Error: Into<ApplyError>,
     EL: EventLanes<SL, C> + Send + 'static,
     G: Send + Sync + 'static,
 {
@@ -164,7 +157,7 @@ where
         }
 
         for rx in rxs {
-            rx.recv().map_err(|_| RouterError::Error)?.map_err(RouterError::ApplyFailed)?;
+            rx.recv().map_err(|_| RouterError::Error)?;
         }
         Ok(())
     }
@@ -297,7 +290,7 @@ where
         results.resize_with(snapshot_ids.len(), || None);
 
         for rx in rxs {
-            let batch = rx.recv().map_err(|_| RouterError::Error)?.map_err(RouterError::ApplyFailed)?;
+            let batch = rx.recv().map_err(|_| RouterError::Error)?;
             for (position, snapshot_lane) in batch {
                 results[position] = snapshot_lane;
             }
@@ -323,7 +316,7 @@ where
         }
 
         for rx in rxs {
-            rx.recv().map_err(|_| RouterError::Error)?.map_err(RouterError::ApplyFailed)?;
+            rx.recv().map_err(|_| RouterError::Error)?;
         }
         Ok(())
     }

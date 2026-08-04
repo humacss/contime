@@ -12,36 +12,6 @@ use crossbeam_channel::{Receiver, Sender};
 
 use crate::{ApplyEvents, ApplyWrapper, ContimeKey, ContimeTime, Event, EventJournalEntry, EventLanes, SnapshotHistory, SnapshotLanes};
 
-/// Error returned when a worker cannot apply an event batch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApplyError {
-    message: String,
-}
-
-impl ApplyError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into() }
-    }
-
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-impl std::fmt::Display for ApplyError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ApplyError {}
-
-impl From<std::convert::Infallible> for ApplyError {
-    fn from(error: std::convert::Infallible) -> Self {
-        match error {}
-    }
-}
-
 pub type SnapshotId = u128;
 
 pub struct WorkerEvent<SL, EL> {
@@ -51,10 +21,10 @@ pub struct WorkerEvent<SL, EL> {
 }
 
 pub enum WorkerInbound<SL: SnapshotLanes, EL> {
-    Events { events: Vec<WorkerEvent<SL, EL>>, reply: Sender<Result<(), ApplyError>> },
+    Events { events: Vec<WorkerEvent<SL, EL>>, reply: Sender<()> },
     EventsInRange { start: Bound<SL::Time>, end: Bound<SL::Time>, reply: Sender<Vec<EventJournalEntry<EL>>> },
-    SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: SL::Time, reply: Sender<Result<Vec<(usize, Option<SL>)>, ApplyError>> },
-    AdvanceTime { time: SL::Time, reply: Sender<Result<(), ApplyError>> },
+    SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: SL::Time, reply: Sender<Vec<(usize, Option<SL>)>> },
+    AdvanceTime { time: SL::Time, reply: Sender<()> },
     Shutdown,
 }
 
@@ -85,7 +55,6 @@ where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     EL: EventLanes<SL, C> + 'static + Send,
     C: ApplyWrapper<SL> + Send + 'static,
-    C::Error: Into<ApplyError>,
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_parts(
@@ -134,7 +103,6 @@ fn handle_worker<SL, EL, C>(
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     EL: EventLanes<SL, C>,
     C: ApplyWrapper<SL>,
-    C::Error: Into<ApplyError>,
 {
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
     let mut event_log = Vec::<EventJournalEntry<EL>>::new();
@@ -147,36 +115,22 @@ fn handle_worker<SL, EL, C>(
         };
         match inbound {
             Ok(WorkerInbound::AdvanceTime { time: new_time, reply }) => {
-                let mut result = Ok(());
                 for history in history_by_id.values_mut() {
-                    match history.advance_with_context(new_time.clone(), &mut apply_context) {
-                        Ok(bytes_delta) => fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed),
-                        Err(error) => {
-                            result = Err(error.into());
-                            break;
-                        }
-                    }
+                    let bytes_delta = history.advance_with_context(new_time.clone(), &mut apply_context);
+                    fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed);
                 }
-                if result.is_ok() {
-                    let drop_time = new_time.saturating_sub(lower_time_horizon_delta.clone());
-                    let bytes_removed = prune_event_log(&mut event_log, drop_time);
-                    fetch_saturating_add_signed(&memory_usage, -bytes_removed, Ordering::Relaxed);
-                }
-                let _ = reply.send(result);
+                let drop_time = new_time.saturating_sub(lower_time_horizon_delta.clone());
+                let bytes_removed = prune_event_log(&mut event_log, drop_time);
+                fetch_saturating_add_signed(&memory_usage, -bytes_removed, Ordering::Relaxed);
+                let _ = reply.send(());
             }
             Ok(WorkerInbound::Events { events, reply }) => {
                 let (events, replies) = collect_replay_batch(events, reply, &worker_inbound_rx, &mut pending_inbound);
                 let bytes_added = record_worker_events(&mut event_log, &events);
                 fetch_saturating_add_signed(&memory_usage, bytes_added, Ordering::Relaxed);
-                let result = apply_events_to_histories(
-                    &mut history_by_id,
-                    &memory_usage,
-                    lower_time_horizon_delta.clone(),
-                    &mut apply_context,
-                    events,
-                );
+                apply_events_to_histories(&mut history_by_id, &memory_usage, lower_time_horizon_delta.clone(), &mut apply_context, events);
                 for reply in replies {
-                    let _ = reply.send(result.clone());
+                    let _ = reply.send(());
                 }
             }
             Ok(WorkerInbound::EventsInRange { start, end, reply }) => {
@@ -185,24 +139,14 @@ fn handle_worker<SL, EL, C>(
             }
             Ok(WorkerInbound::SnapshotsAt { snapshot_requests, time, reply }) => {
                 let mut results = Vec::with_capacity(snapshot_requests.len());
-                let mut error = None;
                 for (position, snapshot_id) in snapshot_requests {
                     let snapshot = match history_by_id.get(&snapshot_id) {
-                        Some(history) => match history.snapshot_only_at_with_context(time.clone(), &mut apply_context) {
-                            Ok(snapshot) => Some(snapshot),
-                            Err(err) => {
-                                error = Some(err.into());
-                                break;
-                            }
-                        },
+                        Some(history) => Some(history.snapshot_only_at_with_context(time.clone(), &mut apply_context)),
                         None => None,
                     };
                     results.push((position, snapshot));
                 }
-                let _ = reply.send(match error {
-                    Some(error) => Err(error),
-                    None => Ok(results),
-                });
+                let _ = reply.send(results);
             }
             Ok(WorkerInbound::Shutdown) | Err(_) => return,
         }
@@ -262,10 +206,10 @@ fn time_is_in_range<T: crate::ContimeTime>(time: T, start: &Bound<T>, end: &Boun
 
 fn collect_replay_batch<SL, EL>(
     mut events: Vec<WorkerEvent<SL, EL>>,
-    first_reply: Sender<Result<(), ApplyError>>,
+    first_reply: Sender<()>,
     worker_inbound_rx: &Receiver<WorkerInbound<SL, EL>>,
     pending_inbound: &mut VecDeque<WorkerInbound<SL, EL>>,
-) -> (Vec<WorkerEvent<SL, EL>>, Vec<Sender<Result<(), ApplyError>>>)
+) -> (Vec<WorkerEvent<SL, EL>>, Vec<Sender<()>>)
 where
     SL: SnapshotLanes,
 {
@@ -293,12 +237,10 @@ fn apply_events_to_histories<SL, EL, C>(
     lower_time_horizon_delta: SL::Time,
     apply_context: &mut C,
     events: Vec<WorkerEvent<SL, EL>>,
-) -> Result<(), ApplyError>
-where
+) where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     EL: EventLanes<SL, C>,
     C: ApplyWrapper<SL>,
-    C::Error: Into<ApplyError>,
 {
     let mut events_by_snapshot = AHashMap::<SnapshotId, (SL, Vec<EL>)>::new();
     for routed_event in events {
@@ -324,9 +266,7 @@ where
                 entry.insert(history)
             }
         };
-        let bytes_delta = history.apply_event_batch(events, apply_context).map_err(Into::into)?;
+        let bytes_delta = history.apply_event_batch(events, apply_context);
         fetch_saturating_add_signed(memory_usage, bytes_delta, Ordering::Relaxed);
     }
-
-    Ok(())
 }

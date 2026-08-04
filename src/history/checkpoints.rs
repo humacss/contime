@@ -135,7 +135,7 @@ pub(super) fn apply_events_to_checkpoint<S, C>(
     history: &LocalSnapshotHistory<S>,
     mut checkpoint: CheckpointForApply<S>,
     context: &mut C,
-) -> Result<AppliedCheckpoint<S>, C::Error>
+) -> AppliedCheckpoint<S>
 where
     S: Snapshot + ApplyEvents + 'static,
     C: ApplyWrapper<S>,
@@ -144,15 +144,15 @@ where
     let mut materialized_checkpoints = Vec::new();
     let mut stored_first_changed_checkpoint = false;
 
-    apply_event_buckets::<S, C::Error, _>(
+    apply_event_buckets::<S, _>(
         history.snapshot_id,
         &history.events,
         checkpoint.start.clone(),
         checkpoint.end.clone(),
         |bucket_last_key, bucket_len, batch| {
             let batch_time = batch.time.clone();
-            if context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default())? == ApplyDecision::EarlyExit {
-                return Ok(false);
+            if context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default()) == ApplyDecision::EarlyExit {
+                return false;
             }
             event_count += bucket_len;
 
@@ -167,17 +167,17 @@ where
                 }
             }
 
-            Ok(true)
+            true
         },
-    )?;
+    );
 
-    Ok(AppliedCheckpoint {
+    AppliedCheckpoint {
         stale_start: checkpoint.stale_start,
         bytes_delta: checkpoint.bytes_delta,
         final_key: history.events.keys().next_back().cloned(),
         final_snapshot: checkpoint.snapshot,
         materialized_checkpoints,
-    })
+    }
 }
 
 pub(super) fn commit_applied_checkpoint<S>(history: &mut LocalSnapshotHistory<S>, applied_checkpoint: AppliedCheckpoint<S>) -> i64
@@ -271,16 +271,15 @@ where
     is_event_count_cadence(history, history.events.len())
 }
 
-pub(super) fn apply_event_buckets<S, E, F>(
+pub(super) fn apply_event_buckets<S, F>(
     snapshot_id: u128,
     events: &BTreeMap<ContimeKey<S::Time>, S::Event>,
     start: Bound<ContimeKey<S::Time>>,
     end: Bound<ContimeKey<S::Time>>,
     mut apply_bucket: F,
-) -> Result<(), E>
-where
+) where
     S: Snapshot + ApplyEvents + 'static,
-    F: FnMut(&ContimeKey<S::Time>, usize, ApplyBatch<'_, S::Event>) -> Result<bool, E>,
+    F: FnMut(&ContimeKey<S::Time>, usize, ApplyBatch<'_, S::Event>) -> bool,
 {
     let mut iter = events.range((start, end)).peekable();
     while let Some((first_key, first_event)) = iter.next() {
@@ -290,7 +289,7 @@ where
         if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
             let bucket = [first_event];
             let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-            if !apply_bucket(bucket_last_key, 1, batch)? {
+            if !apply_bucket(bucket_last_key, 1, batch) {
                 break;
             }
             continue;
@@ -302,7 +301,7 @@ where
         if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
             let bucket = [first_event, second_event];
             let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-            if !apply_bucket(bucket_last_key, 2, batch)? {
+            if !apply_bucket(bucket_last_key, 2, batch) {
                 break;
             }
             continue;
@@ -324,12 +323,10 @@ where
 
         let bucket_len = bucket.len();
         let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-        if !apply_bucket(bucket_last_key, bucket_len, batch)? {
+        if !apply_bucket(bucket_last_key, bucket_len, batch) {
             break;
         }
     }
-
-    Ok(())
 }
 
 pub(super) fn get_checkpoint_at<S>(history: &LocalSnapshotHistory<S>, time: S::Time) -> S
@@ -337,10 +334,10 @@ where
     S: Snapshot + ApplyEvents + 'static,
 {
     let mut context = ();
-    get_checkpoint_at_with_context(history, time, &mut context).expect("unit apply wrapper cannot fail")
+    get_checkpoint_at_with_context(history, time, &mut context)
 }
 
-pub(super) fn get_checkpoint_at_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: S::Time, context: &mut C) -> Result<S, C::Error>
+pub(super) fn get_checkpoint_at_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: S::Time, context: &mut C) -> S
 where
     S: Snapshot + ApplyEvents + 'static,
     C: ApplyWrapper<S>,
@@ -356,29 +353,25 @@ where
 
     let end_key = last_key_at_time(time.clone());
 
-    apply_event_buckets::<S, C::Error, _>(
+    apply_event_buckets::<S, _>(
         history.snapshot_id,
         &history.events,
         recompute_start,
         Bound::Included(end_key),
         |_bucket_last_key, _bucket_len, batch| {
             let batch_time = batch.time.clone();
-            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default())?;
+            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
             snapshot.set_time(batch_time);
-            Ok(true)
+            true
         },
-    )?;
+    );
 
     snapshot.set_time(time);
 
-    Ok(snapshot)
+    snapshot
 }
 
-pub(super) fn get_checkpoint_before_with_context<S, C>(
-    history: &LocalSnapshotHistory<S>,
-    time: S::Time,
-    context: &mut C,
-) -> Result<S, C::Error>
+pub(super) fn get_checkpoint_before_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: S::Time, context: &mut C) -> S
 where
     S: Snapshot + ApplyEvents + 'static,
     C: ApplyWrapper<S>,
@@ -391,18 +384,18 @@ where
         None => (history.base_snapshot.clone(), Bound::Unbounded),
     };
 
-    apply_event_buckets::<S, C::Error, _>(
+    apply_event_buckets::<S, _>(
         history.snapshot_id,
         &history.events,
         recompute_start,
         Bound::Excluded(boundary),
         |_bucket_last_key, _bucket_len, batch| {
             let batch_time = batch.time.clone();
-            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default())?;
+            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
             snapshot.set_time(batch_time);
-            Ok(true)
+            true
         },
-    )?;
+    );
 
-    Ok(snapshot)
+    snapshot
 }

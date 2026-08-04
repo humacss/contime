@@ -16,12 +16,12 @@ fn new_event(event_id: u128, time: i64) -> BenchEvent {
 }
 
 trait BenchHistoryApply {
-    fn apply_event(&mut self, event: BenchEvent) -> Result<i64, contime::ApplyError>;
+    fn apply_event(&mut self, event: BenchEvent) -> i64;
 }
 
 impl BenchHistoryApply for SnapshotHistory<BenchSnapshot> {
-    fn apply_event(&mut self, event: BenchEvent) -> Result<i64, contime::ApplyError> {
-        self.apply_event_batch(vec![event], &mut ()).map_err(Into::into)
+    fn apply_event(&mut self, event: BenchEvent) -> i64 {
+        self.apply_event_batch(vec![event], &mut ())
     }
 }
 
@@ -34,7 +34,7 @@ fn benchmark_apply_event(runner: &mut Criterion) {
                 || SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0,
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event(i, i as i64)).expect("seed event should apply");
+                        history.apply_event(new_event(i, i as i64));
                     }
                 },
                 BatchSize::SmallInput,
@@ -45,12 +45,12 @@ fn benchmark_apply_event(runner: &mut Criterion) {
             bencher.iter_batched_ref(
                 || {
                     let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
-                    history.apply_event(new_event(size, size as i64)).expect("seed event should apply");
+                    history.apply_event(new_event(size, size as i64));
                     history
                 },
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event(i as u128, i as i64)).expect("bench event should apply");
+                        history.apply_event(new_event(i as u128, i as i64));
                     }
                 },
                 BatchSize::SmallInput,
@@ -61,12 +61,12 @@ fn benchmark_apply_event(runner: &mut Criterion) {
             bencher.iter_batched_ref(
                 || {
                     let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
-                    history.apply_event(new_event(size, size as i64)).expect("seed event should apply");
+                    history.apply_event(new_event(size, size as i64));
                     history
                 },
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event(i, (i / 2) as i64)).expect("bench event should apply");
+                        history.apply_event(new_event(i, (i / 2) as i64));
                     }
 
                     black_box(&history);
@@ -79,12 +79,12 @@ fn benchmark_apply_event(runner: &mut Criterion) {
             bencher.iter_batched_ref(
                 || {
                     let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
-                    history.apply_event(new_event(size, size as i64).into()).expect("seed event should apply");
+                    history.apply_event(new_event(size, size as i64).into());
                     history
                 },
                 |history| {
                     for i in 0..size {
-                        history.apply_event(new_event((size - 1) - i, ((size - 1) - i) as i64)).expect("bench event should apply");
+                        history.apply_event(new_event((size - 1) - i, ((size - 1) - i) as i64));
                     }
                 },
                 BatchSize::SmallInput,
@@ -104,7 +104,7 @@ fn benchmark_snapshot_at(runner: &mut Criterion) {
                 || {
                     let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
                     for i in 0..size {
-                        history.apply_event(new_event(i, i as i64)).expect("seed event should apply");
+                        history.apply_event(new_event(i, i as i64));
                     }
                     history
                 },
@@ -148,7 +148,7 @@ fn benchmark_apply_orchestrator_callback(runner: &mut Criterion) {
             || SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0,
             |history| {
                 next_event_id = next_event_id.wrapping_add(1);
-                black_box(history.apply_event(new_event(next_event_id, next_event_id as i64)).expect("bench event should apply"));
+                black_box(history.apply_event(new_event(next_event_id, next_event_id as i64)));
             },
             BatchSize::SmallInput,
         );
@@ -162,11 +162,7 @@ fn benchmark_apply_orchestrator_callback(runner: &mut Criterion) {
             || SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0,
             |history| {
                 next_event_id = next_event_id.wrapping_add(1);
-                black_box(
-                    history
-                        .apply_event_batch(vec![new_event(next_event_id, next_event_id as i64)], &mut context)
-                        .expect("bench event should apply"),
-                );
+                black_box(history.apply_event_batch(vec![new_event(next_event_id, next_event_id as i64)], &mut context));
             },
             BatchSize::SmallInput,
         );
@@ -180,14 +176,10 @@ fn benchmark_apply_orchestrator_callback(runner: &mut Criterion) {
             || SnapshotHistory::<CallbackSnapshot>::new(CallbackSnapshot::default(), 0, 10000).0,
             |history| {
                 next_event_id = next_event_id.wrapping_add(1);
-                black_box(
-                    history
-                        .apply_event_batch(
-                            vec![CallbackEvent { event_id: next_event_id, time: next_event_id as i64, snapshot_id: 0, value: 1 }],
-                            &mut context,
-                        )
-                        .expect("bench event should apply"),
-                );
+                black_box(history.apply_event_batch(
+                    vec![CallbackEvent { event_id: next_event_id, time: next_event_id as i64, snapshot_id: 0, value: 1 }],
+                    &mut context,
+                ));
                 black_box(context.sink);
             },
             BatchSize::SmallInput,
@@ -274,20 +266,18 @@ impl contime::ApplyEvents for CallbackSnapshot {
 }
 
 impl contime::ApplyWrapper<CallbackSnapshot> for CallbackContext {
-    type Error = std::convert::Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut CallbackSnapshot,
         batch: contime::ApplyBatch<'_, CallbackEvent>,
         apply_inner: contime::ApplyInner<CallbackSnapshot>,
-    ) -> Result<contime::ApplyDecision, Self::Error> {
+    ) -> contime::ApplyDecision {
         let event_ids = batch.events.iter().map(|event| event.event_id).collect::<Vec<_>>();
         apply_inner.apply_event_batch(snapshot, batch);
         for event_id in event_ids {
             self.sink = self.sink.wrapping_add(event_id).wrapping_add(snapshot.sum as u128);
         }
-        Ok(contime::ApplyDecision::Continue)
+        contime::ApplyDecision::Continue
     }
 }
 

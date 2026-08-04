@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::{ApplyError, ApplyEvents, ApplyWrapper, ContimeTime, Event, EventJournalEntry, EventLanes, Router, RouterError, SnapshotLanes};
+use crate::{ApplyEvents, ApplyWrapper, ContimeTime, Event, EventJournalEntry, EventLanes, Router, RouterError, SnapshotLanes};
 
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
@@ -13,8 +13,6 @@ pub enum ContimeError<T: ContimeTime> {
     EventBeforeHistoryHorizon { event_time: T, earliest_time: T },
     /// The requested snapshot id has no known history.
     NotFound,
-    /// The apply wrapper rejected the event batch.
-    ApplyFailed(ApplyError),
     /// Internal routing error.
     RouterError(RouterError<T>),
 }
@@ -26,7 +24,6 @@ impl<T: ContimeTime> From<RouterError<T>> for ContimeError<T> {
             RouterError::EventBeforeHistoryHorizon { event_time, earliest_time } => {
                 ContimeError::EventBeforeHistoryHorizon { event_time, earliest_time }
             }
-            RouterError::ApplyFailed(error) => ContimeError::ApplyFailed(error),
             other => ContimeError::RouterError(other),
         }
     }
@@ -38,7 +35,6 @@ impl<T: ContimeTime> From<RouterError<T>> for ContimeError<T> {
 pub struct Contime<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = (), G = ()>
 where
     C: ApplyWrapper<SL>,
-    C::Error: Into<ApplyError>,
 {
     router: Router<SL, EL, C, G>,
     apply_context: Option<C>,
@@ -50,7 +46,6 @@ impl<SL, EL> Contime<SL, EL, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     (): ApplyWrapper<SL>,
-    <() as ApplyWrapper<SL>>::Error: Into<ApplyError>,
     EL: EventLanes<SL> + 'static,
 {
     /// Creates a `contime` instance with `worker_count` workers and a shared memory budget.
@@ -78,7 +73,6 @@ impl<SL, EL, C> Contime<SL, EL, C, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + 'static,
-    C::Error: Into<ApplyError>,
     EL: EventLanes<SL, C> + 'static,
     C: Clone + Send + 'static,
 {
@@ -121,7 +115,6 @@ impl<SL, EL, C> Contime<SL, EL, C, ()>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + Send + 'static,
-    C::Error: Into<ApplyError>,
     EL: EventLanes<SL, C> + Send + 'static,
 {
     /// Creates a `contime` instance with one apply context initialized per worker.
@@ -156,7 +149,6 @@ impl<SL, EL, C, G> Contime<SL, EL, C, G>
 where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
     C: ApplyWrapper<SL> + Send + 'static,
-    C::Error: Into<ApplyError>,
     EL: EventLanes<SL, C> + Send + 'static,
     G: Send + Sync + 'static,
 {
@@ -224,9 +216,7 @@ where
     /// Sends events to affected workers without waiting for them to apply.
     ///
     /// This returns after the events have been routed and enqueued into the worker
-    /// channels. It can report routing, memory-budget, or worker-channel errors,
-    /// but it cannot report apply-wrapper errors because apply happens after this
-    /// function returns.
+    /// channels. It can report routing, memory-budget, or worker-channel errors.
     pub fn send_events<I, E>(&self, events: I) -> Result<(), ContimeError<SL::Time>>
     where
         I: IntoIterator<Item = E>,

@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::marker::PhantomData;
 
 use crate::{ApplyBatch, ApplyEvents, ContimeKey, Event, Snapshot};
@@ -58,35 +57,31 @@ pub enum ApplyDecision {
     EarlyExit,
 }
 
-/// Neutral extension seam around normal same-timestamp batch application.
+/// Neutral, infallible extension seam around normal same-timestamp batch application.
+///
+/// Return [`ApplyDecision::EarlyExit`] to stop the current replay pass intentionally.
+/// A panic indicates a broken invariant, and the caller must not assume the affected
+/// `contime` instance remains usable afterward.
 pub trait ApplyWrapper<S>
 where
     S: Snapshot + ApplyEvents,
 {
-    type Error;
-
-    fn apply_event_batch_wrapper(
-        &mut self,
-        snapshot: &mut S,
-        batch: ApplyBatch<'_, S::Event>,
-        apply_inner: ApplyInner<S>,
-    ) -> Result<ApplyDecision, Self::Error>;
+    fn apply_event_batch_wrapper(&mut self, snapshot: &mut S, batch: ApplyBatch<'_, S::Event>, apply_inner: ApplyInner<S>)
+        -> ApplyDecision;
 }
 
 impl<S> ApplyWrapper<S> for ()
 where
     S: Snapshot + ApplyEvents,
 {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut S,
         batch: ApplyBatch<'_, S::Event>,
         apply_inner: ApplyInner<S>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         apply_inner.apply_event_batch(snapshot, batch);
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
@@ -95,13 +90,13 @@ where
     S: Snapshot + ApplyEvents + 'static,
 {
     /// Applies one incoming event batch to this history and returns the memory delta.
-    pub fn apply_event_batch<C>(&mut self, events: Vec<S::Event>, context: &mut C) -> Result<i64, C::Error>
+    pub fn apply_event_batch<C>(&mut self, events: Vec<S::Event>, context: &mut C) -> i64
     where
         C: ApplyWrapper<S>,
     {
         let applied_batch = self.insert_event_batch(events);
         if !applied_batch.changed {
-            return Ok(0);
+            return 0;
         }
 
         let checkpoint = self.get_checkpoint_for_apply(
@@ -110,10 +105,10 @@ where
             applied_batch.single_changed_event_key,
             applied_batch.changed_event_count,
         );
-        let applied_checkpoint = self.apply_events_to_checkpoint(checkpoint, context)?;
+        let applied_checkpoint = self.apply_events_to_checkpoint(checkpoint, context);
         let bytes_delta = applied_batch.bytes_delta + self.commit_applied_checkpoint(applied_checkpoint);
 
-        Ok(bytes_delta)
+        bytes_delta
     }
 
     fn get_checkpoint_for_apply(
@@ -126,7 +121,7 @@ where
         get_checkpoint_for_apply(self, earliest_changed_time, latest_event_key_before_apply, single_changed_event_key, changed_event_count)
     }
 
-    fn apply_events_to_checkpoint<C>(&self, checkpoint: CheckpointForApply<S>, context: &mut C) -> Result<AppliedCheckpoint<S>, C::Error>
+    fn apply_events_to_checkpoint<C>(&self, checkpoint: CheckpointForApply<S>, context: &mut C) -> AppliedCheckpoint<S>
     where
         C: ApplyWrapper<S>,
     {
