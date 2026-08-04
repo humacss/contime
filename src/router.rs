@@ -9,6 +9,8 @@ use crossbeam_channel::{bounded, unbounded, Sender};
 use crate::worker::WorkerEvent;
 use crate::{ApplyEvents, ApplyWrapper, ContimeKey, ContimeTime, EventJournalEntry, EventLanes, SnapshotLanes, Worker, WorkerInbound};
 
+type RoutedWorkerEvents<SL, EL> = Vec<Vec<WorkerEvent<SL, EL>>>;
+
 #[derive(Debug)]
 pub enum RouterError<T: ContimeTime> {
     MemoryFull,
@@ -92,6 +94,8 @@ where
     where
         F: FnMut(usize, Arc<G>) -> C,
     {
+        assert!(worker_count > 0, "worker_count must be greater than zero");
+
         let hasher = RandomState::new();
 
         let global_context = Arc::new(global_context);
@@ -183,7 +187,7 @@ where
         Ok(())
     }
 
-    fn route_events<I>(&self, event_lanes: I) -> Result<Vec<Vec<WorkerEvent<SL, EL>>>, RouterError<SL::Time>>
+    fn route_events<I>(&self, event_lanes: I) -> Result<RoutedWorkerEvents<SL, EL>, RouterError<SL::Time>>
     where
         I: IntoIterator<Item = EL>,
     {

@@ -6,7 +6,7 @@ use super::checkpoints::{get_checkpoint_at, get_checkpoint_at_with_context, get_
 
 type SnapshotId = u128;
 
-/// Advanced per-snapshot history store used internally by `Contime`.
+/// Per-snapshot history store used internally by `Contime`.
 ///
 /// Most users should interact with [`crate::Contime`] instead. This type is useful when you
 /// want direct control over one snapshot timeline, for example in benchmarks or focused tests.

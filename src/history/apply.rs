@@ -87,9 +87,7 @@ where
             applied_batch.changed_event_count,
         );
         let applied_checkpoint = self.apply_events_to_checkpoint(checkpoint, context);
-        let bytes_delta = applied_batch.bytes_delta + self.commit_applied_checkpoint(applied_checkpoint);
-
-        bytes_delta
+        applied_batch.bytes_delta + self.commit_applied_checkpoint(applied_checkpoint)
     }
 
     fn get_checkpoint_for_apply(

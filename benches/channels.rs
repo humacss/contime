@@ -83,8 +83,6 @@ mod flume_impl {
                         QueryRequest::SnapshotAt { snapshot_id, time, reply } => {
                             if snapshot_id == u128::MAX {
                                 let _ = reply.send(QueryReply::NotFound);
-                            } else if snapshot_id == 1 {
-                                let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             } else {
                                 let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             }
@@ -214,8 +212,6 @@ mod crossbeam_impl {
                         QueryRequest::SnapshotAt { snapshot_id, time, reply } => {
                             if snapshot_id == u128::MAX {
                                 let _ = reply.send(QueryReply::NotFound);
-                            } else if snapshot_id == 1 {
-                                let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             } else {
                                 let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             }
@@ -345,8 +341,6 @@ mod std_sync_impl {
                         QueryRequest::SnapshotAt { snapshot_id, time, reply } => {
                             if snapshot_id == u128::MAX {
                                 let _ = reply.send(QueryReply::NotFound);
-                            } else if snapshot_id == 1 {
-                                let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             } else {
                                 let _ = reply.send(QueryReply::FoundSmall(SmallSnapshot { id: snapshot_id, time, sum: 1 }));
                             }

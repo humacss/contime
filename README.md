@@ -113,7 +113,8 @@ contime::lanes! {
 Events are ordered by `(time, event_id)`. A composite time therefore creates a
 separate apply batch for each distinct complete value while retaining normal
 out-of-order replay behavior. Horizon advancement subtracts the configured
-horizon value using the concrete time type's `Sub` implementation.
+horizon value using the concrete time type's `ContimeTime::saturating_sub`
+implementation.
 
 ### Minimal usage flow
 

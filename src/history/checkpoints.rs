@@ -3,7 +3,7 @@ use std::ops::Bound;
 
 use crate::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, Snapshot};
 
-use super::history::LocalSnapshotHistory;
+use super::storage::LocalSnapshotHistory;
 
 pub(super) fn first_key_at_time<T: ContimeTime>(time: T) -> ContimeKey<T> {
     ContimeKey { time, id: u128::MIN }
@@ -159,10 +159,12 @@ where
                 stored_first_changed_checkpoint = true;
             }
 
-            if checkpoint.preserve_previous_tip && checkpoint.end == Bound::Unbounded && history.checkpoint_interval != 0 {
-                if event_count % history.checkpoint_interval == 0 {
-                    materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone()));
-                }
+            if checkpoint.preserve_previous_tip
+                && checkpoint.end == Bound::Unbounded
+                && history.checkpoint_interval != 0
+                && event_count.is_multiple_of(history.checkpoint_interval)
+            {
+                materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone()));
             }
         },
     );
@@ -253,7 +255,7 @@ fn is_event_count_cadence<S>(history: &LocalSnapshotHistory<S>, event_count: usi
 where
     S: Snapshot,
 {
-    history.checkpoint_interval != 0 && event_count != 0 && event_count % history.checkpoint_interval == 0
+    history.checkpoint_interval != 0 && event_count != 0 && event_count.is_multiple_of(history.checkpoint_interval)
 }
 
 fn checkpoint_key_is_cadence<S>(history: &LocalSnapshotHistory<S>, checkpoint_key: &ContimeKey<S::Time>) -> bool

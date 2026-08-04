@@ -47,15 +47,8 @@ fn derives_generate_event_snapshot_and_lanes() {
 
     contime.apply_events([OnDerivedValueChanged { event_id: 10, entity_id: 7, time: 5, value: 99 }]).expect("event should apply");
 
-    let snapshot: DerivedValueAt = contime
-        .query_at(6, &[7])
-        .expect("query should succeed")
-        .pop()
-        .flatten()
-        .expect("snapshot should exist")
-        .try_into()
-        .ok()
-        .expect("lane should contain derived value");
+    let snapshot: DerivedValueAt =
+        contime.query_at(6, &[7]).expect("query should succeed").pop().flatten().expect("snapshot should exist").into();
 
     assert_eq!(7, snapshot.id());
     assert_eq!(99, snapshot.value);
