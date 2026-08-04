@@ -217,10 +217,9 @@ mod tests {
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> crate::ApplyDecision {
+        ) {
             apply_inner.apply_event_batch(snapshot, batch);
             self.push(snapshot.sum);
-            crate::ApplyDecision::Continue
         }
     }
 
@@ -359,10 +358,9 @@ mod tests {
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> crate::ApplyDecision {
+        ) {
             self.batches.push((batch.time, batch.events.iter().copied().map(|event| event.value).collect()));
             apply_inner.apply_event_batch(snapshot, batch);
-            crate::ApplyDecision::Continue
         }
     }
 
@@ -389,7 +387,7 @@ mod tests {
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> crate::ApplyDecision {
+        ) {
             let earlier = [ContextEvent { id: 1, time: batch.time - 10, snapshot_id: batch.snapshot_id, value: 3 }];
             let earlier_refs = [&earlier[0]];
             let earlier_batch = ApplyBatch { snapshot_id: batch.snapshot_id, time: batch.time - 10, events: &earlier_refs };
@@ -399,7 +397,6 @@ mod tests {
 
             self.batches.push((batch.time, batch.events.iter().copied().map(|event| event.value).collect()));
             apply_inner.apply_event_batch(snapshot, batch);
-            crate::ApplyDecision::Continue
         }
     }
 
