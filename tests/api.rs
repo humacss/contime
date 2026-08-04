@@ -1,6 +1,12 @@
 use contime::{Contime, Snapshot, TestEvent, TestEventLanes, TestSnapshot, TestSnapshotLanes};
 
 #[test]
+#[should_panic(expected = "worker_count must be greater than zero")]
+fn zero_workers_are_rejected_during_construction() {
+    let _contime = Contime::<TestSnapshotLanes, TestEventLanes>::new(0, 1_000);
+}
+
+#[test]
 fn test_api() {
     let c = Contime::<TestSnapshotLanes, TestEventLanes>::new(1, 1_000);
 

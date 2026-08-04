@@ -1,6 +1,6 @@
 mod apply;
 mod checkpoints;
-mod history;
+mod storage;
 
 pub use apply::{ApplyInner, ApplyWrapper};
-pub use history::{LocalSnapshotHistory, SnapshotHistory};
+pub use storage::{LocalSnapshotHistory, SnapshotHistory};

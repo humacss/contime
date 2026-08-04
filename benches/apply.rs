@@ -27,70 +27,69 @@ impl BenchHistoryApply for SnapshotHistory<BenchSnapshot> {
 
 fn benchmark_apply_event(runner: &mut Criterion) {
     let mut group = runner.benchmark_group("apply_event");
+    let size = 1_000;
 
-    for size in [1_000] {
-        group.bench_function(BenchmarkId::new("in_order", size), |bencher| {
-            bencher.iter_batched_ref(
-                || SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0,
-                |history| {
-                    for i in 0..size {
-                        history.apply_event(new_event(i, i as i64));
-                    }
-                },
-                BatchSize::SmallInput,
-            );
-        });
+    group.bench_function(BenchmarkId::new("in_order", size), |bencher| {
+        bencher.iter_batched_ref(
+            || SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0,
+            |history| {
+                for i in 0..size {
+                    history.apply_event(new_event(i, i as i64));
+                }
+            },
+            BatchSize::SmallInput,
+        );
+    });
 
-        group.bench_function(BenchmarkId::new("out_of_order_best_case", size), |bencher| {
-            bencher.iter_batched_ref(
-                || {
-                    let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
-                    history.apply_event(new_event(size, size as i64));
-                    history
-                },
-                |history| {
-                    for i in 0..size {
-                        history.apply_event(new_event(i as u128, i as i64));
-                    }
-                },
-                BatchSize::SmallInput,
-            );
-        });
+    group.bench_function(BenchmarkId::new("out_of_order_best_case", size), |bencher| {
+        bencher.iter_batched_ref(
+            || {
+                let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
+                history.apply_event(new_event(size, size as i64));
+                history
+            },
+            |history| {
+                for i in 0..size {
+                    history.apply_event(new_event(i, i as i64));
+                }
+            },
+            BatchSize::SmallInput,
+        );
+    });
 
-        group.bench_function(BenchmarkId::new("out_of_order_average_case", size), |bencher| {
-            bencher.iter_batched_ref(
-                || {
-                    let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
-                    history.apply_event(new_event(size, size as i64));
-                    history
-                },
-                |history| {
-                    for i in 0..size {
-                        history.apply_event(new_event(i, (i / 2) as i64));
-                    }
+    group.bench_function(BenchmarkId::new("out_of_order_average_case", size), |bencher| {
+        bencher.iter_batched_ref(
+            || {
+                let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
+                history.apply_event(new_event(size, size as i64));
+                history
+            },
+            |history| {
+                for i in 0..size {
+                    history.apply_event(new_event(i, (i / 2) as i64));
+                }
 
-                    black_box(&history);
-                },
-                BatchSize::SmallInput,
-            );
-        });
+                black_box(&history);
+            },
+            BatchSize::SmallInput,
+        );
+    });
 
-        group.bench_function(BenchmarkId::new("out_of_order_worst_case", size), |bencher| {
-            bencher.iter_batched_ref(
-                || {
-                    let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
-                    history.apply_event(new_event(size, size as i64).into());
-                    history
-                },
-                |history| {
-                    for i in 0..size {
-                        history.apply_event(new_event((size - 1) - i, ((size - 1) - i) as i64));
-                    }
-                },
-                BatchSize::SmallInput,
-            );
-        });
-    }
+    group.bench_function(BenchmarkId::new("out_of_order_worst_case", size), |bencher| {
+        bencher.iter_batched_ref(
+            || {
+                let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0;
+                history.apply_event(new_event(size, size as i64));
+                history
+            },
+            |history| {
+                for i in 0..size {
+                    history.apply_event(new_event((size - 1) - i, ((size - 1) - i) as i64));
+                }
+            },
+            BatchSize::SmallInput,
+        );
+    });
 
     group.finish();
 }
