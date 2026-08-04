@@ -27,6 +27,7 @@ impl LegacyValueAt {
 }
 
 impl Snapshot for LegacyValueAt {
+    type Time = i64;
     type Event = LegacyValueAtEvent;
 
     fn id(&self) -> u128 {
@@ -59,6 +60,8 @@ impl SeedSnapshot<OnLegacyValueChanged> for LegacyValueAt {
 }
 
 impl Event for OnLegacyValueChanged {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         self.event_id
     }
@@ -73,6 +76,8 @@ impl Event for OnLegacyValueChanged {
 }
 
 impl Event for LegacyValueAtEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         match self {
             Self::OnLegacyValueChanged(event) => event.id(),
@@ -151,6 +156,7 @@ impl FragmentValueAt {
 }
 
 impl Snapshot for FragmentValueAt {
+    type Time = i64;
     type Event = FragmentValueAtEvent;
 
     fn id(&self) -> u128 {
@@ -185,6 +191,8 @@ impl SeedSnapshot<OnFragmentValueChanged> for FragmentValueAt {
 }
 
 impl Event for OnFragmentValueChanged {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         self.event_id
     }
@@ -199,6 +207,8 @@ impl Event for OnFragmentValueChanged {
 }
 
 impl Event for FragmentValueAtEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         match self {
             Self::OnFragmentValueChanged(event) => event.id(),
@@ -277,6 +287,7 @@ impl AlphaAt {
 }
 
 impl Snapshot for AlphaAt {
+    type Time = i64;
     type Event = AlphaAtEvent;
 
     fn id(&self) -> u128 {
@@ -309,6 +320,8 @@ impl SeedSnapshot<OnAlphaChanged> for AlphaAt {
 }
 
 impl Event for OnAlphaChanged {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         self.event_id
     }
@@ -323,6 +336,8 @@ impl Event for OnAlphaChanged {
 }
 
 impl Event for AlphaAtEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         match self {
             Self::OnAlphaChanged(event) => event.id(),
@@ -401,6 +416,7 @@ impl BetaAt {
 }
 
 impl Snapshot for BetaAt {
+    type Time = i64;
     type Event = BetaAtEvent;
 
     fn id(&self) -> u128 {
@@ -433,6 +449,8 @@ impl SeedSnapshot<OnBetaChanged> for BetaAt {
 }
 
 impl Event for OnBetaChanged {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         self.event_id
     }
@@ -447,6 +465,8 @@ impl Event for OnBetaChanged {
 }
 
 impl Event for BetaAtEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         match self {
             Self::OnBetaChanged(event) => event.id(),
@@ -543,6 +563,7 @@ impl SharedMirrorAt {
 }
 
 impl Snapshot for SharedSourceAt {
+    type Time = i64;
     type Event = SharedSourceAtEvent;
 
     fn id(&self) -> u128 {
@@ -575,6 +596,7 @@ impl SeedSnapshot<OnSharedValueChanged> for SharedSourceAt {
 }
 
 impl Snapshot for SharedMirrorAt {
+    type Time = i64;
     type Event = SharedMirrorAtEvent;
 
     fn id(&self) -> u128 {
@@ -609,6 +631,8 @@ impl SeedSnapshot<OnSharedValueChanged> for SharedMirrorAt {
 }
 
 impl Event for OnSharedValueChanged {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         self.event_id
     }
@@ -623,6 +647,8 @@ impl Event for OnSharedValueChanged {
 }
 
 impl Event for SharedSourceAtEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         match self {
             Self::OnSharedValueChanged(event) => event.id(),
@@ -641,6 +667,8 @@ impl Event for SharedSourceAtEvent {
 }
 
 impl Event for SharedMirrorAtEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         match self {
             Self::OnSharedValueChanged(event) => event.id(),
@@ -768,7 +796,7 @@ contime::lanes! {
 
 fn snapshot_at<T, SL, EL>(contime: &contime::Contime<SL, EL>, time: i64, snapshot_id: u128) -> T
 where
-    SL: contime::SnapshotLanes<Event = EL> + contime::ApplyEvents + 'static,
+    SL: contime::SnapshotLanes<Time = i64, Event = EL> + contime::ApplyEvents + 'static,
     EL: contime::EventLanes<SL> + 'static,
     T: TryFrom<SL>,
 {

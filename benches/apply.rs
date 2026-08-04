@@ -131,7 +131,7 @@ fn benchmark_sync_apply_end_to_end(runner: &mut Criterion) {
             let snapshot_id = next_snapshot_id;
             next_snapshot_id = next_snapshot_id.wrapping_add(1);
 
-            black_box(contime.apply_event(BenchEvent::Positive(snapshot_id, 0, snapshot_id, 1)).expect("single sync apply should succeed"));
+            contime.apply_events([BenchEvent::Positive(snapshot_id, 0, snapshot_id, 1)]).expect("single sync apply should succeed");
         });
     });
 
@@ -218,6 +218,7 @@ struct CallbackContext {
 }
 
 impl contime::Snapshot for CallbackSnapshot {
+    type Time = i64;
     type Event = CallbackEvent;
 
     fn id(&self) -> u128 {
@@ -242,6 +243,8 @@ impl contime::Snapshot for CallbackSnapshot {
 }
 
 impl contime::Event for CallbackEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         self.event_id
     }

@@ -2,25 +2,25 @@ use std::marker::PhantomData;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::{ApplyError, ApplyEvents, ApplyWrapper, Event, EventJournalEntry, EventLanes, Router, RouterError, SnapshotLanes};
+use crate::{ApplyError, ApplyEvents, ApplyWrapper, ContimeTime, Event, EventJournalEntry, EventLanes, Router, RouterError, SnapshotLanes};
 
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
-pub enum ContimeError {
+pub enum ContimeError<T: ContimeTime> {
     /// Applying the input would exceed the configured memory budget.
     MemoryFull,
     /// The event predates the earliest time retained by this instance.
-    EventBeforeHistoryHorizon { event_time: i64, earliest_time: i64 },
+    EventBeforeHistoryHorizon { event_time: T, earliest_time: T },
     /// The requested snapshot id has no known history.
     NotFound,
     /// The apply wrapper rejected the event batch.
     ApplyFailed(ApplyError),
     /// Internal routing error.
-    RouterError(RouterError),
+    RouterError(RouterError<T>),
 }
 
-impl From<RouterError> for ContimeError {
-    fn from(err: RouterError) -> Self {
+impl<T: ContimeTime> From<RouterError<T>> for ContimeError<T> {
+    fn from(err: RouterError<T>) -> Self {
         match err {
             RouterError::MemoryFull => ContimeError::MemoryFull,
             RouterError::EventBeforeHistoryHorizon { event_time, earliest_time } => {
@@ -65,9 +65,9 @@ where
     /// Creates a `contime` instance that retains a bounded amount of history behind the
     /// internally advanced current time.
     ///
-    /// Call [`Contime::advance`] to move the current time forward. History older than
+    /// Call [`Contime::advance_to`] to move the current time forward. History older than
     /// `current_time - lower_time_horizon_delta` becomes eligible for pruning.
-    pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: i64) -> Self {
+    pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: SL::Time) -> Self {
         let router = Router::<SL, EL>::with_history_horizon(worker_count, memory_budget_bytes, lower_time_horizon_delta);
 
         Self { router, apply_context: Some(()), global_context: Arc::new(()), _context: PhantomData }
@@ -93,7 +93,7 @@ where
     pub fn with_history_horizon_and_apply_context(
         worker_count: usize,
         memory_budget_bytes: u64,
-        lower_time_horizon_delta: i64,
+        lower_time_horizon_delta: SL::Time,
         apply_context: C,
     ) -> Self {
         let router = Router::<SL, EL, C>::with_history_horizon_and_apply_context(
@@ -136,7 +136,7 @@ where
     pub fn with_history_horizon_and_apply_context_factory<F>(
         worker_count: usize,
         memory_budget_bytes: u64,
-        lower_time_horizon_delta: i64,
+        lower_time_horizon_delta: SL::Time,
         mut make_apply_context: F,
     ) -> Self
     where
@@ -166,7 +166,7 @@ where
     where
         F: FnMut(usize, Arc<G>) -> C,
     {
-        Self::with_history_horizon_and_contexts(worker_count, memory_budget_bytes, 0, global_context, make_apply_context)
+        Self::with_history_horizon_and_contexts(worker_count, memory_budget_bytes, SL::Time::default(), global_context, make_apply_context)
     }
 
     /// Creates a history-bounded `contime` instance with shared global context and one
@@ -174,7 +174,7 @@ where
     pub fn with_history_horizon_and_contexts<F>(
         worker_count: usize,
         memory_budget_bytes: u64,
-        lower_time_horizon_delta: i64,
+        lower_time_horizon_delta: SL::Time,
         global_context: G,
         make_apply_context: F,
     ) -> Self
@@ -201,20 +201,20 @@ where
     /// Advances the internal current time to `time` if it is newer.
     ///
     /// Calling this with a time older than or equal to the current time is a no-op.
-    pub fn advance_to(&self, time: i64) -> Result<(), ContimeError> {
+    pub fn advance_to(&self, time: SL::Time) -> Result<(), ContimeError<SL::Time>> {
         Ok(self.router.advance_to(time)?)
     }
 
     /// Returns the latest internal current time observed by this `contime`.
-    pub fn current_time(&self) -> i64 {
+    pub fn current_time(&self) -> SL::Time {
         self.router.current_time()
     }
 
     /// Applies events synchronously and waits for all affected workers to finish.
-    pub fn apply_events<I, E>(&self, events: I) -> Result<(), ContimeError>
+    pub fn apply_events<I, E>(&self, events: I) -> Result<(), ContimeError<SL::Time>>
     where
         I: IntoIterator<Item = E>,
-        E: Event,
+        E: Event<Time = SL::Time>,
         EL: From<E>,
     {
         self.router.apply_events(events.into_iter().map(Into::into))?;
@@ -227,10 +227,10 @@ where
     /// channels. It can report routing, memory-budget, or worker-channel errors,
     /// but it cannot report apply-wrapper errors because apply happens after this
     /// function returns.
-    pub fn send_events<I, E>(&self, events: I) -> Result<(), ContimeError>
+    pub fn send_events<I, E>(&self, events: I) -> Result<(), ContimeError<SL::Time>>
     where
         I: IntoIterator<Item = E>,
-        E: Event,
+        E: Event<Time = SL::Time>,
         EL: From<E>,
     {
         self.router.send_events(events.into_iter().map(Into::into))?;
@@ -244,9 +244,9 @@ where
     ///
     /// Events pruned from the retained history are no longer available for
     /// inspection.
-    pub fn inspect_events<R>(&self, range: R) -> Result<Vec<EventJournalEntry<EL>>, ContimeError>
+    pub fn inspect_events<R>(&self, range: R) -> Result<Vec<EventJournalEntry<EL>>, ContimeError<SL::Time>>
     where
-        R: RangeBounds<i64>,
+        R: RangeBounds<SL::Time>,
     {
         Ok(self.router.inspect_events(range)?)
     }
@@ -256,7 +256,7 @@ where
     /// Events at exactly `time` are included.
     ///
     /// Results are returned in the same order as `snapshot_ids`. Missing histories yield `None`.
-    pub fn query_at(&self, time: i64, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, ContimeError> {
+    pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, ContimeError<SL::Time>> {
         Ok(self.router.query_at(time, snapshot_ids)?)
     }
 }

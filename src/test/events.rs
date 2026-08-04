@@ -8,6 +8,8 @@ pub enum TestEvent {
 }
 
 impl Event for TestEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         match self {
             Self::Positive(_snapshot_id, _time, event_id, _value) => *event_id,

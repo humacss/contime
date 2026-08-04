@@ -10,6 +10,7 @@ pub struct TestSnapshot {
 }
 
 impl Snapshot for TestSnapshot {
+    type Time = i64;
     type Event = TestEvent;
 
     fn id(&self) -> u128 {

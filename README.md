@@ -75,6 +75,46 @@ The public API is small. In practice you do five things:
 4. Create a `Contime` instance with a worker count and memory budget.
 5. Apply events, optionally advance the retained history horizon with `advance_to`, then query state with `query_at` or inspect retained original events with `inspect_events`.
 
+### Time Types
+
+`contime` does not require timestamps to be integers. Every assembled lane set
+uses one type implementing `ContimeTime`, which requires a total order, a
+default value, addition and subtraction with itself, and saturating subtraction
+for history-horizon calculations. This supports ordered composite times whose
+consumers define their own arithmetic semantics without allowing horizon
+calculation to overflow.
+
+Manual `Event` and `Snapshot` implementations declare their associated `Time`.
+Derives use `time_type`, and the lane manifest declares the same concrete type:
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
+#[contime_event(
+    id = self.id,
+    time = self.time.clone(),
+    time_type = CompositeTime,
+    bytes = 32
+)]
+struct OrderedEvent {
+    id: u128,
+    time: CompositeTime,
+}
+
+contime::lanes! {
+    mod ordered_lanes;
+    time CompositeTime;
+    snapshots [OrderedSnapshot];
+    routes [
+        OrderedEvent => [OrderedSnapshot],
+    ];
+}
+```
+
+Events are ordered by `(time, event_id)`. A composite time therefore creates a
+separate apply batch for each distinct complete value while retaining normal
+out-of-order replay behavior. Horizon advancement subtracts the configured
+horizon value using the concrete time type's `Sub` implementation.
+
 ### Minimal usage flow
 
 The canonical onboarding example now lives in [`examples/ordered_values.rs`](examples/ordered_values.rs).
@@ -94,12 +134,12 @@ The snapshot logic in the example only appends values during replay. The ordered
 
 ### Apply Wrappers
 
-`contime` applies one same-timestamp event batch to one snapshot lane at a time.
+`contime` applies one same-complete-time event batch to one snapshot lane at a time.
 Advanced callers can provide an `ApplyWrapper` and implement
 `apply_event_batch_wrapper` to control how that one batch is applied to the
 working snapshot. The default wrapper only calls the inner apply once. Custom
 wrappers may call the inner apply zero, one, or many times with temporary
-same-timestamp batches, and any wrapper error is returned through the normal
+same-time batches, and any wrapper error is returned through the normal
 apply result.
 
 ### Event Inspection

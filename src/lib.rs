@@ -14,7 +14,7 @@
 //! 5. Query state with [`Contime::query_at`] or inspect retained original events
 //!    with [`Contime::inspect_events`].
 //!
-//! Point queries include all events at the queried millisecond.
+//! Point queries include all events at or before the complete ordered query time.
 //!
 //! # Where To Start
 //!
@@ -49,6 +49,7 @@ mod history;
 mod journal;
 mod key;
 mod router;
+mod time;
 mod traits;
 mod worker;
 
@@ -64,6 +65,7 @@ pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
 pub use history::{ApplyDecision, ApplyInner, ApplyWrapper, SnapshotHistory};
 pub use journal::EventJournalEntry;
+pub use time::ContimeTime;
 pub use traits::{ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
 pub use worker::ApplyError;
 
