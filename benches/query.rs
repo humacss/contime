@@ -38,7 +38,7 @@ fn seeded_contime_one_lane(event_count: usize) -> BenchContime {
     let contime = BenchContime::with_history_horizon(1, MEMORY_BUDGET_BYTES, 10_000);
 
     for index in 0..event_count {
-        contime.apply_event(new_event(0, index as u128, index as i64)).expect("seed event should apply");
+        contime.apply_events([new_event(0, index as u128, index as i64)]).expect("seed event should apply");
     }
 
     contime
@@ -50,7 +50,7 @@ fn seeded_contime_many_lanes(lane_count: usize, events_per_lane: usize) -> Bench
     for lane_id in 0..lane_count as u128 {
         for offset in 0..events_per_lane as u128 {
             let event_id = lane_id.saturating_mul(events_per_lane as u128).saturating_add(offset);
-            contime.apply_event(new_event(lane_id, event_id, offset as i64)).expect("seed event should apply");
+            contime.apply_events([new_event(lane_id, event_id, offset as i64)]).expect("seed event should apply");
         }
     }
 
@@ -59,7 +59,7 @@ fn seeded_contime_many_lanes(lane_count: usize, events_per_lane: usize) -> Bench
 
 fn seeded_contime_single_event_lane() -> BenchContime {
     let contime = BenchContime::with_history_horizon(1, MEMORY_BUDGET_BYTES, 10_000);
-    contime.apply_event(new_event(0, 0, 0)).expect("seed event should apply");
+    contime.apply_events([new_event(0, 0, 0)]).expect("seed event should apply");
     contime
 }
 

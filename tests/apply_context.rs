@@ -63,6 +63,7 @@ impl ContextValueAt {
 }
 
 impl Snapshot for ContextValueAt {
+    type Time = i64;
     type Event = OnContextValueChanged;
 
     fn id(&self) -> u128 {
@@ -87,6 +88,8 @@ impl Snapshot for ContextValueAt {
 }
 
 impl Event for OnContextValueChanged {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         self.event_id
     }
@@ -248,8 +251,9 @@ impl ApplyWrapper<SnapshotLanes> for BlockingApplyTrace {
     ) -> Result<ApplyDecision, Self::Error> {
         self.entered_tx.send(()).unwrap();
         self.release_rx.recv().unwrap();
+        let snapshot_id = batch.snapshot_id;
         apply_inner.apply_event_batch(snapshot, batch);
-        self.applied.lock().unwrap().push(batch.snapshot_id);
+        self.applied.lock().unwrap().push(snapshot_id);
         Ok(ApplyDecision::Continue)
     }
 }

@@ -41,8 +41,9 @@ where
     S: Snapshot + ApplyEvents,
 {
     pub fn apply_event_batch(&self, snapshot: &mut S, batch: ApplyBatch<'_, S::Event>) {
+        let time = batch.time.clone();
         <S as ApplyEvents>::apply_events(snapshot, batch);
-        snapshot.set_time(batch.time);
+        snapshot.set_time(time);
     }
 }
 
@@ -117,9 +118,9 @@ where
 
     fn get_checkpoint_for_apply(
         &mut self,
-        earliest_changed_time: i64,
-        latest_event_key_before_apply: Option<ContimeKey>,
-        single_changed_event_key: Option<ContimeKey>,
+        earliest_changed_time: S::Time,
+        latest_event_key_before_apply: Option<ContimeKey<S::Time>>,
+        single_changed_event_key: Option<ContimeKey<S::Time>>,
         changed_event_count: usize,
     ) -> CheckpointForApply<S> {
         get_checkpoint_for_apply(self, earliest_changed_time, latest_event_key_before_apply, single_changed_event_key, changed_event_count)
@@ -136,9 +137,9 @@ where
         commit_applied_checkpoint(self, applied_checkpoint)
     }
 
-    fn insert_event_batch(&mut self, events: Vec<S::Event>) -> InsertedEventBatch {
+    fn insert_event_batch(&mut self, events: Vec<S::Event>) -> InsertedEventBatch<S::Time> {
         let latest_event_key_before_apply = self.events.keys().next_back().cloned();
-        let mut earliest_changed_time = i64::MAX;
+        let mut earliest_changed_time: Option<S::Time> = None;
         let mut bytes_delta = 0;
         let mut changed_event_count = 0usize;
         let mut single_changed_event_key = None;
@@ -146,7 +147,10 @@ where
         for event in events {
             let event_time = event.time();
             let event_key = ContimeKey::from_event(&event);
-            earliest_changed_time = earliest_changed_time.min(event_time);
+            earliest_changed_time = Some(match earliest_changed_time {
+                Some(current) => current.min(event_time),
+                None => event_time,
+            });
 
             if self.events.get(&event_key).is_some_and(|existing| existing == &event) {
                 continue;
@@ -164,7 +168,7 @@ where
         InsertedEventBatch {
             changed: changed_event_count != 0,
             bytes_delta,
-            earliest_changed_time,
+            earliest_changed_time: earliest_changed_time.unwrap_or_default(),
             latest_event_key_before_apply,
             single_changed_event_key,
             changed_event_count,
@@ -172,11 +176,11 @@ where
     }
 }
 
-struct InsertedEventBatch {
+struct InsertedEventBatch<T: crate::ContimeTime> {
     changed: bool,
     bytes_delta: i64,
-    earliest_changed_time: i64,
-    latest_event_key_before_apply: Option<ContimeKey>,
-    single_changed_event_key: Option<ContimeKey>,
+    earliest_changed_time: T,
+    latest_event_key_before_apply: Option<ContimeKey<T>>,
+    single_changed_event_key: Option<ContimeKey<T>>,
     changed_event_count: usize,
 }

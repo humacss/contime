@@ -10,7 +10,7 @@ use std::thread::{self, JoinHandle};
 use ahash::{AHashMap, RandomState};
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::{ApplyEvents, ApplyWrapper, ContimeKey, Event, EventJournalEntry, EventLanes, SnapshotHistory, SnapshotLanes};
+use crate::{ApplyEvents, ApplyWrapper, ContimeKey, ContimeTime, Event, EventJournalEntry, EventLanes, SnapshotHistory, SnapshotLanes};
 
 /// Error returned when a worker cannot apply an event batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,9 +52,9 @@ pub struct WorkerEvent<SL, EL> {
 
 pub enum WorkerInbound<SL: SnapshotLanes, EL> {
     Events { events: Vec<WorkerEvent<SL, EL>>, reply: Sender<Result<(), ApplyError>> },
-    EventsInRange { start: Bound<i64>, end: Bound<i64>, reply: Sender<Vec<EventJournalEntry<EL>>> },
-    SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: i64, reply: Sender<Result<Vec<(usize, Option<SL>)>, ApplyError>> },
-    AdvanceTime { time: i64, reply: Sender<Result<(), ApplyError>> },
+    EventsInRange { start: Bound<SL::Time>, end: Bound<SL::Time>, reply: Sender<Vec<EventJournalEntry<EL>>> },
+    SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: SL::Time, reply: Sender<Result<Vec<(usize, Option<SL>)>, ApplyError>> },
+    AdvanceTime { time: SL::Time, reply: Sender<Result<(), ApplyError>> },
     Shutdown,
 }
 
@@ -95,7 +95,7 @@ where
         _worker_txs: Arc<Vec<Sender<WorkerInbound<SL, EL>>>>,
         _hasher: RandomState,
         memory_usage: Arc<AtomicU64>,
-        lower_time_horizon_delta: i64,
+        lower_time_horizon_delta: SL::Time,
         apply_context: C,
     ) -> Self {
         let mut threads = Vec::with_capacity(1);
@@ -128,7 +128,7 @@ fn handle_worker<SL, EL, C>(
     is_running: Arc<AtomicBool>,
     worker_inbound_rx: Receiver<WorkerInbound<SL, EL>>,
     memory_usage: Arc<AtomicU64>,
-    lower_time_horizon_delta: i64,
+    lower_time_horizon_delta: SL::Time,
     mut apply_context: C,
 ) where
     SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
@@ -149,7 +149,7 @@ fn handle_worker<SL, EL, C>(
             Ok(WorkerInbound::AdvanceTime { time: new_time, reply }) => {
                 let mut result = Ok(());
                 for history in history_by_id.values_mut() {
-                    match history.advance_with_context(new_time, &mut apply_context) {
+                    match history.advance_with_context(new_time.clone(), &mut apply_context) {
                         Ok(bytes_delta) => fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed),
                         Err(error) => {
                             result = Err(error.into());
@@ -158,7 +158,7 @@ fn handle_worker<SL, EL, C>(
                     }
                 }
                 if result.is_ok() {
-                    let drop_time = new_time.saturating_sub(lower_time_horizon_delta);
+                    let drop_time = new_time.saturating_sub(lower_time_horizon_delta.clone());
                     let bytes_removed = prune_event_log(&mut event_log, drop_time);
                     fetch_saturating_add_signed(&memory_usage, -bytes_removed, Ordering::Relaxed);
                 }
@@ -168,8 +168,13 @@ fn handle_worker<SL, EL, C>(
                 let (events, replies) = collect_replay_batch(events, reply, &worker_inbound_rx, &mut pending_inbound);
                 let bytes_added = record_worker_events(&mut event_log, &events);
                 fetch_saturating_add_signed(&memory_usage, bytes_added, Ordering::Relaxed);
-                let result =
-                    apply_events_to_histories(&mut history_by_id, &memory_usage, lower_time_horizon_delta, &mut apply_context, events);
+                let result = apply_events_to_histories(
+                    &mut history_by_id,
+                    &memory_usage,
+                    lower_time_horizon_delta.clone(),
+                    &mut apply_context,
+                    events,
+                );
                 for reply in replies {
                     let _ = reply.send(result.clone());
                 }
@@ -183,7 +188,7 @@ fn handle_worker<SL, EL, C>(
                 let mut error = None;
                 for (position, snapshot_id) in snapshot_requests {
                     let snapshot = match history_by_id.get(&snapshot_id) {
-                        Some(history) => match history.snapshot_only_at_with_context(time, &mut apply_context) {
+                        Some(history) => match history.snapshot_only_at_with_context(time.clone(), &mut apply_context) {
                             Ok(snapshot) => Some(snapshot),
                             Err(err) => {
                                 error = Some(err.into());
@@ -230,7 +235,7 @@ where
     bytes_added
 }
 
-fn prune_event_log<EL>(event_log: &mut Vec<EventJournalEntry<EL>>, time: i64) -> i64
+fn prune_event_log<EL>(event_log: &mut Vec<EventJournalEntry<EL>>, time: EL::Time) -> i64
 where
     EL: Event,
 {
@@ -241,7 +246,7 @@ where
     bytes_removed
 }
 
-fn time_is_in_range(time: i64, start: &Bound<i64>, end: &Bound<i64>) -> bool {
+fn time_is_in_range<T: crate::ContimeTime>(time: T, start: &Bound<T>, end: &Bound<T>) -> bool {
     let after_start = match start {
         Bound::Included(start) => time >= *start,
         Bound::Excluded(start) => time > *start,
@@ -285,7 +290,7 @@ where
 fn apply_events_to_histories<SL, EL, C>(
     history_by_id: &mut AHashMap<SnapshotId, SnapshotHistory<SL>>,
     memory_usage: &Arc<AtomicU64>,
-    lower_time_horizon_delta: i64,
+    lower_time_horizon_delta: SL::Time,
     apply_context: &mut C,
     events: Vec<WorkerEvent<SL, EL>>,
 ) -> Result<(), ApplyError>
@@ -309,8 +314,12 @@ where
         let history = match history_by_id.entry(snapshot_id) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
-                let (history, base_delta) =
-                    SnapshotHistory::new_with_snapshot_id(snapshot_id, initial_snapshot, 0, lower_time_horizon_delta);
+                let (history, base_delta) = SnapshotHistory::new_with_snapshot_id(
+                    snapshot_id,
+                    initial_snapshot,
+                    SL::Time::default(),
+                    lower_time_horizon_delta.clone(),
+                );
                 fetch_saturating_add_signed(memory_usage, base_delta, Ordering::Relaxed);
                 entry.insert(history)
             }

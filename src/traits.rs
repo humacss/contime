@@ -1,18 +1,22 @@
 use std::fmt::Debug;
 
+use crate::ContimeTime;
+
 /// A point-in-time state for one logical entity in `contime`.
 ///
 /// Snapshots are the states that get queried and checkpointed over time.
 pub trait Snapshot: Send + Sync + Clone + Debug + PartialEq + Eq {
+    /// Ordered time type shared by this snapshot and all of its events.
+    type Time: ContimeTime;
     /// The event type that mutates this snapshot.
-    type Event: Event + Clone + PartialEq + Eq;
+    type Event: Event<Time = Self::Time> + Clone + PartialEq + Eq;
 
     /// Returns the logical snapshot id.
     fn id(&self) -> u128;
     /// Returns the snapshot time.
-    fn time(&self) -> i64;
+    fn time(&self) -> Self::Time;
     /// Updates the snapshot time after replay or query.
-    fn set_time(&mut self, time: i64);
+    fn set_time(&mut self, time: Self::Time);
     /// Returns a conservative upper-bound estimate for memory accounting.
     fn conservative_size(&self) -> u64;
     /// Builds the initial snapshot state for a snapshot id from its first event.
@@ -20,7 +24,7 @@ pub trait Snapshot: Send + Sync + Clone + Debug + PartialEq + Eq {
 }
 
 /// Routes a concrete event to the snapshot instance it affects.
-pub trait SnapshotEvent<S>: Event
+pub trait SnapshotEvent<S>: Event<Time = S::Time>
 where
     S: Snapshot,
 {
@@ -35,7 +39,7 @@ where
 /// <Snapshot as Snapshot>::Event` impls, which violate Rust's orphan rules.
 pub trait SeedSnapshot<E>: Snapshot
 where
-    E: Event,
+    E: Event<Time = Self::Time>,
 {
     /// Builds the initial snapshot state for a snapshot id from one routed event.
     fn seed_from_event(event: &E) -> Self;
@@ -44,7 +48,7 @@ where
 impl<S, E> SeedSnapshot<E> for S
 where
     S: Snapshot<Event = E>,
-    E: Event,
+    E: Event<Time = S::Time>,
 {
     fn seed_from_event(event: &E) -> Self {
         S::from_event(event)
@@ -56,33 +60,34 @@ pub trait SnapshotLanes: Snapshot {}
 
 /// A time-stamped input that can be routed through `contime`.
 pub trait Event: Send + Sync + Debug {
+    /// Ordered time type used by this event.
+    type Time: ContimeTime;
+
     /// Returns the event id used for ordering and duplicate detection.
     fn id(&self) -> u128;
     /// Returns the event time.
-    fn time(&self) -> i64;
+    fn time(&self) -> Self::Time;
     /// Returns a conservative upper-bound estimate for memory accounting.
     fn conservative_size(&self) -> u64;
 }
 
-/// Applies one same-millisecond bucket of events to a snapshot.
+/// Applies one bucket of events with the same complete ordered time to a snapshot.
 ///
 /// Events are supplied in deterministic event-id order, but implementations
 /// must treat that ordering as transport determinism rather than domain
 /// priority.
 #[derive(Debug)]
-pub struct ApplyBatch<'a, E> {
+pub struct ApplyBatch<'a, E: Event> {
     pub snapshot_id: u128,
-    pub time: i64,
+    pub time: E::Time,
     pub events: &'a [&'a E],
 }
 
-impl<'a, E> Clone for ApplyBatch<'a, E> {
+impl<'a, E: Event> Clone for ApplyBatch<'a, E> {
     fn clone(&self) -> Self {
-        *self
+        Self { snapshot_id: self.snapshot_id, time: self.time.clone(), events: self.events }
     }
 }
-
-impl<'a, E> Copy for ApplyBatch<'a, E> {}
 
 pub trait ApplyEvents: Snapshot {
     /// Mutates the snapshot with all events for one routed `time` bucket.
@@ -99,7 +104,7 @@ pub struct RoutedSnapshot<SL> {
     pub initial_snapshot: SL,
 }
 
-pub trait EventLanes<SL: SnapshotLanes, C = ()>: Event + Clone + PartialEq + Eq
+pub trait EventLanes<SL: SnapshotLanes, C = ()>: Event<Time = SL::Time> + Clone + PartialEq + Eq
 where
     SL: ApplyEvents,
 {

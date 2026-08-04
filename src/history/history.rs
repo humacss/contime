@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::{ApplyEvents, ContimeKey, Event, Snapshot};
+use crate::{ApplyEvents, ContimeKey, ContimeTime, Event, Snapshot};
 
 use super::checkpoints::{get_checkpoint_at, get_checkpoint_at_with_context, get_checkpoint_before_with_context};
 
@@ -20,14 +20,14 @@ where
     /// Base snapshot used when replay starts before the first checkpoint.
     pub base_snapshot: S,
     /// Materialized checkpoints sorted by event time and id.
-    pub checkpoints: VecDeque<(ContimeKey, S)>,
+    pub checkpoints: VecDeque<(ContimeKey<S::Time>, S)>,
     /// Applied events keyed by time and id.
-    pub events: BTreeMap<ContimeKey, S::Event>,
+    pub events: BTreeMap<ContimeKey<S::Time>, S::Event>,
     /// Interval between generated checkpoints during replay.
     pub checkpoint_interval: usize,
 
-    current_time: i64,
-    lower_time_horizon_delta: i64,
+    current_time: S::Time,
+    lower_time_horizon_delta: S::Time,
 }
 
 const CHECKPOINT_INTERVAL: usize = 100;
@@ -37,12 +37,12 @@ where
     S: Snapshot + ApplyEvents + 'static,
 {
     /// Creates a history for one snapshot and returns it with its initial memory cost.
-    pub fn new(snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
+    pub fn new(snapshot: S, current_time: S::Time, lower_time_horizon_delta: S::Time) -> (Self, i64) {
         Self::new_with_snapshot_id(snapshot.id(), snapshot, current_time, lower_time_horizon_delta)
     }
 
     /// Creates a history for one explicitly routed snapshot id.
-    pub fn new_with_snapshot_id(snapshot_id: u128, snapshot: S, current_time: i64, lower_time_horizon_delta: i64) -> (Self, i64) {
+    pub fn new_with_snapshot_id(snapshot_id: u128, snapshot: S, current_time: S::Time, lower_time_horizon_delta: S::Time) -> (Self, i64) {
         let checkpoints = VecDeque::new();
         let events = BTreeMap::new();
         let base_snapshot = snapshot.clone();
@@ -64,12 +64,12 @@ where
     }
 
     /// Advances the internal current time to `time` and prunes history outside the configured horizon.
-    pub fn advance(&mut self, time: i64) -> i64 {
+    pub fn advance(&mut self, time: S::Time) -> i64 {
         let mut context = ();
         self.advance_with_context(time, &mut context).expect("unit apply wrapper cannot fail")
     }
 
-    pub(crate) fn advance_with_context<C>(&mut self, time: i64, context: &mut C) -> Result<i64, C::Error>
+    pub(crate) fn advance_with_context<C>(&mut self, time: S::Time, context: &mut C) -> Result<i64, C::Error>
     where
         C: crate::ApplyWrapper<S>,
     {
@@ -78,8 +78,8 @@ where
         }
 
         self.current_time = time;
-        let drop_time = self.current_time.saturating_sub(self.lower_time_horizon_delta);
-        let drop_key = ContimeKey { time: drop_time, id: u128::MIN };
+        let drop_time = self.current_time.clone().saturating_sub(self.lower_time_horizon_delta.clone());
+        let drop_key = ContimeKey { time: drop_time.clone(), id: u128::MIN };
 
         let mut bytes_delta: i64 = 0;
 
@@ -106,21 +106,21 @@ where
     /// Reconstructs the snapshot state at `time`.
     ///
     /// Events at exactly `time` are included in the returned snapshot.
-    pub fn snapshot_at(&self, time: i64) -> S {
+    pub fn snapshot_at(&self, time: S::Time) -> S {
         get_checkpoint_at(self, time)
     }
 
     /// Reconstructs the snapshot state at `time`.
     ///
     /// Events at exactly `time` are included in the returned snapshot.
-    pub fn snapshot_only_at(&self, time: i64) -> S {
+    pub fn snapshot_only_at(&self, time: S::Time) -> S {
         get_checkpoint_at(self, time)
     }
 
     /// Reconstructs the snapshot state at `time` using the provided apply wrapper.
     ///
     /// Events at exactly `time` are included in the returned snapshot.
-    pub(crate) fn snapshot_only_at_with_context<C>(&self, time: i64, context: &mut C) -> Result<S, C::Error>
+    pub(crate) fn snapshot_only_at_with_context<C>(&self, time: S::Time, context: &mut C) -> Result<S, C::Error>
     where
         C: crate::ApplyWrapper<S>,
     {
@@ -148,6 +148,8 @@ mod tests {
     }
 
     impl Event for ContextEvent {
+        type Time = i64;
+
         fn id(&self) -> u128 {
             self.id
         }
@@ -169,6 +171,7 @@ mod tests {
     }
 
     impl Snapshot for ContextSnapshot {
+        type Time = i64;
         type Event = ContextEvent;
 
         fn id(&self) -> u128 {
@@ -223,11 +226,11 @@ mod tests {
         }
     }
 
-    fn checkpoint_keys<S: Snapshot>(history: &SnapshotHistory<S>) -> Vec<ContimeKey> {
+    fn checkpoint_keys<S: Snapshot>(history: &SnapshotHistory<S>) -> Vec<ContimeKey<S::Time>> {
         history.checkpoints.iter().map(|(key, _checkpoint)| key.clone()).collect()
     }
 
-    fn checkpoint<'a, S: Snapshot>(history: &'a SnapshotHistory<S>, key: &ContimeKey) -> Option<&'a S> {
+    fn checkpoint<'a, S: Snapshot>(history: &'a SnapshotHistory<S>, key: &ContimeKey<S::Time>) -> Option<&'a S> {
         history.checkpoints.iter().find(|(checkpoint_key, _checkpoint)| checkpoint_key == key).map(|(_key, checkpoint)| checkpoint)
     }
 

@@ -1,18 +1,20 @@
 use std::marker::PhantomData;
 use std::ops::{Bound, RangeBounds};
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 
 use crate::worker::WorkerEvent;
-use crate::{ApplyError, ApplyEvents, ApplyWrapper, ContimeKey, EventJournalEntry, EventLanes, SnapshotLanes, Worker, WorkerInbound};
+use crate::{
+    ApplyError, ApplyEvents, ApplyWrapper, ContimeKey, ContimeTime, EventJournalEntry, EventLanes, SnapshotLanes, Worker, WorkerInbound,
+};
 
 #[derive(Debug)]
-pub enum RouterError {
+pub enum RouterError<T: ContimeTime> {
     MemoryFull,
-    EventBeforeHistoryHorizon { event_time: i64, earliest_time: i64 },
+    EventBeforeHistoryHorizon { event_time: T, earliest_time: T },
     ApplyFailed(ApplyError),
     Error,
 }
@@ -26,8 +28,8 @@ where
     workers: Vec<Worker<SL, EL, C>>,
     memory_budget: Arc<AtomicU64>,
     memory_usage: Arc<AtomicU64>,
-    current_time: Arc<AtomicI64>,
-    lower_time_horizon_delta: i64,
+    current_time: Arc<RwLock<SL::Time>>,
+    lower_time_horizon_delta: SL::Time,
     global_context: Arc<G>,
     _context: PhantomData<C>,
 }
@@ -43,7 +45,7 @@ where
         Self::new_with_apply_context(worker_count, memory_budget_bytes, ())
     }
 
-    pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: i64) -> Self {
+    pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: SL::Time) -> Self {
         Self::with_history_horizon_and_apply_context(worker_count, memory_budget_bytes, lower_time_horizon_delta, ())
     }
 }
@@ -63,7 +65,7 @@ where
     pub fn with_history_horizon_and_apply_context(
         worker_count: usize,
         memory_budget_bytes: u64,
-        lower_time_horizon_delta: i64,
+        lower_time_horizon_delta: SL::Time,
         apply_context: C,
     ) -> Self {
         Self::with_history_horizon_and_contexts(worker_count, memory_budget_bytes, lower_time_horizon_delta, (), move |_, _| {
@@ -84,13 +86,13 @@ where
     where
         F: FnMut(usize, Arc<G>) -> C,
     {
-        Self::with_history_horizon_and_contexts(worker_count, memory_budget_bytes, 0, global_context, make_apply_context)
+        Self::with_history_horizon_and_contexts(worker_count, memory_budget_bytes, SL::Time::default(), global_context, make_apply_context)
     }
 
     pub fn with_history_horizon_and_contexts<F>(
         worker_count: usize,
         memory_budget_bytes: u64,
-        lower_time_horizon_delta: i64,
+        lower_time_horizon_delta: SL::Time,
         global_context: G,
         mut make_apply_context: F,
     ) -> Self
@@ -120,7 +122,7 @@ where
                 worker_txs.clone(),
                 hasher.clone(),
                 Arc::clone(&memory_usage),
-                lower_time_horizon_delta,
+                lower_time_horizon_delta.clone(),
                 make_apply_context(worker_index, Arc::clone(&global_context)),
             ));
         }
@@ -130,7 +132,7 @@ where
             workers,
             memory_budget,
             memory_usage,
-            current_time: Arc::new(AtomicI64::new(0)),
+            current_time: Arc::new(RwLock::new(SL::Time::default())),
             lower_time_horizon_delta,
             global_context,
             _context: PhantomData,
@@ -141,7 +143,7 @@ where
         Arc::clone(&self.global_context)
     }
 
-    pub fn apply_events<I>(&self, event_lanes: I) -> Result<(), RouterError>
+    pub fn apply_events<I>(&self, event_lanes: I) -> Result<(), RouterError<SL::Time>>
     where
         I: IntoIterator<Item = EL>,
     {
@@ -167,7 +169,7 @@ where
         Ok(())
     }
 
-    pub fn send_events<I>(&self, event_lanes: I) -> Result<(), RouterError>
+    pub fn send_events<I>(&self, event_lanes: I) -> Result<(), RouterError<SL::Time>>
     where
         I: IntoIterator<Item = EL>,
     {
@@ -188,19 +190,21 @@ where
         Ok(())
     }
 
-    fn route_events<I>(&self, event_lanes: I) -> Result<Vec<Vec<WorkerEvent<SL, EL>>>, RouterError>
+    fn route_events<I>(&self, event_lanes: I) -> Result<Vec<Vec<WorkerEvent<SL, EL>>>, RouterError<SL::Time>>
     where
         I: IntoIterator<Item = EL>,
     {
         let mut worker_events = Vec::with_capacity(self.workers.len());
         worker_events.resize_with(self.workers.len(), Vec::new);
 
-        let earliest_time = self.current_time.load(Ordering::Relaxed).saturating_sub(self.lower_time_horizon_delta);
+        let current_time = self.current_time.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let earliest_time = current_time.saturating_sub(self.lower_time_horizon_delta.clone());
         let mut event_size = 0u64;
         let mut journal_size = 0u64;
         for event_lane in event_lanes {
-            if event_lane.time() < earliest_time {
-                return Err(RouterError::EventBeforeHistoryHorizon { event_time: event_lane.time(), earliest_time });
+            let event_time = event_lane.time();
+            if event_time < earliest_time {
+                return Err(RouterError::EventBeforeHistoryHorizon { event_time, earliest_time });
             }
             let lane_size = event_lane.conservative_size();
             event_size = event_size.saturating_add(lane_size);
@@ -231,9 +235,9 @@ where
         Ok(worker_events)
     }
 
-    pub fn inspect_events<R>(&self, range: R) -> Result<Vec<EventJournalEntry<EL>>, RouterError>
+    pub fn inspect_events<R>(&self, range: R) -> Result<Vec<EventJournalEntry<EL>>, RouterError<SL::Time>>
     where
-        R: RangeBounds<i64>,
+        R: RangeBounds<SL::Time>,
     {
         let start = owned_bound(range.start_bound());
         let end = owned_bound(range.end_bound());
@@ -241,7 +245,10 @@ where
 
         for worker in &self.workers {
             let (tx, rx) = bounded(1);
-            worker.worker_inbound_tx.send(WorkerInbound::EventsInRange { start, end, reply: tx }).map_err(|_| RouterError::Error)?;
+            worker
+                .worker_inbound_tx
+                .send(WorkerInbound::EventsInRange { start: start.clone(), end: end.clone(), reply: tx })
+                .map_err(|_| RouterError::Error)?;
             rxs.push(rx);
         }
 
@@ -259,7 +266,7 @@ where
         Ok(merged)
     }
 
-    pub fn query_at(&self, time: i64, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError> {
+    pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError<SL::Time>> {
         if snapshot_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -281,7 +288,7 @@ where
             let (tx, rx) = bounded(1);
             self.workers[worker_index]
                 .worker_inbound_tx
-                .send(WorkerInbound::SnapshotsAt { snapshot_requests, time, reply: tx })
+                .send(WorkerInbound::SnapshotsAt { snapshot_requests, time: time.clone(), reply: tx })
                 .map_err(|_| RouterError::Error)?;
             rxs.push(rx);
         }
@@ -299,22 +306,19 @@ where
         Ok(results)
     }
 
-    pub fn advance_to(&self, time: i64) -> Result<(), RouterError> {
-        let mut current = self.current_time.load(Ordering::Relaxed);
-        loop {
-            if time <= current {
+    pub fn advance_to(&self, time: SL::Time) -> Result<(), RouterError<SL::Time>> {
+        {
+            let mut current = self.current_time.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if time <= *current {
                 return Ok(());
             }
-            match self.current_time.compare_exchange_weak(current, time, Ordering::Relaxed, Ordering::Relaxed) {
-                Ok(_) => break,
-                Err(actual) => current = actual,
-            }
+            *current = time.clone();
         }
 
         let mut rxs = Vec::new();
         for worker in &self.workers {
             let (tx, rx) = bounded(1);
-            worker.worker_inbound_tx.send(WorkerInbound::AdvanceTime { time, reply: tx }).map_err(|_| RouterError::Error)?;
+            worker.worker_inbound_tx.send(WorkerInbound::AdvanceTime { time: time.clone(), reply: tx }).map_err(|_| RouterError::Error)?;
             rxs.push(rx);
         }
 
@@ -324,8 +328,8 @@ where
         Ok(())
     }
 
-    pub fn current_time(&self) -> i64 {
-        self.current_time.load(Ordering::Relaxed)
+    pub fn current_time(&self) -> SL::Time {
+        self.current_time.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     fn worker_index(&self, snapshot_id: u128) -> usize {
@@ -335,10 +339,10 @@ where
     }
 }
 
-fn owned_bound(bound: Bound<&i64>) -> Bound<i64> {
+fn owned_bound<T: ContimeTime>(bound: Bound<&T>) -> Bound<T> {
     match bound {
-        Bound::Included(value) => Bound::Included(*value),
-        Bound::Excluded(value) => Bound::Excluded(*value),
+        Bound::Included(value) => Bound::Included(value.clone()),
+        Bound::Excluded(value) => Bound::Excluded(value.clone()),
         Bound::Unbounded => Bound::Unbounded,
     }
 }

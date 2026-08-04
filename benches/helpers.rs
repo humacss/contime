@@ -13,6 +13,7 @@ pub struct BenchSnapshot {
 }
 
 impl Snapshot for BenchSnapshot {
+    type Time = i64;
     type Event = BenchEvent;
 
     fn id(&self) -> u128 {
@@ -41,6 +42,8 @@ pub enum BenchEvent {
 }
 
 impl Event for BenchEvent {
+    type Time = i64;
+
     fn id(&self) -> u128 {
         match self {
             Self::Positive(_snapshot_id, _time, event_id, _value) => *event_id,

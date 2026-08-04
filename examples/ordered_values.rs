@@ -62,6 +62,7 @@ struct ReceiveValue {
 }
 
 impl Snapshot for OrderedValuesSnapshot {
+    type Time = i64;
     type Event = ReceiveValue;
 
     /// Snapshot id used by `contime` to select the correct history lane.
@@ -96,6 +97,8 @@ impl Snapshot for OrderedValuesSnapshot {
 }
 
 impl Event for ReceiveValue {
+    type Time = i64;
+
     /// Event id used for ordering and duplicate detection.
     fn id(&self) -> u128 {
         self.event_id

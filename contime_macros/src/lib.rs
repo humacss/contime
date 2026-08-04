@@ -4,13 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{ToTokens, quote};
+use quote::{quote, ToTokens};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{
-    Block, DeriveInput, Error, Expr, Fields, Ident, Path, Result, Token, Type, parse_macro_input,
-};
+use syn::{parse_macro_input, Block, DeriveInput, Error, Expr, Fields, Ident, Path, Result, Token, Type};
 
 #[proc_macro]
 pub fn __lanes_merge(input: TokenStream) -> TokenStream {
@@ -49,6 +47,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
     let snapshots = dedupe_snapshots(&input.snapshots)?;
     let routes = merge_routes(&input.routes)?;
     validate_route_targets(&snapshots, &routes)?;
+    let time_type = input.time_type;
 
     let snapshot_variants = snapshots
         .iter()
@@ -100,10 +99,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         .map(|route| {
             let key = &route.key;
             let event_ty = &route.event_ty;
-            let target = route
-                .targets
-                .first()
-                .expect("merged route should always have at least one target");
+            let target = route.targets.first().expect("merged route should always have at least one target");
             let target_variant = &target.variant;
             let target_ty = &target.path;
             quote! {
@@ -185,10 +181,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         .map(|route| {
             let key = &route.key;
             let event_ty = &route.event_ty;
-            let target = route
-                .targets
-                .first()
-                .expect("merged route should always have at least one target");
+            let target = route.targets.first().expect("merged route should always have at least one target");
             let target_ty = &target.path;
             quote! {
                 Self::#key(e) => <#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(e),
@@ -243,7 +236,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                             snapshot,
                             ::contime::ApplyBatch {
                                 snapshot_id: batch.snapshot_id,
-                                time: batch.time,
+                                time: batch.time.clone(),
                                 events: &bucket,
                             },
                         );
@@ -326,10 +319,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         .collect::<Vec<_>>();
 
     let modname = input.modname;
-    let context_ty = input
-        .context
-        .map(|context| quote! { #context })
-        .unwrap_or_else(|| quote! { () });
+    let context_ty = input.context.map(|context| quote! { #context }).unwrap_or_else(|| quote! { () });
 
     Ok(quote! {
         mod #modname {
@@ -343,6 +333,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
             impl ::contime::SnapshotLanes for SnapshotLanes {}
 
             impl ::contime::Snapshot for SnapshotLanes {
+                type Time = #time_type;
                 type Event = EventLanes;
 
                 fn id(&self) -> u128 {
@@ -351,13 +342,13 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                     }
                 }
 
-                fn time(&self) -> i64 {
+                fn time(&self) -> Self::Time {
                     match self {
                         #( #snapshot_time_arms )*
                     }
                 }
 
-                fn set_time(&mut self, time: i64) {
+                fn set_time(&mut self, time: Self::Time) {
                     match self {
                         #( #snapshot_set_time_arms )*
                     }
@@ -384,13 +375,15 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
             }
 
             impl ::contime::Event for EventLanes {
+                type Time = #time_type;
+
                 fn id(&self) -> u128 {
                     match self {
                         #( #event_id_arms )*
                     }
                 }
 
-                fn time(&self) -> i64 {
+                fn time(&self) -> Self::Time {
                     match self {
                         #( #event_time_arms )*
                     }
@@ -459,23 +452,20 @@ fn expand_contime_event(input: DeriveInput) -> Result<TokenStream2> {
         .find(|attr| attr.path().is_ident("contime_event"))
         .ok_or_else(|| Error::new(name.span(), "missing `#[contime_event(...)]` attribute"))?;
     let config = attr.parse_args::<EventDeriveConfig>()?;
-    let id = config
-        .id
-        .ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `id = ...`"))?;
-    let time = config
-        .time
-        .ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `time = ...`"))?;
-    let bytes = config
-        .bytes
-        .ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `bytes = ...`"))?;
+    let id = config.id.ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `id = ...`"))?;
+    let time = config.time.ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `time = ...`"))?;
+    let time_type = config.time_type.unwrap_or_else(|| syn::parse_quote!(i64));
+    let bytes = config.bytes.ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `bytes = ...`"))?;
 
     Ok(quote! {
         impl ::contime::Event for #name {
+            type Time = #time_type;
+
             fn id(&self) -> u128 {
                 #id
             }
 
-            fn time(&self) -> i64 {
+            fn time(&self) -> Self::Time {
                 #time
             }
 
@@ -497,50 +487,29 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         syn::Data::Struct(data) => match data.fields {
             Fields::Named(_) => {}
             other => {
-                return Err(Error::new(
-                    other.span(),
-                    "`ContimeSnapshot` currently requires a struct with named fields",
-                ));
+                return Err(Error::new(other.span(), "`ContimeSnapshot` currently requires a struct with named fields"));
             }
         },
         other => {
             let _ = other;
-            return Err(Error::new(
-                name.span(),
-                "`ContimeSnapshot` can only be derived for structs",
-            ));
+            return Err(Error::new(name.span(), "`ContimeSnapshot` can only be derived for structs"));
         }
     }
 
     let config = attr.parse_args::<SnapshotDeriveConfig>()?;
-    let events = config
-        .events
-        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `events = [...]`"))?;
+    let events = config.events.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `events = [...]`"))?;
     if events.is_empty() {
         return Err(Error::new(attr.span(), "`contime_snapshot` requires at least one event"));
     }
-    let ids = config
-        .ids
-        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `id = [...]`"))?;
+    let ids = config.ids.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `id = [...]`"))?;
     if ids.len() != 1 {
-        return Err(Error::new(
-            attr.span(),
-            "`ContimeSnapshot` currently supports exactly one id field",
-        ));
+        return Err(Error::new(attr.span(), "`ContimeSnapshot` currently supports exactly one id field"));
     }
-    let id = ids
-        .first()
-        .expect("checked len")
-        .clone();
-    let time = config
-        .time
-        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `time = ...`"))?;
-    let bytes = config
-        .bytes
-        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `bytes = ...`"))?;
-    let apply = config
-        .apply
-        .ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `apply = { ... }`"))?;
+    let id = ids.first().expect("checked len").clone();
+    let time = config.time.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `time = ...`"))?;
+    let time_type = config.time_type.unwrap_or_else(|| syn::parse_quote!(i64));
+    let bytes = config.bytes.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `bytes = ...`"))?;
+    let apply = config.apply.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `apply = { ... }`"))?;
 
     let event_enum = Ident::new(&format!("{name}Event"), name.span());
     let snapshot_lanes_macro = Ident::new(&format!("__ao_{name}_snapshot_lanes"), name.span());
@@ -639,13 +608,15 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         }
 
         impl ::contime::Event for #event_enum {
+            type Time = #time_type;
+
             fn id(&self) -> u128 {
                 match self {
                     #( #event_id_arms )*
                 }
             }
 
-            fn time(&self) -> i64 {
+            fn time(&self) -> Self::Time {
                 match self {
                     #( #event_time_arms )*
                 }
@@ -663,17 +634,18 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         #( #seed_snapshot_impls )*
 
         impl ::contime::Snapshot for #name {
+            type Time = #time_type;
             type Event = #event_enum;
 
             fn id(&self) -> u128 {
                 self.#id
             }
 
-            fn time(&self) -> i64 {
+            fn time(&self) -> Self::Time {
                 #time
             }
 
-            fn set_time(&mut self, time: i64) {
+            fn set_time(&mut self, time: Self::Time) {
                 self.time = time;
             }
 
@@ -780,20 +752,12 @@ fn dedupe_snapshots(snapshots: &[Path]) -> Result<Vec<SnapshotSpec>> {
             if existing != &type_key {
                 return Err(Error::new(
                     variant.span(),
-                    format!(
-                        "snapshot variant `{variant_key}` would refer to multiple snapshot types: `{existing}` and `{type_key}`"
-                    ),
+                    format!("snapshot variant `{variant_key}` would refer to multiple snapshot types: `{existing}` and `{type_key}`"),
                 ));
             }
         }
         by_variant.insert(variant_key, type_key.clone());
-        by_type.insert(
-            type_key,
-            SnapshotSpec {
-                path: path.clone(),
-                variant,
-            },
-        );
+        by_type.insert(type_key, SnapshotSpec { path: path.clone(), variant });
     }
 
     Ok(by_type.into_values().collect())
@@ -811,9 +775,7 @@ fn merge_routes(routes: &[RouteEntry]) -> Result<Vec<RouteSpec>> {
             if existing_key != &key_name {
                 return Err(Error::new(
                     route.key.span(),
-                    format!(
-                        "event type `{event_key}` is routed under multiple keys: `{existing_key}` and `{key_name}`"
-                    ),
+                    format!("event type `{event_key}` is routed under multiple keys: `{existing_key}` and `{key_name}`"),
                 ));
             }
         } else {
@@ -830,45 +792,29 @@ fn merge_routes(routes: &[RouteEntry]) -> Result<Vec<RouteSpec>> {
         if entry.event_key != event_key {
             return Err(Error::new(
                 route.key.span(),
-                format!(
-                    "route key `{key_name}` uses conflicting event types: `{}` and `{event_key}`",
-                    entry.event_key
-                ),
+                format!("route key `{key_name}` uses conflicting event types: `{}` and `{event_key}`", entry.event_key),
             ));
         }
 
-        let mut seen = entry
-            .targets
-            .iter()
-            .map(|target| normalized_path_key(&target.path))
-            .collect::<BTreeSet<_>>();
+        let mut seen = entry.targets.iter().map(|target| normalized_path_key(&target.path)).collect::<BTreeSet<_>>();
 
         for target in &route.targets {
             let target_key = normalized_path_key(target);
             if seen.insert(target_key) {
-                entry.targets.push(SnapshotSpec {
-                    path: target.clone(),
-                    variant: trailing_ident(target)?,
-                });
+                entry.targets.push(SnapshotSpec { path: target.clone(), variant: trailing_ident(target)? });
             }
         }
     }
 
     if merged.is_empty() {
-        return Err(Error::new(
-            Span::call_site(),
-            "contime::lanes! requires at least one route across the listed fragments",
-        ));
+        return Err(Error::new(Span::call_site(), "contime::lanes! requires at least one route across the listed fragments"));
     }
 
     Ok(merged.into_values().collect())
 }
 
 fn validate_route_targets(snapshots: &[SnapshotSpec], routes: &[RouteSpec]) -> Result<()> {
-    let known = snapshots
-        .iter()
-        .map(|snapshot| normalized_path_key(&snapshot.path))
-        .collect::<BTreeSet<_>>();
+    let known = snapshots.iter().map(|snapshot| normalized_path_key(&snapshot.path)).collect::<BTreeSet<_>>();
 
     for route in routes {
         for target in &route.targets {
@@ -876,9 +822,7 @@ fn validate_route_targets(snapshots: &[SnapshotSpec], routes: &[RouteSpec]) -> R
             if !known.contains(&target_key) {
                 return Err(Error::new(
                     target.path.span(),
-                    format!(
-                        "route target `{target_key}` is not listed in the assembled snapshots"
-                    ),
+                    format!("route target `{target_key}` is not listed in the assembled snapshots"),
                 ));
             }
         }
@@ -888,10 +832,7 @@ fn validate_route_targets(snapshots: &[SnapshotSpec], routes: &[RouteSpec]) -> R
 }
 
 fn trailing_ident(path: &Path) -> Result<Ident> {
-    path.segments
-        .last()
-        .map(|segment| segment.ident.clone())
-        .ok_or_else(|| Error::new(path.span(), "expected a named path"))
+    path.segments.last().map(|segment| segment.ident.clone()).ok_or_else(|| Error::new(path.span(), "expected a named path"))
 }
 
 fn normalized_path_key(path: &Path) -> String {
@@ -917,6 +858,7 @@ struct RouteSpec {
 struct LanesManifest {
     modname: Ident,
     context: Option<Type>,
+    time_type: Type,
     snapshots: Vec<Path>,
     routes: Vec<RouteEntry>,
 }
@@ -924,6 +866,7 @@ struct LanesManifest {
 struct NewLanesManifest {
     modname: Ident,
     context: Option<Type>,
+    time_type: Type,
     snapshots: Vec<Path>,
     routes: Vec<RouteEntry>,
 }
@@ -931,6 +874,7 @@ struct NewLanesManifest {
 struct EventDeriveConfig {
     id: Option<Expr>,
     time: Option<Expr>,
+    time_type: Option<Type>,
     bytes: Option<Expr>,
 }
 
@@ -938,6 +882,7 @@ struct SnapshotDeriveConfig {
     events: Option<Vec<Path>>,
     ids: Option<Vec<Ident>>,
     time: Option<Expr>,
+    time_type: Option<Type>,
     bytes: Option<Expr>,
     apply: Option<Block>,
 }
@@ -953,9 +898,7 @@ impl Parse for LanesManifest {
         }
         let snapshots_content;
         syn::braced!(snapshots_content in input);
-        let snapshots = Punctuated::<Path, Token![,]>::parse_terminated(&snapshots_content)?
-            .into_iter()
-            .collect::<Vec<_>>();
+        let snapshots = Punctuated::<Path, Token![,]>::parse_terminated(&snapshots_content)?.into_iter().collect::<Vec<_>>();
 
         let routes_label = input.parse::<Ident>()?;
         if routes_label != "routes" {
@@ -963,16 +906,9 @@ impl Parse for LanesManifest {
         }
         let routes_content;
         syn::braced!(routes_content in input);
-        let routes = Punctuated::<RouteEntry, Token![,]>::parse_terminated(&routes_content)?
-            .into_iter()
-            .collect::<Vec<_>>();
+        let routes = Punctuated::<RouteEntry, Token![,]>::parse_terminated(&routes_content)?.into_iter().collect::<Vec<_>>();
 
-        Ok(Self {
-            modname,
-            context: None,
-            snapshots,
-            routes,
-        })
+        Ok(Self { modname, context: None, time_type: syn::parse_quote!(i64), snapshots, routes })
     }
 }
 
@@ -993,15 +929,28 @@ impl Parse for NewLanesManifest {
             }
         }
 
+        let time_type = if input.peek(Ident) {
+            let fork = input.fork();
+            let label = fork.parse::<Ident>()?;
+            if label == "time" {
+                input.parse::<Ident>()?;
+                let time_type = input.parse::<Type>()?;
+                input.parse::<Token![;]>()?;
+                time_type
+            } else {
+                syn::parse_quote!(i64)
+            }
+        } else {
+            syn::parse_quote!(i64)
+        };
+
         let snapshots_label = input.parse::<Ident>()?;
         if snapshots_label != "snapshots" {
             return Err(Error::new(snapshots_label.span(), "expected `snapshots`"));
         }
         let snapshots_content;
         syn::bracketed!(snapshots_content in input);
-        let snapshots = Punctuated::<Path, Token![,]>::parse_terminated(&snapshots_content)?
-            .into_iter()
-            .collect::<Vec<_>>();
+        let snapshots = Punctuated::<Path, Token![,]>::parse_terminated(&snapshots_content)?.into_iter().collect::<Vec<_>>();
         input.parse::<Token![;]>()?;
 
         let routes_label = input.parse::<Ident>()?;
@@ -1016,12 +965,7 @@ impl Parse for NewLanesManifest {
             .collect::<Vec<_>>();
         input.parse::<Token![;]>()?;
 
-        Ok(Self {
-            modname,
-            context,
-            snapshots,
-            routes,
-        })
+        Ok(Self { modname, context, time_type, snapshots, routes })
     }
 }
 
@@ -1030,6 +974,7 @@ impl From<NewLanesManifest> for LanesManifest {
         Self {
             modname: value.modname,
             context: value.context,
+            time_type: value.time_type,
             snapshots: value.snapshots,
             routes: value.routes,
         }
@@ -1056,14 +1001,8 @@ impl Parse for RouteEntry {
         input.parse::<Token![=>]>()?;
         let targets_content;
         syn::bracketed!(targets_content in input);
-        let targets = Punctuated::<Path, Token![,]>::parse_terminated(&targets_content)?
-            .into_iter()
-            .collect::<Vec<_>>();
-        Ok(Self {
-            key,
-            event_ty,
-            targets,
-        })
+        let targets = Punctuated::<Path, Token![,]>::parse_terminated(&targets_content)?.into_iter().collect::<Vec<_>>();
+        Ok(Self { key, event_ty, targets })
     }
 }
 
@@ -1073,9 +1012,7 @@ impl Parse for NewRouteEntry {
         input.parse::<Token![=>]>()?;
         let targets_content;
         syn::bracketed!(targets_content in input);
-        let targets = Punctuated::<Path, Token![,]>::parse_terminated(&targets_content)?
-            .into_iter()
-            .collect::<Vec<_>>();
+        let targets = Punctuated::<Path, Token![,]>::parse_terminated(&targets_content)?.into_iter().collect::<Vec<_>>();
         Ok(Self { event_ty, targets })
     }
 }
@@ -1083,38 +1020,24 @@ impl Parse for NewRouteEntry {
 impl From<NewRouteEntry> for RouteEntry {
     fn from(value: NewRouteEntry) -> Self {
         let key = trailing_ident(&value.event_ty).expect("parsed path has a trailing ident");
-        let event_ty = Type::Path(syn::TypePath {
-            qself: None,
-            path: value.event_ty,
-        });
-        Self {
-            key,
-            event_ty,
-            targets: value.targets,
-        }
+        let event_ty = Type::Path(syn::TypePath { qself: None, path: value.event_ty });
+        Self { key, event_ty, targets: value.targets }
     }
 }
 
 impl Parse for EventDeriveConfig {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut config = Self {
-            id: None,
-            time: None,
-            bytes: None,
-        };
+        let mut config = Self { id: None, time: None, time_type: None, bytes: None };
         while !input.is_empty() {
             let key = input.parse::<Ident>()?;
             input.parse::<Token![=]>()?;
-            let expr = input.parse::<Expr>()?;
             match key.to_string().as_str() {
-                "id" => config.id = Some(expr),
-                "time" => config.time = Some(expr),
-                "bytes" => config.bytes = Some(expr),
+                "id" => config.id = Some(input.parse::<Expr>()?),
+                "time" => config.time = Some(input.parse::<Expr>()?),
+                "time_type" => config.time_type = Some(input.parse::<Type>()?),
+                "bytes" => config.bytes = Some(input.parse::<Expr>()?),
                 other => {
-                    return Err(Error::new(
-                        key.span(),
-                        format!("unknown contime_event option `{other}`"),
-                    ));
+                    return Err(Error::new(key.span(), format!("unknown contime_event option `{other}`")));
                 }
             }
             if input.peek(Token![,]) {
@@ -1127,13 +1050,7 @@ impl Parse for EventDeriveConfig {
 
 impl Parse for SnapshotDeriveConfig {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut config = Self {
-            events: None,
-            ids: None,
-            time: None,
-            bytes: None,
-            apply: None,
-        };
+        let mut config = Self { events: None, ids: None, time: None, time_type: None, bytes: None, apply: None };
         while !input.is_empty() {
             let key = input.parse::<Ident>()?;
             input.parse::<Token![=]>()?;
@@ -1141,29 +1058,19 @@ impl Parse for SnapshotDeriveConfig {
                 "events" => {
                     let content;
                     syn::bracketed!(content in input);
-                    config.events = Some(
-                        Punctuated::<Path, Token![,]>::parse_terminated(&content)?
-                            .into_iter()
-                            .collect(),
-                    );
+                    config.events = Some(Punctuated::<Path, Token![,]>::parse_terminated(&content)?.into_iter().collect());
                 }
                 "id" => {
                     let content;
                     syn::bracketed!(content in input);
-                    config.ids = Some(
-                        Punctuated::<Ident, Token![,]>::parse_terminated(&content)?
-                            .into_iter()
-                            .collect(),
-                    );
+                    config.ids = Some(Punctuated::<Ident, Token![,]>::parse_terminated(&content)?.into_iter().collect());
                 }
                 "time" => config.time = Some(input.parse::<Expr>()?),
+                "time_type" => config.time_type = Some(input.parse::<Type>()?),
                 "bytes" => config.bytes = Some(input.parse::<Expr>()?),
                 "apply" => config.apply = Some(input.parse::<Block>()?),
                 other => {
-                    return Err(Error::new(
-                        key.span(),
-                        format!("unknown contime_snapshot option `{other}`"),
-                    ));
+                    return Err(Error::new(key.span(), format!("unknown contime_snapshot option `{other}`")));
                 }
             }
             if input.peek(Token![,]) {

@@ -1,19 +1,22 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::Bound;
 
-use crate::{ApplyBatch, ApplyDecision, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, Snapshot};
+use crate::{ApplyBatch, ApplyDecision, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, Snapshot};
 
 use super::history::LocalSnapshotHistory;
 
-pub(super) fn first_key_at_time(time: i64) -> ContimeKey {
+pub(super) fn first_key_at_time<T: ContimeTime>(time: T) -> ContimeKey<T> {
     ContimeKey { time, id: u128::MIN }
 }
 
-pub(super) fn last_key_at_time(time: i64) -> ContimeKey {
+pub(super) fn last_key_at_time<T: ContimeTime>(time: T) -> ContimeKey<T> {
     ContimeKey { time, id: u128::MAX }
 }
 
-pub(super) fn checkpoint_partition_before<S>(checkpoints: &VecDeque<(ContimeKey, S)>, boundary: &ContimeKey) -> usize {
+pub(super) fn checkpoint_partition_before<T: ContimeTime, S>(
+    checkpoints: &VecDeque<(ContimeKey<T>, S)>,
+    boundary: &ContimeKey<T>,
+) -> usize {
     let mut low = 0;
     let mut high = checkpoints.len();
     while low < high {
@@ -27,25 +30,28 @@ pub(super) fn checkpoint_partition_before<S>(checkpoints: &VecDeque<(ContimeKey,
     low
 }
 
-pub(super) fn latest_checkpoint_before_index<S>(checkpoints: &VecDeque<(ContimeKey, S)>, boundary: &ContimeKey) -> Option<usize> {
+pub(super) fn latest_checkpoint_before_index<T: ContimeTime, S>(
+    checkpoints: &VecDeque<(ContimeKey<T>, S)>,
+    boundary: &ContimeKey<T>,
+) -> Option<usize> {
     let index = checkpoint_partition_before(checkpoints, boundary);
     (index > 0).then(|| index - 1)
 }
 
-pub(super) fn latest_checkpoint_before<'a, S>(
-    checkpoints: &'a VecDeque<(ContimeKey, S)>,
-    boundary: &ContimeKey,
-) -> Option<(&'a ContimeKey, &'a S)> {
+pub(super) fn latest_checkpoint_before<'a, T: ContimeTime, S>(
+    checkpoints: &'a VecDeque<(ContimeKey<T>, S)>,
+    boundary: &ContimeKey<T>,
+) -> Option<(&'a ContimeKey<T>, &'a S)> {
     latest_checkpoint_before_index(checkpoints, boundary).map(|index| {
         let (key, checkpoint) = &checkpoints[index];
         (key, checkpoint)
     })
 }
 
-pub(super) fn latest_checkpoint_at_or_before<'a, S>(
-    checkpoints: &'a VecDeque<(ContimeKey, S)>,
-    boundary: &ContimeKey,
-) -> Option<(&'a ContimeKey, &'a S)> {
+pub(super) fn latest_checkpoint_at_or_before<'a, T: ContimeTime, S>(
+    checkpoints: &'a VecDeque<(ContimeKey<T>, S)>,
+    boundary: &ContimeKey<T>,
+) -> Option<(&'a ContimeKey<T>, &'a S)> {
     let mut low = 0;
     let mut high = checkpoints.len();
     while low < high {
@@ -63,7 +69,7 @@ pub(super) fn latest_checkpoint_at_or_before<'a, S>(
     })
 }
 
-pub(super) fn push_checkpoint<S>(checkpoints: &mut VecDeque<(ContimeKey, S)>, key: ContimeKey, checkpoint: S) -> i64
+pub(super) fn push_checkpoint<S>(checkpoints: &mut VecDeque<(ContimeKey<S::Time>, S)>, key: ContimeKey<S::Time>, checkpoint: S) -> i64
 where
     S: Snapshot,
 {
@@ -72,7 +78,7 @@ where
     bytes_delta
 }
 
-pub(super) fn drain_checkpoints_from<S>(checkpoints: &mut VecDeque<(ContimeKey, S)>, start: usize) -> i64
+pub(super) fn drain_checkpoints_from<S>(checkpoints: &mut VecDeque<(ContimeKey<S::Time>, S)>, start: usize) -> i64
 where
     S: Snapshot,
 {
@@ -88,11 +94,11 @@ where
     S: Snapshot,
 {
     snapshot: S,
-    start: Bound<ContimeKey>,
-    end: Bound<ContimeKey>,
+    start: Bound<ContimeKey<S::Time>>,
+    end: Bound<ContimeKey<S::Time>>,
     stale_start: Option<usize>,
     preserve_previous_tip: bool,
-    first_changed_time: i64,
+    first_changed_time: S::Time,
     bytes_delta: i64,
 }
 
@@ -102,16 +108,16 @@ where
 {
     stale_start: Option<usize>,
     bytes_delta: i64,
-    final_key: Option<ContimeKey>,
+    final_key: Option<ContimeKey<S::Time>>,
     final_snapshot: S,
-    materialized_checkpoints: Vec<(ContimeKey, S)>,
+    materialized_checkpoints: Vec<(ContimeKey<S::Time>, S)>,
 }
 
 pub(super) fn get_checkpoint_for_apply<S>(
     history: &mut LocalSnapshotHistory<S>,
-    earliest_changed_time: i64,
-    latest_event_key_before_apply: Option<ContimeKey>,
-    _single_changed_event_key: Option<ContimeKey>,
+    earliest_changed_time: S::Time,
+    latest_event_key_before_apply: Option<ContimeKey<S::Time>>,
+    _single_changed_event_key: Option<ContimeKey<S::Time>>,
     changed_event_count: usize,
 ) -> CheckpointForApply<S>
 where
@@ -144,12 +150,13 @@ where
         checkpoint.start.clone(),
         checkpoint.end.clone(),
         |bucket_last_key, bucket_len, batch| {
+            let batch_time = batch.time.clone();
             if context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default())? == ApplyDecision::EarlyExit {
                 return Ok(false);
             }
             event_count += bucket_len;
 
-            if !checkpoint.preserve_previous_tip && !stored_first_changed_checkpoint && batch.time >= checkpoint.first_changed_time {
+            if !checkpoint.preserve_previous_tip && !stored_first_changed_checkpoint && batch_time >= checkpoint.first_changed_time {
                 materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone()));
                 stored_first_changed_checkpoint = true;
             }
@@ -198,14 +205,14 @@ where
 
 fn get_recomputed_checkpoint_for_apply<S>(
     history: &LocalSnapshotHistory<S>,
-    time: i64,
+    time: S::Time,
     preserve_previous_tip: bool,
-    protected_previous_tip: Option<&ContimeKey>,
+    protected_previous_tip: Option<&ContimeKey<S::Time>>,
 ) -> CheckpointForApply<S>
 where
     S: Snapshot + ApplyEvents + 'static,
 {
-    let mut recompute_boundary = first_key_at_time(time);
+    let mut recompute_boundary = first_key_at_time(time.clone());
     if !preserve_previous_tip {
         if let Some((key, _checkpoint)) = latest_checkpoint_before(&history.checkpoints, &recompute_boundary) {
             if !checkpoint_key_is_cadence(history, key) {
@@ -253,7 +260,7 @@ where
     history.checkpoint_interval != 0 && event_count != 0 && event_count % history.checkpoint_interval == 0
 }
 
-fn checkpoint_key_is_cadence<S>(history: &LocalSnapshotHistory<S>, checkpoint_key: &ContimeKey) -> bool
+fn checkpoint_key_is_cadence<S>(history: &LocalSnapshotHistory<S>, checkpoint_key: &ContimeKey<S::Time>) -> bool
 where
     S: Snapshot,
 {
@@ -266,18 +273,18 @@ where
 
 pub(super) fn apply_event_buckets<S, E, F>(
     snapshot_id: u128,
-    events: &BTreeMap<ContimeKey, S::Event>,
-    start: Bound<ContimeKey>,
-    end: Bound<ContimeKey>,
+    events: &BTreeMap<ContimeKey<S::Time>, S::Event>,
+    start: Bound<ContimeKey<S::Time>>,
+    end: Bound<ContimeKey<S::Time>>,
     mut apply_bucket: F,
 ) -> Result<(), E>
 where
     S: Snapshot + ApplyEvents + 'static,
-    F: FnMut(&ContimeKey, usize, ApplyBatch<'_, S::Event>) -> Result<bool, E>,
+    F: FnMut(&ContimeKey<S::Time>, usize, ApplyBatch<'_, S::Event>) -> Result<bool, E>,
 {
     let mut iter = events.range((start, end)).peekable();
     while let Some((first_key, first_event)) = iter.next() {
-        let bucket_time = first_key.time;
+        let bucket_time = first_key.time.clone();
         let mut bucket_last_key = first_key;
 
         if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
@@ -325,7 +332,7 @@ where
     Ok(())
 }
 
-pub(super) fn get_checkpoint_at<S>(history: &LocalSnapshotHistory<S>, time: i64) -> S
+pub(super) fn get_checkpoint_at<S>(history: &LocalSnapshotHistory<S>, time: S::Time) -> S
 where
     S: Snapshot + ApplyEvents + 'static,
 {
@@ -333,12 +340,12 @@ where
     get_checkpoint_at_with_context(history, time, &mut context).expect("unit apply wrapper cannot fail")
 }
 
-pub(super) fn get_checkpoint_at_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: i64, context: &mut C) -> Result<S, C::Error>
+pub(super) fn get_checkpoint_at_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: S::Time, context: &mut C) -> Result<S, C::Error>
 where
     S: Snapshot + ApplyEvents + 'static,
     C: ApplyWrapper<S>,
 {
-    let checkpoint_boundary = last_key_at_time(time);
+    let checkpoint_boundary = last_key_at_time(time.clone());
 
     let checkpoint_entry = latest_checkpoint_at_or_before(&history.checkpoints, &checkpoint_boundary);
 
@@ -347,7 +354,7 @@ where
         None => (history.base_snapshot.clone(), Bound::Unbounded),
     };
 
-    let end_key = last_key_at_time(time);
+    let end_key = last_key_at_time(time.clone());
 
     apply_event_buckets::<S, C::Error, _>(
         history.snapshot_id,
@@ -355,8 +362,9 @@ where
         recompute_start,
         Bound::Included(end_key),
         |_bucket_last_key, _bucket_len, batch| {
+            let batch_time = batch.time.clone();
             context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default())?;
-            snapshot.set_time(batch.time);
+            snapshot.set_time(batch_time);
             Ok(true)
         },
     )?;
@@ -366,7 +374,11 @@ where
     Ok(snapshot)
 }
 
-pub(super) fn get_checkpoint_before_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: i64, context: &mut C) -> Result<S, C::Error>
+pub(super) fn get_checkpoint_before_with_context<S, C>(
+    history: &LocalSnapshotHistory<S>,
+    time: S::Time,
+    context: &mut C,
+) -> Result<S, C::Error>
 where
     S: Snapshot + ApplyEvents + 'static,
     C: ApplyWrapper<S>,
@@ -385,8 +397,9 @@ where
         recompute_start,
         Bound::Excluded(boundary),
         |_bucket_last_key, _bucket_len, batch| {
+            let batch_time = batch.time.clone();
             context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default())?;
-            snapshot.set_time(batch.time);
+            snapshot.set_time(batch_time);
             Ok(true)
         },
     )?;
