@@ -66,15 +66,15 @@ where
     /// Advances the internal current time to `time` and prunes history outside the configured horizon.
     pub fn advance(&mut self, time: S::Time) -> i64 {
         let mut context = ();
-        self.advance_with_context(time, &mut context).expect("unit apply wrapper cannot fail")
+        self.advance_with_context(time, &mut context)
     }
 
-    pub(crate) fn advance_with_context<C>(&mut self, time: S::Time, context: &mut C) -> Result<i64, C::Error>
+    pub(crate) fn advance_with_context<C>(&mut self, time: S::Time, context: &mut C) -> i64
     where
         C: crate::ApplyWrapper<S>,
     {
         if time <= self.current_time {
-            return Ok(0);
+            return 0;
         }
 
         self.current_time = time;
@@ -84,7 +84,7 @@ where
         let mut bytes_delta: i64 = 0;
 
         if self.events.range(..drop_key.clone()).next().is_some() {
-            let new_base = get_checkpoint_before_with_context(self, drop_time, context)?;
+            let new_base = get_checkpoint_before_with_context(self, drop_time, context);
             bytes_delta += new_base.conservative_size() as i64 - self.base_snapshot.conservative_size() as i64;
             self.base_snapshot = new_base;
         }
@@ -100,7 +100,7 @@ where
         }
         self.events = kept_events;
 
-        Ok(bytes_delta)
+        bytes_delta
     }
 
     /// Reconstructs the snapshot state at `time`.
@@ -120,7 +120,7 @@ where
     /// Reconstructs the snapshot state at `time` using the provided apply wrapper.
     ///
     /// Events at exactly `time` are included in the returned snapshot.
-    pub(crate) fn snapshot_only_at_with_context<C>(&self, time: S::Time, context: &mut C) -> Result<S, C::Error>
+    pub(crate) fn snapshot_only_at_with_context<C>(&self, time: S::Time, context: &mut C) -> S
     where
         C: crate::ApplyWrapper<S>,
     {
@@ -212,17 +212,15 @@ mod tests {
     }
 
     impl crate::ApplyWrapper<ContextSnapshot> for Vec<i32> {
-        type Error = std::convert::Infallible;
-
         fn apply_event_batch_wrapper(
             &mut self,
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<crate::ApplyDecision, Self::Error> {
+        ) -> crate::ApplyDecision {
             apply_inner.apply_event_batch(snapshot, batch);
             self.push(snapshot.sum);
-            Ok(crate::ApplyDecision::Continue)
+            crate::ApplyDecision::Continue
         }
     }
 
@@ -242,7 +240,7 @@ mod tests {
     where
         S: Snapshot + ApplyEvents + 'static,
     {
-        history.apply_event_batch(vec![event], &mut ()).unwrap();
+        history.apply_event_batch(vec![event], &mut ());
     }
 
     #[test]
@@ -356,17 +354,15 @@ mod tests {
     }
 
     impl crate::ApplyWrapper<ContextSnapshot> for WrapperTrace {
-        type Error = std::convert::Infallible;
-
         fn apply_event_batch_wrapper(
             &mut self,
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<crate::ApplyDecision, Self::Error> {
+        ) -> crate::ApplyDecision {
             self.batches.push((batch.time, batch.events.iter().copied().map(|event| event.value).collect()));
             apply_inner.apply_event_batch(snapshot, batch);
-            Ok(crate::ApplyDecision::Continue)
+            crate::ApplyDecision::Continue
         }
     }
 
@@ -388,14 +384,12 @@ mod tests {
     }
 
     impl crate::ApplyWrapper<ContextSnapshot> for MultiApplyWrapper {
-        type Error = std::convert::Infallible;
-
         fn apply_event_batch_wrapper(
             &mut self,
             snapshot: &mut ContextSnapshot,
             batch: ApplyBatch<'_, ContextEvent>,
             apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<crate::ApplyDecision, Self::Error> {
+        ) -> crate::ApplyDecision {
             let earlier = [ContextEvent { id: 1, time: batch.time - 10, snapshot_id: batch.snapshot_id, value: 3 }];
             let earlier_refs = [&earlier[0]];
             let earlier_batch = ApplyBatch { snapshot_id: batch.snapshot_id, time: batch.time - 10, events: &earlier_refs };
@@ -405,7 +399,7 @@ mod tests {
 
             self.batches.push((batch.time, batch.events.iter().copied().map(|event| event.value).collect()));
             apply_inner.apply_event_batch(snapshot, batch);
-            Ok(crate::ApplyDecision::Continue)
+            crate::ApplyDecision::Continue
         }
     }
 
@@ -415,38 +409,10 @@ mod tests {
         let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
         let mut context = MultiApplyWrapper::default();
 
-        history.apply_event_batch(vec![ContextEvent { id: 10, time: 100, snapshot_id: 1, value: 7 }], &mut context).unwrap();
+        history.apply_event_batch(vec![ContextEvent { id: 10, time: 100, snapshot_id: 1, value: 7 }], &mut context);
 
         assert_eq!(history.snapshot_only_at(100).sum, 10);
         assert_eq!(context.batches, vec![(90, vec![3]), (100, vec![7])]);
-    }
-
-    #[derive(Default)]
-    struct FailingWrapper;
-
-    impl crate::ApplyWrapper<ContextSnapshot> for FailingWrapper {
-        type Error = crate::ApplyError;
-
-        fn apply_event_batch_wrapper(
-            &mut self,
-            _snapshot: &mut ContextSnapshot,
-            batch: ApplyBatch<'_, ContextEvent>,
-            _apply_inner: crate::ApplyInner<ContextSnapshot>,
-        ) -> Result<crate::ApplyDecision, Self::Error> {
-            Err(crate::ApplyError::new(format!("rejected batch at {}", batch.time)))
-        }
-    }
-
-    #[test]
-    fn apply_wrapper_errors_are_returned_to_apply_caller() {
-        let snapshot = ContextSnapshot { id: 1, time: 0, sum: 0 };
-        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
-        let mut context = FailingWrapper;
-
-        let error =
-            history.apply_event_batch(vec![ContextEvent { id: 10, time: 100, snapshot_id: 1, value: 7 }], &mut context).unwrap_err();
-
-        assert_eq!(error.message(), "rejected batch at 100");
     }
 
     // --- advance tests ---

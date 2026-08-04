@@ -67,7 +67,6 @@ pub use history::{ApplyDecision, ApplyInner, ApplyWrapper, SnapshotHistory};
 pub use journal::EventJournalEntry;
 pub use time::ContimeTime;
 pub use traits::{ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
-pub use worker::ApplyError;
 
 mod test;
 pub use test::*;

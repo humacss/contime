@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 
 use contime::{ApplyBatch, ApplyDecision, ApplyEvents, ApplyInner, ApplyWrapper, Event, Snapshot, SnapshotEvent};
@@ -120,48 +119,42 @@ impl ApplyEvents for ContextValueAt {
 }
 
 impl ApplyWrapper<ContextValueAt> for ApplyTrace {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut ContextValueAt,
         batch: ApplyBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         apply_inner.apply_event_batch(snapshot, batch);
         self.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
 impl ApplyWrapper<ContextValueAt> for ApplyTraceSender {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut ContextValueAt,
         batch: ApplyBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         let event = batch.events.last().copied().expect("after apply should receive non-empty bucket");
         apply_inner.apply_event_batch(snapshot, batch);
         self.tx.send((event.entity_id, event.time, event.value, snapshot.value)).unwrap();
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
 impl ApplyWrapper<ContextValueAt> for ApplyBatchTrace {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut ContextValueAt,
         batch: ApplyBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         self.applied.push((batch.snapshot_id, batch.time, batch.events.len()));
         apply_inner.apply_event_batch(snapshot, batch);
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
@@ -176,100 +169,88 @@ contime::lanes! {
 use context_contime::{EventLanes, SnapshotLanes};
 
 impl ApplyWrapper<SnapshotLanes> for ApplyTrace {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         apply_inner.apply_event_batch(snapshot, batch);
         let SnapshotLanes::ContextValueAt(snapshot) = snapshot;
         self.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for ApplyTraceSender {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         let event = batch.events.last().copied().expect("wrapper should receive non-empty bucket");
         let EventLanes::OnContextValueChanged(event) = event;
         let event = event.clone();
         apply_inner.apply_event_batch(snapshot, batch);
         let SnapshotLanes::ContextValueAt(snapshot) = snapshot;
         self.tx.send((event.entity_id, event.time, event.value, snapshot.value)).unwrap();
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for WorkerIdTraceSender {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         apply_inner.apply_event_batch(snapshot, batch);
         self.tx.send(self.worker_id).unwrap();
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for GlobalWorkerTraceSender {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         apply_inner.apply_event_batch(snapshot, batch);
         self.tx.send((self.label, self.worker_id)).unwrap();
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for BlockingApplyTrace {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         self.entered_tx.send(()).unwrap();
         self.release_rx.recv().unwrap();
         let snapshot_id = batch.snapshot_id;
         apply_inner.apply_event_batch(snapshot, batch);
         self.applied.lock().unwrap().push(snapshot_id);
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for ApplyBatchTrace {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         self.applied.push((batch.snapshot_id, batch.time, batch.events.len()));
         apply_inner.apply_event_batch(snapshot, batch);
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
@@ -279,20 +260,18 @@ struct EarlyExitAtTime {
 }
 
 impl ApplyWrapper<SnapshotLanes> for EarlyExitAtTime {
-    type Error = Infallible;
-
     fn apply_event_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> Result<ApplyDecision, Self::Error> {
+    ) -> ApplyDecision {
         self.batches.push(batch.time);
         if batch.time == self.exit_time {
-            return Ok(ApplyDecision::EarlyExit);
+            return ApplyDecision::EarlyExit;
         }
         apply_inner.apply_event_batch(snapshot, batch);
-        Ok(ApplyDecision::Continue)
+        ApplyDecision::Continue
     }
 }
 
@@ -315,16 +294,14 @@ fn apply_wrapper_can_exit_replay_early() {
     let (mut history, _) = contime::SnapshotHistory::new(snapshot, 0, 1000);
     let mut context = EarlyExitAtTime { exit_time: 20, batches: Vec::new() };
 
-    history
-        .apply_event_batch(
-            vec![
-                EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }),
-                EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 }),
-                EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 30, time: 30, entity_id: 3, value: 30 }),
-            ],
-            &mut context,
-        )
-        .unwrap();
+    history.apply_event_batch(
+        vec![
+            EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }),
+            EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 }),
+            EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 30, time: 30, entity_id: 3, value: 30 }),
+        ],
+        &mut context,
+    );
 
     assert_eq!(context.batches, vec![10, 20]);
     assert_eq!(history.snapshot_only_at(30), SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 30, value: 10 }));
@@ -358,8 +335,7 @@ fn apply_wrapper_receives_snapshot_after_inner_apply_without_changing_snapshot_s
         &mut snapshot,
         ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[&event] },
         ApplyInner::default(),
-    )
-    .unwrap();
+    );
 
     assert_eq!(snapshot, ContextValueAt { entity_id: 3, time: 2, value: 4 });
     assert_eq!(context.applied, vec![(3, 2, 4)]);
@@ -376,8 +352,7 @@ fn generated_lane_dispatch_works_through_apply_wrapper() {
         &mut snapshot,
         ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[&event] },
         ApplyInner::default(),
-    )
-    .unwrap();
+    );
 
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 2, value: 4 }));
     assert_eq!(context.applied, vec![(3, 2, 4)]);
@@ -394,8 +369,7 @@ fn generated_lane_dispatch_passes_routed_snapshot_id_to_apply_batch() {
         &mut snapshot,
         ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[&event] },
         ApplyInner::default(),
-    )
-    .unwrap();
+    );
 
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 2, value: 4 }));
     assert_eq!(context.applied, vec![(3, 2, 1)]);

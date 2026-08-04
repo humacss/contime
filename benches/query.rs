@@ -15,12 +15,12 @@ fn new_event(snapshot_id: u128, event_id: u128, time: i64) -> BenchEvent {
 }
 
 trait BenchHistoryApply {
-    fn apply_event(&mut self, event: BenchEvent) -> Result<i64, contime::ApplyError>;
+    fn apply_event(&mut self, event: BenchEvent) -> i64;
 }
 
 impl BenchHistoryApply for SnapshotHistory<BenchSnapshot> {
-    fn apply_event(&mut self, event: BenchEvent) -> Result<i64, contime::ApplyError> {
-        self.apply_event_batch(vec![event], &mut ()).map_err(Into::into)
+    fn apply_event(&mut self, event: BenchEvent) -> i64 {
+        self.apply_event_batch(vec![event], &mut ())
     }
 }
 
@@ -28,7 +28,7 @@ fn seeded_history(event_count: usize) -> SnapshotHistory<BenchSnapshot> {
     let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10_000).0;
 
     for index in 0..event_count {
-        history.apply_event(new_event(0, index as u128, index as i64)).expect("seed event should apply");
+        history.apply_event(new_event(0, index as u128, index as i64));
     }
 
     history
