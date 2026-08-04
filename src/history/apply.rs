@@ -46,42 +46,23 @@ where
     }
 }
 
-/// Decision returned by an apply wrapper after observing one same-timestamp
-/// batch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ApplyDecision {
-    /// Continue applying later batches in this replay/apply pass.
-    Continue,
-    /// Exit the current replay/apply pass early because the wrapper knows
-    /// continuing would not produce new state.
-    EarlyExit,
-}
-
 /// Neutral, infallible extension seam around normal same-timestamp batch application.
 ///
-/// Return [`ApplyDecision::EarlyExit`] to stop the current replay pass intentionally.
 /// A panic indicates a broken invariant, and the caller must not assume the affected
 /// `contime` instance remains usable afterward.
 pub trait ApplyWrapper<S>
 where
     S: Snapshot + ApplyEvents,
 {
-    fn apply_event_batch_wrapper(&mut self, snapshot: &mut S, batch: ApplyBatch<'_, S::Event>, apply_inner: ApplyInner<S>)
-        -> ApplyDecision;
+    fn apply_event_batch_wrapper(&mut self, snapshot: &mut S, batch: ApplyBatch<'_, S::Event>, apply_inner: ApplyInner<S>);
 }
 
 impl<S> ApplyWrapper<S> for ()
 where
     S: Snapshot + ApplyEvents,
 {
-    fn apply_event_batch_wrapper(
-        &mut self,
-        snapshot: &mut S,
-        batch: ApplyBatch<'_, S::Event>,
-        apply_inner: ApplyInner<S>,
-    ) -> ApplyDecision {
+    fn apply_event_batch_wrapper(&mut self, snapshot: &mut S, batch: ApplyBatch<'_, S::Event>, apply_inner: ApplyInner<S>) {
         apply_inner.apply_event_batch(snapshot, batch);
-        ApplyDecision::Continue
     }
 }
 

@@ -139,8 +139,8 @@ Advanced callers can provide an `ApplyWrapper` and implement
 `apply_event_batch_wrapper` to control how that one batch is applied to the
 working snapshot. The default wrapper only calls the inner apply once. Custom
 wrappers may call the inner apply zero, one, or many times with temporary
-same-time batches. Wrappers are infallible; `EarlyExit` is the supported way
-to stop the current replay pass intentionally.
+same-time batches. Wrappers are infallible and every remaining event batch is
+replayed after the wrapper returns.
 
 ### Event Inspection
 

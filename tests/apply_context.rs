@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use contime::{ApplyBatch, ApplyDecision, ApplyEvents, ApplyInner, ApplyWrapper, Event, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, Event, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ContextValueAt {
@@ -124,10 +124,9 @@ impl ApplyWrapper<ContextValueAt> for ApplyTrace {
         snapshot: &mut ContextValueAt,
         batch: ApplyBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
-    ) -> ApplyDecision {
+    ) {
         apply_inner.apply_event_batch(snapshot, batch);
         self.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
-        ApplyDecision::Continue
     }
 }
 
@@ -137,11 +136,10 @@ impl ApplyWrapper<ContextValueAt> for ApplyTraceSender {
         snapshot: &mut ContextValueAt,
         batch: ApplyBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
-    ) -> ApplyDecision {
+    ) {
         let event = batch.events.last().copied().expect("after apply should receive non-empty bucket");
         apply_inner.apply_event_batch(snapshot, batch);
         self.tx.send((event.entity_id, event.time, event.value, snapshot.value)).unwrap();
-        ApplyDecision::Continue
     }
 }
 
@@ -151,10 +149,9 @@ impl ApplyWrapper<ContextValueAt> for ApplyBatchTrace {
         snapshot: &mut ContextValueAt,
         batch: ApplyBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
-    ) -> ApplyDecision {
+    ) {
         self.applied.push((batch.snapshot_id, batch.time, batch.events.len()));
         apply_inner.apply_event_batch(snapshot, batch);
-        ApplyDecision::Continue
     }
 }
 
@@ -174,11 +171,10 @@ impl ApplyWrapper<SnapshotLanes> for ApplyTrace {
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> ApplyDecision {
+    ) {
         apply_inner.apply_event_batch(snapshot, batch);
         let SnapshotLanes::ContextValueAt(snapshot) = snapshot;
         self.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
-        ApplyDecision::Continue
     }
 }
 
@@ -188,14 +184,13 @@ impl ApplyWrapper<SnapshotLanes> for ApplyTraceSender {
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> ApplyDecision {
+    ) {
         let event = batch.events.last().copied().expect("wrapper should receive non-empty bucket");
         let EventLanes::OnContextValueChanged(event) = event;
         let event = event.clone();
         apply_inner.apply_event_batch(snapshot, batch);
         let SnapshotLanes::ContextValueAt(snapshot) = snapshot;
         self.tx.send((event.entity_id, event.time, event.value, snapshot.value)).unwrap();
-        ApplyDecision::Continue
     }
 }
 
@@ -205,10 +200,9 @@ impl ApplyWrapper<SnapshotLanes> for WorkerIdTraceSender {
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> ApplyDecision {
+    ) {
         apply_inner.apply_event_batch(snapshot, batch);
         self.tx.send(self.worker_id).unwrap();
-        ApplyDecision::Continue
     }
 }
 
@@ -218,10 +212,9 @@ impl ApplyWrapper<SnapshotLanes> for GlobalWorkerTraceSender {
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> ApplyDecision {
+    ) {
         apply_inner.apply_event_batch(snapshot, batch);
         self.tx.send((self.label, self.worker_id)).unwrap();
-        ApplyDecision::Continue
     }
 }
 
@@ -231,13 +224,12 @@ impl ApplyWrapper<SnapshotLanes> for BlockingApplyTrace {
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> ApplyDecision {
+    ) {
         self.entered_tx.send(()).unwrap();
         self.release_rx.recv().unwrap();
         let snapshot_id = batch.snapshot_id;
         apply_inner.apply_event_batch(snapshot, batch);
         self.applied.lock().unwrap().push(snapshot_id);
-        ApplyDecision::Continue
     }
 }
 
@@ -247,31 +239,9 @@ impl ApplyWrapper<SnapshotLanes> for ApplyBatchTrace {
         snapshot: &mut SnapshotLanes,
         batch: ApplyBatch<'_, EventLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> ApplyDecision {
+    ) {
         self.applied.push((batch.snapshot_id, batch.time, batch.events.len()));
         apply_inner.apply_event_batch(snapshot, batch);
-        ApplyDecision::Continue
-    }
-}
-
-struct EarlyExitAtTime {
-    exit_time: i64,
-    batches: Vec<i64>,
-}
-
-impl ApplyWrapper<SnapshotLanes> for EarlyExitAtTime {
-    fn apply_event_batch_wrapper(
-        &mut self,
-        snapshot: &mut SnapshotLanes,
-        batch: ApplyBatch<'_, EventLanes>,
-        apply_inner: ApplyInner<SnapshotLanes>,
-    ) -> ApplyDecision {
-        self.batches.push(batch.time);
-        if batch.time == self.exit_time {
-            return ApplyDecision::EarlyExit;
-        }
-        apply_inner.apply_event_batch(snapshot, batch);
-        ApplyDecision::Continue
     }
 }
 
@@ -286,42 +256,6 @@ fn context_free_apply_still_mutates_snapshot() {
     );
 
     assert_eq!(snapshot, ContextValueAt { entity_id: 3, time: 2, value: 4 });
-}
-
-#[test]
-fn apply_wrapper_can_exit_replay_early() {
-    let snapshot = SnapshotLanes::ContextValueAt(ContextValueAt::default());
-    let (mut history, _) = contime::SnapshotHistory::new(snapshot, 0, 1000);
-    let mut context = EarlyExitAtTime { exit_time: 20, batches: Vec::new() };
-
-    history.apply_event_batch(
-        vec![
-            EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }),
-            EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 }),
-            EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 30, time: 30, entity_id: 3, value: 30 }),
-        ],
-        &mut context,
-    );
-
-    assert_eq!(context.batches, vec![10, 20]);
-    assert_eq!(history.snapshot_only_at(30), SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 30, value: 10 }));
-}
-
-#[test]
-fn plural_apply_events_are_one_replay_batch() {
-    let contime = contime::Contime::<SnapshotLanes, EventLanes, EarlyExitAtTime>::new_with_apply_context_factory(1, 10_000, |_| {
-        EarlyExitAtTime { exit_time: 10, batches: Vec::new() }
-    });
-
-    contime
-        .apply_events([
-            OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 },
-            OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 },
-        ])
-        .unwrap();
-
-    let snapshot = contime.query_at(21, &[3]).unwrap().pop().flatten().unwrap();
-    assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 21, value: 10 }));
 }
 
 #[test]

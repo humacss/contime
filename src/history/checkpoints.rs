@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::Bound;
 
-use crate::{ApplyBatch, ApplyDecision, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, Snapshot};
+use crate::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, Snapshot};
 
 use super::history::LocalSnapshotHistory;
 
@@ -151,9 +151,7 @@ where
         checkpoint.end.clone(),
         |bucket_last_key, bucket_len, batch| {
             let batch_time = batch.time.clone();
-            if context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default()) == ApplyDecision::EarlyExit {
-                return false;
-            }
+            context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default());
             event_count += bucket_len;
 
             if !checkpoint.preserve_previous_tip && !stored_first_changed_checkpoint && batch_time >= checkpoint.first_changed_time {
@@ -166,8 +164,6 @@ where
                     materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone()));
                 }
             }
-
-            true
         },
     );
 
@@ -279,7 +275,7 @@ pub(super) fn apply_event_buckets<S, F>(
     mut apply_bucket: F,
 ) where
     S: Snapshot + ApplyEvents + 'static,
-    F: FnMut(&ContimeKey<S::Time>, usize, ApplyBatch<'_, S::Event>) -> bool,
+    F: FnMut(&ContimeKey<S::Time>, usize, ApplyBatch<'_, S::Event>),
 {
     let mut iter = events.range((start, end)).peekable();
     while let Some((first_key, first_event)) = iter.next() {
@@ -289,9 +285,7 @@ pub(super) fn apply_event_buckets<S, F>(
         if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
             let bucket = [first_event];
             let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-            if !apply_bucket(bucket_last_key, 1, batch) {
-                break;
-            }
+            apply_bucket(bucket_last_key, 1, batch);
             continue;
         }
 
@@ -301,9 +295,7 @@ pub(super) fn apply_event_buckets<S, F>(
         if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
             let bucket = [first_event, second_event];
             let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-            if !apply_bucket(bucket_last_key, 2, batch) {
-                break;
-            }
+            apply_bucket(bucket_last_key, 2, batch);
             continue;
         }
 
@@ -323,9 +315,7 @@ pub(super) fn apply_event_buckets<S, F>(
 
         let bucket_len = bucket.len();
         let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-        if !apply_bucket(bucket_last_key, bucket_len, batch) {
-            break;
-        }
+        apply_bucket(bucket_last_key, bucket_len, batch);
     }
 }
 
@@ -362,7 +352,6 @@ where
             let batch_time = batch.time.clone();
             context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
             snapshot.set_time(batch_time);
-            true
         },
     );
 
@@ -393,7 +382,6 @@ where
             let batch_time = batch.time.clone();
             context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
             snapshot.set_time(batch_time);
-            true
         },
     );
 
