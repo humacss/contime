@@ -10,11 +10,13 @@
 //!    [`Snapshot`], [`Event`], and [`ApplyEvents`] manually.
 //! 2. Generate lane enums with [`lanes!`], or define compatible lane types manually.
 //! 3. Construct a [`Contime`] with a worker count and memory budget.
-//! 4. Apply events.
-//! 5. Query state with [`Contime::query_at`] or inspect retained original events
-//!    with [`Contime::inspect_events`].
+//! 4. Apply events and markers through one generated input lane.
+//! 5. Query state with [`Contime::query_at`] or inspect retained original inputs
+//!    with [`Contime::inspect_inputs`].
 //!
 //! Point queries include all events at or before the complete ordered query time.
+//! Markers are global temporal records routed into replay batches for custom
+//! [`ApplyWrapper`] interpretation; they never apply to snapshots directly.
 //!
 //! # Where To Start
 //!
@@ -25,24 +27,24 @@
 //! with the current public API.
 //!
 //! ```rust
-//! use contime::{Event, TestEvent, TestSnapshot, TestSnapshotContime};
+//! use contime::{Input, TestEvent, TestSnapshot, TestSnapshotContime};
 //!
 //! let contime = TestSnapshotContime::new(1, 1_024);
 //!
-//! contime.apply_events([TestEvent::Positive(1, 5, 10, 3)]).unwrap();
+//! contime.apply([TestEvent::Positive(1, 5, 10, 3)].map(Into::into)).unwrap();
 //!
 //! let snapshot: TestSnapshot = contime.query_at(6, &[1]).unwrap().pop().flatten().unwrap().into();
 //! assert_eq!(snapshot.sum, 3);
 //!
-//! contime.apply_events([TestEvent::Positive(1, 4, 11, 2)]).unwrap();
+//! contime.apply([TestEvent::Positive(1, 4, 11, 2)].map(Into::into)).unwrap();
 //!
 //! let snapshot: TestSnapshot = contime.query_at(6, &[1]).unwrap().pop().flatten().unwrap().into();
 //! assert_eq!(snapshot.sum, 5);
 //!
-//! let events = contime.inspect_events(4..=5).unwrap();
-//! assert_eq!(events.len(), 2);
-//! assert_eq!(events[0].event.time(), 4);
-//! assert_eq!(events[1].event.time(), 5);
+//! let inputs = contime.inspect_inputs(4..=5).unwrap();
+//! assert_eq!(inputs.len(), 2);
+//! assert_eq!(inputs[0].input.time(), 4);
+//! assert_eq!(inputs[1].input.time(), 5);
 //! ```
 mod api;
 mod history;
@@ -64,9 +66,11 @@ pub use api::{Contime, ContimeError};
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
 pub use history::{ApplyInner, ApplyWrapper, SnapshotHistory};
-pub use journal::EventJournalEntry;
+pub use journal::InputJournalEntry;
 pub use time::ContimeTime;
-pub use traits::{ApplyBatch, ApplyEvents, Event, EventLanes, RoutedSnapshot, SeedSnapshot, Snapshot, SnapshotEvent, SnapshotLanes};
+pub use traits::{
+    ApplyBatch, ApplyEvents, Event, Input, InputBatch, InputLanes, InputRoute, Marker, Snapshot, SnapshotEvent, SnapshotLanes,
+};
 
 mod test;
 pub use test::*;

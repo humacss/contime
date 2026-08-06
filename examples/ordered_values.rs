@@ -33,13 +33,13 @@
 //! After the late event arrives, querying at `t=11` yields `[50, 70, 100]`, even though the
 //! event with value `70` was applied last in wall-clock order.
 
-use contime::{ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, Event, Input, Snapshot, SnapshotEvent};
 
 /// Point-in-time state for one logical stream of received values.
 ///
 /// `contime` materializes this snapshot at arbitrary query times by replaying all earlier
 /// events in chronological order.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct OrderedValuesSnapshot {
     /// Logical entity id. One snapshot history exists per id.
     id: u128,
@@ -63,7 +63,7 @@ struct ReceiveValue {
 
 impl Snapshot for OrderedValuesSnapshot {
     type Time = i64;
-    type Event = ReceiveValue;
+    type Input = ReceiveValue;
 
     /// Snapshot id used by `contime` to select the correct history lane.
     fn id(&self) -> u128 {
@@ -87,16 +87,9 @@ impl Snapshot for OrderedValuesSnapshot {
     fn conservative_size(&self) -> u64 {
         16 + 8 + (self.values.len() * 8) as u64
     }
-
-    /// Creates the initial snapshot state when the first event for a snapshot id arrives.
-    ///
-    /// The vector starts empty; replay then appends values in event-time order.
-    fn from_event(event: &Self::Event) -> Self {
-        Self { id: event.snapshot_id, time: event.time, values: Vec::new() }
-    }
 }
 
-impl Event for ReceiveValue {
+impl Input for ReceiveValue {
     type Time = i64;
 
     /// Event id used for ordering and duplicate detection.
@@ -115,19 +108,25 @@ impl Event for ReceiveValue {
     }
 }
 
+impl Event for ReceiveValue {}
+
 impl SnapshotEvent<OrderedValuesSnapshot> for ReceiveValue {
     /// Snapshot history targeted by this event.
     fn snapshot_id(&self) -> u128 {
         self.snapshot_id
     }
+
+    fn set_snapshot_identity(&self, snapshot: &mut OrderedValuesSnapshot) {
+        snapshot.id = self.snapshot_id;
+    }
 }
 
-impl ApplyEvents for OrderedValuesSnapshot {
+impl ApplyEvents<ReceiveValue> for OrderedValuesSnapshot {
     /// Applies one event to one replay step.
     ///
     /// The example intentionally avoids any custom insertion or sorting logic. Values end up
     /// ordered because `contime` replays events in event-time order.
-    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, ReceiveValue>) {
         self.id = batch.snapshot_id;
         for event in batch.events.iter().copied() {
             self.values.push(event.value);
@@ -169,10 +168,10 @@ fn main() {
 
     // Start with two in-order events so the baseline history is easy to reason about.
     println!("Applying event at t=5 with value 50.");
-    contime.apply_events([receive_value(1, 5, 100, 50)]).expect("first event should apply");
+    contime.apply([receive_value(1, 5, 100, 50)].map(Into::into)).expect("first event should apply");
 
     println!("Applying event at t=10 with value 100.");
-    contime.apply_events([receive_value(1, 10, 101, 100)]).expect("second event should apply");
+    contime.apply([receive_value(1, 10, 101, 100)].map(Into::into)).expect("second event should apply");
 
     // Query after both events. At this point the observed history is [50, 100].
     let before_late_event = query_snapshot(&contime, 11, 1);
@@ -182,7 +181,7 @@ fn main() {
     // Apply a late event whose event time belongs between the two earlier events.
     // Wall-clock arrival order is now different from event-time order.
     println!("Applying a late event at t=7 with value 70.");
-    contime.apply_events([receive_value(1, 7, 102, 70)]).expect("late event should apply");
+    contime.apply([receive_value(1, 7, 102, 70)].map(Into::into)).expect("late event should apply");
 
     // Query before the late event's time: only the first value is visible.
     let at_6 = query_snapshot(&contime, 6, 1);

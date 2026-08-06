@@ -1,4 +1,4 @@
-use crate::{ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent, TestEvent};
+use crate::{ApplyBatch, ApplyEvents, Snapshot, SnapshotEvent, SnapshotLanes, TestEvent};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct TestSnapshot {
@@ -11,7 +11,7 @@ pub struct TestSnapshot {
 
 impl Snapshot for TestSnapshot {
     type Time = i64;
-    type Event = TestEvent;
+    type Input = TestEvent;
 
     fn id(&self) -> u128 {
         self.id
@@ -27,14 +27,30 @@ impl Snapshot for TestSnapshot {
     fn conservative_size(&self) -> u64 {
         16 + 8 + 4 + (self.items.len() * 2) as u64
     }
+}
 
-    fn from_event(event: &Self::Event) -> Self {
-        Self { id: <TestEvent as SnapshotEvent<TestSnapshot>>::snapshot_id(event), time: event.time(), ..Self::default() }
+impl SnapshotLanes for TestSnapshot {
+    fn materialize(snapshot_id: u128, input: &Self::Input) -> Option<Self> {
+        if input.snapshot_id() != snapshot_id {
+            return None;
+        }
+
+        let mut snapshot = Self::default();
+        input.set_snapshot_identity(&mut snapshot);
+        Some(snapshot)
+    }
+
+    fn lane_index(&self) -> usize {
+        0
+    }
+
+    fn input_lane_index(snapshot_id: u128, input: &Self::Input) -> Option<usize> {
+        (input.snapshot_id() == snapshot_id).then_some(0)
     }
 }
 
-impl ApplyEvents for TestSnapshot {
-    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+impl ApplyEvents<TestEvent> for TestSnapshot {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, TestEvent>) {
         self.id = batch.snapshot_id;
         for event in batch.events.iter().copied() {
             match event {

@@ -46,7 +46,9 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
     let input = input.into();
     let snapshots = dedupe_snapshots(&input.snapshots)?;
     let routes = merge_routes(&input.routes)?;
+    let markers = dedupe_snapshots(&input.markers)?;
     validate_route_targets(&snapshots, &routes)?;
+    validate_input_variants(&routes, &markers)?;
     let time_type = input.time_type;
 
     let snapshot_variants = snapshots
@@ -94,24 +96,6 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         })
         .collect::<Vec<_>>();
 
-    let snapshot_from_event_arms = routes
-        .iter()
-        .map(|route| {
-            let key = &route.key;
-            let event_ty = &route.event_ty;
-            let target = route.targets.first().expect("merged route should always have at least one target");
-            let target_variant = &target.variant;
-            let target_ty = &target.path;
-            quote! {
-                EventLanes::#key(e) => {
-                    SnapshotLanes::#target_variant(
-                        <#target_ty as ::contime::SeedSnapshot<#event_ty>>::seed_from_event(e)
-                    )
-                }
-            }
-        })
-        .collect::<Vec<_>>();
-
     let snapshot_from_impls = snapshots
         .iter()
         .map(|snapshot| {
@@ -149,12 +133,21 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         })
         .collect::<Vec<_>>();
 
+    let marker_variants = markers
+        .iter()
+        .map(|marker| {
+            let variant = &marker.variant;
+            let ty = &marker.path;
+            quote! { #variant(#ty), }
+        })
+        .collect::<Vec<_>>();
+
     let event_id_arms = routes
         .iter()
         .map(|route| {
             let key = &route.key;
             let event_ty = &route.event_ty;
-            quote! { Self::#key(e) => <#event_ty as ::contime::Event>::id(e), }
+            quote! { Self::#key(e) => <#event_ty as ::contime::Input>::id(e), }
         })
         .collect::<Vec<_>>();
 
@@ -163,7 +156,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         .map(|route| {
             let key = &route.key;
             let event_ty = &route.event_ty;
-            quote! { Self::#key(e) => <#event_ty as ::contime::Event>::time(e), }
+            quote! { Self::#key(e) => <#event_ty as ::contime::Input>::time(e), }
         })
         .collect::<Vec<_>>();
 
@@ -172,20 +165,34 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         .map(|route| {
             let key = &route.key;
             let event_ty = &route.event_ty;
-            quote! { Self::#key(e) => <#event_ty as ::contime::Event>::conservative_size(e), }
+            quote! { Self::#key(e) => <#event_ty as ::contime::Input>::conservative_size(e), }
         })
         .collect::<Vec<_>>();
 
-    let event_snapshot_id_arms = routes
+    let marker_id_arms = markers
         .iter()
-        .map(|route| {
-            let key = &route.key;
-            let event_ty = &route.event_ty;
-            let target = route.targets.first().expect("merged route should always have at least one target");
-            let target_ty = &target.path;
-            quote! {
-                Self::#key(e) => <#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(e),
-            }
+        .map(|marker| {
+            let variant = &marker.variant;
+            let ty = &marker.path;
+            quote! { Self::#variant(marker) => <#ty as ::contime::Input>::id(marker), }
+        })
+        .collect::<Vec<_>>();
+
+    let marker_time_arms = markers
+        .iter()
+        .map(|marker| {
+            let variant = &marker.variant;
+            let ty = &marker.path;
+            quote! { Self::#variant(marker) => <#ty as ::contime::Input>::time(marker), }
+        })
+        .collect::<Vec<_>>();
+
+    let marker_size_arms = markers
+        .iter()
+        .map(|marker| {
+            let variant = &marker.variant;
+            let ty = &marker.path;
+            quote! { Self::#variant(marker) => <#ty as ::contime::Input>::conservative_size(marker), }
         })
         .collect::<Vec<_>>();
 
@@ -198,13 +205,20 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                 #event_ty: ::contime::SnapshotEvent<#target_ty>
             });
             apply_bounds.push(quote! {
-                #target_ty: ::contime::ApplyEvents
+                #target_ty: ::core::default::Default
             });
             apply_bounds.push(quote! {
-                <#target_ty as ::contime::Snapshot>::Event: From<#event_ty>
+                #target_ty: ::contime::ApplyEvents<<#target_ty as ::contime::Snapshot>::Input>
+            });
+            apply_bounds.push(quote! {
+                <#target_ty as ::contime::Snapshot>::Input: From<#event_ty>
             });
         }
     }
+    let marker_route_bounds = markers.iter().map(|marker| {
+        let ty = &marker.path;
+        quote! { #ty: ::contime::InputRoute }
+    });
 
     let apply_snapshot_arms = snapshots
         .iter()
@@ -216,8 +230,8 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                 if route.targets.iter().any(|target| normalized_path_key(&target.path) == snapshot_key) {
                     let key = &route.key;
                     Some(quote! {
-                        for event in batch.events.iter().copied() {
-                            if let EventLanes::#key(event) = event {
+                        for event in batch.inputs.iter().copied() {
+                            if let InputLanes::#key(event) = event {
                                 bucket.push(event.clone().into());
                             }
                         }
@@ -232,7 +246,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                     #( #route_pushes )*
                     if !bucket.is_empty() {
                         let bucket = bucket.iter().collect::<Vec<_>>();
-                        <#snapshot_ty as ::contime::ApplyEvents>::apply_events(
+                        <#snapshot_ty as ::contime::ApplyEvents<<#snapshot_ty as ::contime::Snapshot>::Input>>::apply_events(
                             snapshot,
                             ::contime::ApplyBatch {
                                 snapshot_id: batch.snapshot_id,
@@ -240,28 +254,21 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                                 events: &bucket,
                             },
                         );
-                    } else {
-                        <Self as ::contime::Snapshot>::set_time(self, batch.time);
                     }
                 }
             }
         })
         .collect::<Vec<_>>();
 
-    let event_snapshots_arms = routes
+    let event_snapshot_ids_arms = routes
         .iter()
         .map(|route| {
             let key = &route.key;
             let event_ty = &route.event_ty;
             let targets = route.targets.iter().map(|target| {
-                let target_variant = &target.variant;
                 let target_ty = &target.path;
                 quote! {
-                    {
-                        SnapshotLanes::#target_variant(
-                            <#target_ty as ::contime::SeedSnapshot<#event_ty>>::seed_from_event(e)
-                        )
-                    }
+                    <#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(e)
                 }
             });
             quote! {
@@ -274,34 +281,108 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         })
         .collect::<Vec<_>>();
 
-    let event_routed_snapshots_arms = routes
+    let marker_snapshot_ids_arms = markers
+        .iter()
+        .map(|marker| {
+            let variant = &marker.variant;
+            let ty = &marker.path;
+            quote! {
+                Self::#variant(marker) => <#ty as ::contime::InputRoute>::snapshot_ids(marker),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let materialize_event_arms = routes
         .iter()
         .map(|route| {
             let key = &route.key;
             let event_ty = &route.event_ty;
-            let targets = route.targets.iter().map(|target| {
+            let candidates = route.targets.iter().map(|target| {
                 let target_variant = &target.variant;
                 let target_ty = &target.path;
                 quote! {
-                    {
-                        ::contime::RoutedSnapshot {
-                            snapshot_id: <#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(e),
-                            initial_snapshot: SnapshotLanes::#target_variant(
-                                <#target_ty as ::contime::SeedSnapshot<#event_ty>>::seed_from_event(e)
-                            ),
+                    if <#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(event) == snapshot_id {
+                        if materialized.is_some() {
+                            panic!("snapshot id {} maps one event to multiple snapshot lanes", snapshot_id);
+                        }
+                        let mut snapshot = <#target_ty as ::core::default::Default>::default();
+                        <#event_ty as ::contime::SnapshotEvent<#target_ty>>::set_snapshot_identity(event, &mut snapshot);
+                        assert_eq!(
+                            <#target_ty as ::contime::Snapshot>::id(&snapshot),
+                            snapshot_id,
+                            "set_snapshot_identity produced the wrong snapshot id",
+                        );
+                        materialized = Some(SnapshotLanes::#target_variant(snapshot));
+                    }
+                }
+            });
+            quote! {
+                InputLanes::#key(event) => {
+                    let mut materialized = None;
+                    #( #candidates )*
+                    materialized
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let materialize_marker_arms = markers.iter().map(|marker| {
+        let variant = &marker.variant;
+        quote! { InputLanes::#variant(_) => None, }
+    });
+
+    let snapshot_lane_index_arms = snapshots
+        .iter()
+        .enumerate()
+        .map(|(index, snapshot)| {
+            let variant = &snapshot.variant;
+            quote! { Self::#variant(_) => #index, }
+        })
+        .collect::<Vec<_>>();
+
+    let input_lane_index_event_arms = routes
+        .iter()
+        .map(|route| {
+            let event_variant = &route.key;
+            let event_ty = &route.event_ty;
+            let candidates = route.targets.iter().map(|target| {
+                let target_ty = &target.path;
+                let target_key = normalized_path_key(target_ty);
+                let target_index = snapshots
+                    .iter()
+                    .position(|snapshot| normalized_path_key(&snapshot.path) == target_key)
+                    .expect("validated route target must exist");
+                quote! {
+                    if <#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(event) == snapshot_id {
+                        if lane_index.replace(#target_index).is_some() {
+                            panic!("snapshot id {} maps one event to multiple snapshot lanes", snapshot_id);
                         }
                     }
                 }
             });
             quote! {
-                Self::#key(e) => {
-                    vec![
-                        #( #targets, )*
-                    ]
+                InputLanes::#event_variant(event) => {
+                    let mut lane_index = None;
+                    #( #candidates )*
+                    lane_index
                 }
             }
         })
         .collect::<Vec<_>>();
+
+    let input_lane_index_marker_arms = markers.iter().map(|marker| {
+        let variant = &marker.variant;
+        quote! { InputLanes::#variant(_) => None, }
+    });
+
+    let event_kind_arms = routes.iter().map(|route| {
+        let key = &route.key;
+        quote! { Self::#key(_) => true, }
+    });
+    let marker_kind_arms = markers.iter().map(|marker| {
+        let variant = &marker.variant;
+        quote! { Self::#variant(_) => false, }
+    });
 
     let event_from_impls = routes
         .iter()
@@ -309,9 +390,24 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
             let key = &route.key;
             let event_ty = &route.event_ty;
             quote! {
-                impl From<#event_ty> for EventLanes {
+                impl From<#event_ty> for InputLanes {
                     fn from(event: #event_ty) -> Self {
                         Self::#key(event)
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let marker_from_impls = markers
+        .iter()
+        .map(|marker| {
+            let variant = &marker.variant;
+            let ty = &marker.path;
+            quote! {
+                impl From<#ty> for InputLanes {
+                    fn from(marker: #ty) -> Self {
+                        Self::#variant(marker)
                     }
                 }
             }
@@ -330,11 +426,31 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                 #( #snapshot_variants )*
             }
 
-            impl ::contime::SnapshotLanes for SnapshotLanes {}
+            impl ::contime::SnapshotLanes for SnapshotLanes {
+                fn materialize(snapshot_id: u128, input: &Self::Input) -> Option<Self> {
+                    match input {
+                        #( #materialize_event_arms )*
+                        #( #materialize_marker_arms )*
+                    }
+                }
+
+                fn lane_index(&self) -> usize {
+                    match self {
+                        #( #snapshot_lane_index_arms )*
+                    }
+                }
+
+                fn input_lane_index(snapshot_id: u128, input: &Self::Input) -> Option<usize> {
+                    match input {
+                        #( #input_lane_index_event_arms )*
+                        #( #input_lane_index_marker_arms )*
+                    }
+                }
+            }
 
             impl ::contime::Snapshot for SnapshotLanes {
                 type Time = #time_type;
-                type Event = EventLanes;
+                type Input = InputLanes;
 
                 fn id(&self) -> u128 {
                     match self {
@@ -360,86 +476,71 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                     }
                 }
 
-                fn from_event(event: &Self::Event) -> Self {
-                    match event {
-                        #( #snapshot_from_event_arms )*
-                    }
-                }
             }
 
             #( #snapshot_from_impls )*
 
             #[derive(Debug, Clone, Eq, PartialEq)]
-            pub enum EventLanes {
+            pub enum InputLanes {
                 #( #event_variants )*
+                #( #marker_variants )*
             }
 
-            impl ::contime::Event for EventLanes {
+            impl ::contime::Input for InputLanes {
                 type Time = #time_type;
 
                 fn id(&self) -> u128 {
                     match self {
                         #( #event_id_arms )*
+                        #( #marker_id_arms )*
                     }
                 }
 
                 fn time(&self) -> Self::Time {
                     match self {
                         #( #event_time_arms )*
+                        #( #marker_time_arms )*
                     }
                 }
 
                 fn conservative_size(&self) -> u64 {
                     match self {
                         #( #event_size_arms )*
+                        #( #marker_size_arms )*
                     }
                 }
             }
 
-            impl ::contime::SnapshotEvent<SnapshotLanes> for EventLanes
+            impl ::contime::InputLanes<SnapshotLanes> for InputLanes
             where
                 #( #apply_bounds, )*
+                #( #marker_route_bounds, )*
             {
-                fn snapshot_id(&self) -> u128 {
+                fn snapshot_ids(&self) -> Vec<u128> {
                     match self {
-                        #( #event_snapshot_id_arms )*
+                        #( #event_snapshot_ids_arms )*
+                        #( #marker_snapshot_ids_arms )*
                     }
                 }
 
-            }
-
-            impl ::contime::ApplyEvents for SnapshotLanes
-            where
-                #( #apply_bounds, )*
-            {
-                fn apply_events(&mut self, batch: ::contime::ApplyBatch<'_, Self::Event>) {
+                fn is_event(&self) -> bool {
                     match self {
+                        #( #event_kind_arms )*
+                        #( #marker_kind_arms )*
+                    }
+                }
+
+                fn apply_events(snapshot: &mut SnapshotLanes, batch: ::contime::InputBatch<'_, Self>) {
+                    match snapshot {
                         #( #apply_snapshot_arms )*
                     }
                 }
             }
 
-            impl<C> ::contime::EventLanes<SnapshotLanes, C> for EventLanes
-            where
-                EventLanes: ::contime::SnapshotEvent<SnapshotLanes>,
-                SnapshotLanes: ::contime::ApplyEvents,
-            {
-                fn snapshots(&self) -> Vec<SnapshotLanes> {
-                    match self {
-                        #( #event_snapshots_arms )*
-                    }
-                }
-
-                fn routed_snapshots(&self) -> Vec<::contime::RoutedSnapshot<SnapshotLanes>> {
-                    match self {
-                        #( #event_routed_snapshots_arms )*
-                    }
-                }
-            }
-
             #( #event_from_impls )*
+            #( #marker_from_impls )*
 
-            pub type Contime = ::contime::Contime<SnapshotLanes, EventLanes, #context_ty>;
+            pub type Contime = ::contime::Contime<SnapshotLanes, InputLanes, #context_ty>;
         }
     })
 }
@@ -458,7 +559,7 @@ fn expand_contime_event(input: DeriveInput) -> Result<TokenStream2> {
     let bytes = config.bytes.ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `bytes = ...`"))?;
 
     Ok(quote! {
-        impl ::contime::Event for #name {
+        impl ::contime::Input for #name {
             type Time = #time_type;
 
             fn id(&self) -> u128 {
@@ -473,11 +574,16 @@ fn expand_contime_event(input: DeriveInput) -> Result<TokenStream2> {
                 #bytes
             }
         }
+
+        impl ::contime::Event for #name {}
     })
 }
 
 fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
-    let name = input.ident;
+    let name = input.ident.clone();
+    let generics = input.generics.clone();
+    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+    let type_turbofish = type_generics.as_turbofish();
     let attr = input
         .attrs
         .iter()
@@ -506,7 +612,7 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         return Err(Error::new(attr.span(), "`ContimeSnapshot` currently supports exactly one id field"));
     }
     let id = ids.first().expect("checked len").clone();
-    let time = config.time.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `time = ...`"))?;
+    let time = config.time.unwrap_or_else(|| syn::parse_quote!(self.time.clone()));
     let time_type = config.time_type.unwrap_or_else(|| syn::parse_quote!(i64));
     let bytes = config.bytes.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `bytes = ...`"))?;
     let apply = config.apply.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `apply = { ... }`"))?;
@@ -526,21 +632,21 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         .iter()
         .map(|event| {
             let variant = trailing_ident(event)?;
-            Ok(quote! { Self::#variant(event) => <#event as ::contime::Event>::id(event), })
+            Ok(quote! { Self::#variant(event) => <#event as ::contime::Input>::id(event), })
         })
         .collect::<Result<Vec<_>>>()?;
     let event_time_arms = events
         .iter()
         .map(|event| {
             let variant = trailing_ident(event)?;
-            Ok(quote! { Self::#variant(event) => <#event as ::contime::Event>::time(event), })
+            Ok(quote! { Self::#variant(event) => <#event as ::contime::Input>::time(event), })
         })
         .collect::<Result<Vec<_>>>()?;
     let event_size_arms = events
         .iter()
         .map(|event| {
             let variant = trailing_ident(event)?;
-            Ok(quote! { Self::#variant(event) => <#event as ::contime::Event>::conservative_size(event), })
+            Ok(quote! { Self::#variant(event) => <#event as ::contime::Input>::conservative_size(event), })
         })
         .collect::<Result<Vec<_>>>()?;
     let event_from_impls = events
@@ -548,7 +654,7 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         .map(|event| {
             let variant = trailing_ident(event)?;
             Ok(quote! {
-                impl From<#event> for #event_enum {
+                impl #impl_generics From<#event> for #event_enum #type_generics #where_clause {
                     fn from(event: #event) -> Self {
                         Self::#variant(event)
                     }
@@ -561,53 +667,36 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         .map(|event| {
             let id = &id;
             Ok(quote! {
-                impl ::contime::SnapshotEvent<#name> for #event {
+                impl #impl_generics ::contime::SnapshotEvent<#name #type_generics> for #event #where_clause {
                     fn snapshot_id(&self) -> u128 {
                         self.#id
                     }
-                }
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let seed_snapshot_impls = events
-        .iter()
-        .map(|event| {
-            let id = &id;
-            Ok(quote! {
-                impl ::contime::SeedSnapshot<#event> for #name {
-                    fn seed_from_event(event: &#event) -> Self {
-                        Self {
-                            #id: event.#id,
-                            time: ::contime::Event::time(event),
-                            ..Default::default()
-                        }
+
+                    fn set_snapshot_identity(&self, snapshot: &mut #name #type_generics) {
+                        snapshot.#id = self.#id;
                     }
                 }
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let from_event_arms = events
+    let fragment_event_routes = events
         .iter()
         .map(|event| {
             let variant = trailing_ident(event)?;
-            let id = &id;
+            let event_key = syn::LitStr::new(&variant.to_string(), variant.span());
             Ok(quote! {
-                #event_enum::#variant(event) => Self {
-                    #id: event.#id,
-                    time: ::contime::Event::time(event),
-                    ..Default::default()
-                },
+                #variant(#event) [key = #event_key] => #event_enum #type_turbofish => [#name #type_turbofish],
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
         #[derive(Clone, Debug, PartialEq, Eq)]
-        pub enum #event_enum {
+        pub enum #event_enum #generics {
             #( #event_variants )*
         }
 
-        impl ::contime::Event for #event_enum {
+        impl #impl_generics ::contime::Input for #event_enum #type_generics #where_clause {
             type Time = #time_type;
 
             fn id(&self) -> u128 {
@@ -629,13 +718,13 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
             }
         }
 
+        impl #impl_generics ::contime::Event for #event_enum #type_generics #where_clause {}
+
         #( #event_from_impls )*
         #( #event_snapshot_impls )*
-        #( #seed_snapshot_impls )*
-
-        impl ::contime::Snapshot for #name {
+        impl #impl_generics ::contime::Snapshot for #name #type_generics #where_clause {
             type Time = #time_type;
-            type Event = #event_enum;
+            type Input = #event_enum #type_generics;
 
             fn id(&self) -> u128 {
                 self.#id
@@ -653,24 +742,22 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
                 #bytes
             }
 
-            fn from_event(event: &Self::Event) -> Self {
-                match event {
-                    #( #from_event_arms )*
-                }
-            }
         }
 
-        impl ::contime::ApplyEvents for #name {
-            fn apply_events(&mut self, batch: ::contime::ApplyBatch<'_, Self::Event>) {
+        impl #impl_generics ::contime::ApplyEvents<#event_enum #type_generics> for #name #type_generics #where_clause {
+            fn apply_events(&mut self, batch: ::contime::ApplyBatch<'_, #event_enum #type_generics>) {
                 let batch = batch;
                 #apply
             }
         }
 
+        #[doc(hidden)]
+        #[macro_export]
         macro_rules! #snapshot_lanes_macro {
             (
                 @ao_collect_enum
                 enum $name:ident
+                generics { $($generics:tt)* }
                 vis { $vis:vis }
                 attrs { $($attrs:tt)* }
                 variants { $($variants:tt)* }
@@ -679,21 +766,25 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
                 $next! {
                     @ao_collect_enum
                     enum $name
+                    generics { $($generics)* }
                     vis { $vis }
                     attrs { $($attrs)* }
                     variants {
                         $($variants)*
-                        #name(#name),
+                        #name(#name #type_turbofish),
                     }
                     rest [ $($rest),* ]
                 }
             };
         }
 
+        #[doc(hidden)]
+        #[macro_export]
         macro_rules! #event_lanes_macro {
             (
                 @ao_collect_enum
                 enum $name:ident
+                generics { $($generics:tt)* }
                 vis { $vis:vis }
                 attrs { $($attrs:tt)* }
                 variants { $($variants:tt)* }
@@ -702,17 +793,20 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
                 $next! {
                     @ao_collect_enum
                     enum $name
+                    generics { $($generics)* }
                     vis { $vis }
                     attrs { $($attrs)* }
                     variants {
                         $($variants)*
-                        #name(#event_enum),
+                        #name(#event_enum #type_turbofish),
                     }
                     rest [ $($rest),* ]
                 }
             };
         }
 
+        #[doc(hidden)]
+        #[macro_export]
         macro_rules! #snapshot_fragment_macro {
             (
                 @append
@@ -724,11 +818,11 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
                     @append
                     snapshots {
                         $($snapshots)*
-                        #name,
+                        #name #type_turbofish,
                     }
                     event_routes {
                         $($event_routes)*
-                        #event_enum(#event_enum) => #event_enum => [#name],
+                        #( #fragment_event_routes )*
                     }
                     fragments [ $($rest),* ]
                 }
@@ -831,6 +925,20 @@ fn validate_route_targets(snapshots: &[SnapshotSpec], routes: &[RouteSpec]) -> R
     Ok(())
 }
 
+fn validate_input_variants(routes: &[RouteSpec], markers: &[SnapshotSpec]) -> Result<()> {
+    let event_variants = routes.iter().map(|route| route.key.to_string()).collect::<BTreeSet<_>>();
+    for marker in markers {
+        let marker_variant = marker.variant.to_string();
+        if event_variants.contains(&marker_variant) {
+            return Err(Error::new(
+                marker.variant.span(),
+                format!("input variant `{marker_variant}` cannot be both an event and a plain marker"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn trailing_ident(path: &Path) -> Result<Ident> {
     path.segments.last().map(|segment| segment.ident.clone()).ok_or_else(|| Error::new(path.span(), "expected a named path"))
 }
@@ -860,6 +968,7 @@ struct LanesManifest {
     context: Option<Type>,
     time_type: Type,
     snapshots: Vec<Path>,
+    markers: Vec<Path>,
     routes: Vec<RouteEntry>,
 }
 
@@ -868,6 +977,7 @@ struct NewLanesManifest {
     context: Option<Type>,
     time_type: Type,
     snapshots: Vec<Path>,
+    markers: Vec<Path>,
     routes: Vec<RouteEntry>,
 }
 
@@ -908,7 +1018,7 @@ impl Parse for LanesManifest {
         syn::braced!(routes_content in input);
         let routes = Punctuated::<RouteEntry, Token![,]>::parse_terminated(&routes_content)?.into_iter().collect::<Vec<_>>();
 
-        Ok(Self { modname, context: None, time_type: syn::parse_quote!(i64), snapshots, routes })
+        Ok(Self { modname, context: None, time_type: syn::parse_quote!(i64), snapshots, markers: Vec::new(), routes })
     }
 }
 
@@ -953,6 +1063,23 @@ impl Parse for NewLanesManifest {
         let snapshots = Punctuated::<Path, Token![,]>::parse_terminated(&snapshots_content)?.into_iter().collect::<Vec<_>>();
         input.parse::<Token![;]>()?;
 
+        let markers = if input.peek(Ident) {
+            let fork = input.fork();
+            let label = fork.parse::<Ident>()?;
+            if label == "markers" {
+                input.parse::<Ident>()?;
+                let markers_content;
+                syn::bracketed!(markers_content in input);
+                let markers = Punctuated::<Path, Token![,]>::parse_terminated(&markers_content)?.into_iter().collect::<Vec<_>>();
+                input.parse::<Token![;]>()?;
+                markers
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         let routes_label = input.parse::<Ident>()?;
         if routes_label != "routes" {
             return Err(Error::new(routes_label.span(), "expected `routes`"));
@@ -965,7 +1092,7 @@ impl Parse for NewLanesManifest {
             .collect::<Vec<_>>();
         input.parse::<Token![;]>()?;
 
-        Ok(Self { modname, context, time_type, snapshots, routes })
+        Ok(Self { modname, context, time_type, snapshots, markers, routes })
     }
 }
 
@@ -976,6 +1103,7 @@ impl From<NewLanesManifest> for LanesManifest {
             context: value.context,
             time_type: value.time_type,
             snapshots: value.snapshots,
+            markers: value.markers,
             routes: value.routes,
         }
     }

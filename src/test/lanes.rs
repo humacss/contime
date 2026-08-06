@@ -9,5 +9,5 @@ crate::lanes! {
 }
 
 pub use __contime::Contime as TestSnapshotContime;
-pub use __contime::EventLanes as TestEventLanes;
+pub use __contime::InputLanes as TestInputLanes;
 pub use __contime::SnapshotLanes as TestSnapshotLanes;

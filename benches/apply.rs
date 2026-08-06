@@ -21,7 +21,7 @@ trait BenchHistoryApply {
 
 impl BenchHistoryApply for SnapshotHistory<BenchSnapshot> {
     fn apply_event(&mut self, event: BenchEvent) -> i64 {
-        self.apply_event_batch(vec![event], &mut ())
+        self.apply_input_batch(vec![event], &mut ())
     }
 }
 
@@ -130,7 +130,9 @@ fn benchmark_sync_apply_end_to_end(runner: &mut Criterion) {
             let snapshot_id = next_snapshot_id;
             next_snapshot_id = next_snapshot_id.wrapping_add(1);
 
-            contime.apply_events([BenchEvent::Positive(snapshot_id, 0, snapshot_id, 1)]).expect("single sync apply should succeed");
+            contime
+                .apply([BenchEvent::Positive(snapshot_id, 0, snapshot_id, 1)].map(Into::into))
+                .expect("single sync apply should succeed");
         });
     });
 
@@ -153,7 +155,7 @@ fn benchmark_apply_orchestrator_callback(runner: &mut Criterion) {
         );
     });
 
-    group.bench_function("apply_event_batch_unit_context", |bencher| {
+    group.bench_function("apply_input_batch_unit_context", |bencher| {
         let mut next_event_id = 1_u128;
         let mut context = ();
 
@@ -161,13 +163,13 @@ fn benchmark_apply_orchestrator_callback(runner: &mut Criterion) {
             || SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10000).0,
             |history| {
                 next_event_id = next_event_id.wrapping_add(1);
-                black_box(history.apply_event_batch(vec![new_event(next_event_id, next_event_id as i64)], &mut context));
+                black_box(history.apply_input_batch(vec![new_event(next_event_id, next_event_id as i64)], &mut context));
             },
             BatchSize::SmallInput,
         );
     });
 
-    group.bench_function("apply_event_batch_callback_context", |bencher| {
+    group.bench_function("apply_input_batch_callback_context", |bencher| {
         let mut next_event_id = 1_u128;
         let mut context = CallbackContext::default();
 
@@ -175,7 +177,7 @@ fn benchmark_apply_orchestrator_callback(runner: &mut Criterion) {
             || SnapshotHistory::<CallbackSnapshot>::new(CallbackSnapshot::default(), 0, 10000).0,
             |history| {
                 next_event_id = next_event_id.wrapping_add(1);
-                black_box(history.apply_event_batch(
+                black_box(history.apply_input_batch(
                     vec![CallbackEvent { event_id: next_event_id, time: next_event_id as i64, snapshot_id: 0, value: 1 }],
                     &mut context,
                 ));
@@ -210,7 +212,7 @@ struct CallbackContext {
 
 impl contime::Snapshot for CallbackSnapshot {
     type Time = i64;
-    type Event = CallbackEvent;
+    type Input = CallbackEvent;
 
     fn id(&self) -> u128 {
         self.id
@@ -224,16 +226,32 @@ impl contime::Snapshot for CallbackSnapshot {
         self.time = time;
     }
 
-    fn from_event(event: &Self::Event) -> Self {
-        Self { id: event.snapshot_id, time: event.time, sum: 0 }
-    }
-
     fn conservative_size(&self) -> u64 {
         16 + 8 + 4
     }
 }
 
-impl contime::Event for CallbackEvent {
+impl contime::SnapshotLanes for CallbackSnapshot {
+    fn materialize(snapshot_id: u128, input: &Self::Input) -> Option<Self> {
+        if contime::SnapshotEvent::snapshot_id(input) != snapshot_id {
+            return None;
+        }
+
+        let mut snapshot = Self::default();
+        contime::SnapshotEvent::set_snapshot_identity(input, &mut snapshot);
+        Some(snapshot)
+    }
+
+    fn lane_index(&self) -> usize {
+        0
+    }
+
+    fn input_lane_index(snapshot_id: u128, input: &Self::Input) -> Option<usize> {
+        (contime::SnapshotEvent::snapshot_id(input) == snapshot_id).then_some(0)
+    }
+}
+
+impl contime::Input for CallbackEvent {
     type Time = i64;
 
     fn id(&self) -> u128 {
@@ -249,14 +267,20 @@ impl contime::Event for CallbackEvent {
     }
 }
 
+impl contime::Event for CallbackEvent {}
+
 impl contime::SnapshotEvent<CallbackSnapshot> for CallbackEvent {
     fn snapshot_id(&self) -> u128 {
         self.snapshot_id
     }
+
+    fn set_snapshot_identity(&self, snapshot: &mut CallbackSnapshot) {
+        snapshot.id = self.snapshot_id;
+    }
 }
 
-impl contime::ApplyEvents for CallbackSnapshot {
-    fn apply_events(&mut self, batch: contime::ApplyBatch<'_, Self::Event>) {
+impl contime::ApplyEvents<CallbackEvent> for CallbackSnapshot {
+    fn apply_events(&mut self, batch: contime::ApplyBatch<'_, CallbackEvent>) {
         for event in batch.events.iter().copied() {
             self.sum += event.value as i32;
         }
@@ -265,14 +289,14 @@ impl contime::ApplyEvents for CallbackSnapshot {
 }
 
 impl contime::ApplyWrapper<CallbackSnapshot> for CallbackContext {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut CallbackSnapshot,
-        batch: contime::ApplyBatch<'_, CallbackEvent>,
+        batch: contime::InputBatch<'_, CallbackEvent>,
         apply_inner: contime::ApplyInner<CallbackSnapshot>,
     ) {
-        let event_ids = batch.events.iter().map(|event| event.event_id).collect::<Vec<_>>();
-        apply_inner.apply_event_batch(snapshot, batch);
+        let event_ids = batch.inputs.iter().map(|event| event.event_id).collect::<Vec<_>>();
+        apply_inner.apply_input_batch(snapshot, batch);
         for event_id in event_ids {
             self.sink = self.sink.wrapping_add(event_id).wrapping_add(snapshot.sum as u128);
         }
