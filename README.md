@@ -41,25 +41,38 @@ Provide time-travel queries and deterministic historical state without needing a
 
 ## How it Works
 
-**contime** works by accepting `Event` inputs from the user and materializing `Snapshot` state from those events.
+**contime** works by accepting temporal `Input`s and materializing `Snapshot` state from `Event` inputs.
 
 ### Snapshots
 A `Snapshot` is a discrete state at a particular point in time, for example the state of a particular character in a game at time `T`. The `Snapshot` defines the shape of the data, and the `snapshot_id` in this case defines the character the data belongs to.
 
 ### Events
-An `Event` is data that should be applied to one or more `Snapshot`s. `snapshot_id`s can be extracted from the `Event`, and this is then used to apply the event to one particular `Snapshot` and `snapshot_id`. 
+An `Event` is an `Input` that should be applied to one or more `Snapshot`s. `snapshot_id`s can be extracted from the `Event`, and this is then used to apply the event to one particular `Snapshot` and `snapshot_id`.
 
 When an `Event` is applied to a `Snapshot`, the event modifies the `Snapshot` state. 
 
-The system keeps a list of `Checkpoint`s internally to keep previous state, and can generate the state at time `T` by grabbing the closest `Checkpoint`, and applying all events in order up until time `T`.
+The system keeps a list of `Checkpoint`s internally to retain previous state, and can generate the state at time `T` by grabbing the closest `Checkpoint` and applying all inputs in order through time `T`.
+
+A checkpoint at time `T` represents the state after the complete input bucket at `T`.
+Histories can exist without checkpoints when they contain only markers. Such histories are
+pending: their inputs remain inspectable and replayable, but snapshot queries return `None`
+until an event supplies the snapshot identity. Concrete snapshots implement `Default`, and
+`SnapshotEvent::set_snapshot_identity` initializes only the identity fields on that clean
+default before normal replay begins.
 
 ### Flow
 
 When an `Event` input arrives from the user, it is sent to the `Router`.
 
-The `Router` extracts the `snapshot_id` from the input, hashes it, and routes everything to the correct `Worker`.
+The `Router` extracts only the `snapshot_id` from the input, hashes it, and routes everything to the correct `Worker`.
 
 Each `Worker` maintains a unique set of `snapshot_id`s and works in a dedicated thread running lockless code.
+
+A worker history remains pending while it contains only markers. Its first applicable event
+materializes the statically generated snapshot-lane variant inside the history. A snapshot id
+must map to exactly one snapshot-lane variant for the lifetime of a `Contime` instance; receiving
+an event for a different variant under an already materialized id is an invariant violation and
+panics.
 
 The `Worker` applies the input to the continuous time state for that `snapshot_id` and serves historical queries for that lane.
 
@@ -70,10 +83,16 @@ This design lets `contime` scale across multiple threads and processors with zer
 The public API is small. In practice you do five things:
 
 1. Define a `Snapshot` type and one or more `Event` types.
-2. Derive `ContimeEvent` and `ContimeSnapshot`, or implement `Event`, `SnapshotEvent`, `Snapshot`, and `ApplyEvents` manually.
-3. Generate `SnapshotLanes`, `EventLanes`, and a typed `Contime` alias with `contime::lanes!`.
+2. Derive `ContimeEvent` and `ContimeSnapshot`, or implement `Input`, `Event`, `SnapshotEvent`, `Snapshot`, and `ApplyEvents` manually.
+3. Generate `SnapshotLanes`, `InputLanes`, and a typed `Contime` alias with `contime::lanes!`.
 4. Create a `Contime` instance with a worker count and memory budget.
-5. Apply events, optionally advance the retained history horizon with `advance_to`, then query state with `query_at` or inspect retained original events with `inspect_events`.
+5. Apply inputs, optionally advance the retained history horizon with `advance_to`, then query state with `query_at` or inspect retained original inputs with `inspect_inputs`.
+
+Advanced integrations may also add marker variants to the generated
+`InputLanes`. Markers are opaque temporal records routed into the same replay
+batches as events. They never apply to snapshots directly; an `ApplyWrapper`
+may interpret the complete input batch before passing its event subset to
+snapshot application.
 
 ### Time Types
 
@@ -84,8 +103,12 @@ for history-horizon calculations. This supports ordered composite times whose
 consumers define their own arithmetic semantics without allowing horizon
 calculation to overflow.
 
-Manual `Event` and `Snapshot` implementations declare their associated `Time`.
+Manual `Input` and `Snapshot` implementations declare their associated `Time`.
 Derives use `time_type`, and the lane manifest declares the same concrete type:
+
+`ContimeSnapshot` reads time from `self.time.clone()` by default. Use the
+`time = ...` option only when a snapshot exposes time through another field or
+expression.
 
 ```rust
 #[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
@@ -110,7 +133,7 @@ contime::lanes! {
 }
 ```
 
-Events are ordered by `(time, event_id)`. A composite time therefore creates a
+Inputs are ordered by `(time, input_id)`. A composite time therefore creates a
 separate apply batch for each distinct complete value while retaining normal
 out-of-order replay behavior. Horizon advancement subtracts the configured
 horizon value using the concrete time type's `ContimeTime::saturating_sub`
@@ -135,28 +158,46 @@ The snapshot logic in the example only appends values during replay. The ordered
 
 ### Apply Wrappers
 
-`contime` applies one same-complete-time event batch to one snapshot lane at a time.
+`contime` processes one same-complete-time input batch for one snapshot lane at a time.
 Advanced callers can provide an `ApplyWrapper` and implement
-`apply_event_batch_wrapper` to control how that one batch is applied to the
-working snapshot. The default wrapper only calls the inner apply once. Custom
-wrappers may call the inner apply zero, one, or many times with temporary
-same-time batches. Wrappers are infallible and every remaining event batch is
-replayed after the wrapper returns.
+`apply_input_batch_wrapper` to control how that batch affects the working
+snapshot. The default wrapper filters out plain markers and applies the event
+subset once. Custom wrappers may call the inner apply zero, one, or many times
+with temporary same-time input batches. Wrappers are infallible and every
+remaining input batch is replayed after the wrapper returns.
 
-### Event Inspection
+### Markers
 
-`inspect_events` returns the canonical original events currently retained by
+A marker has a canonical id and complete ordered time, like an event, but it
+does not mutate snapshot state. One marker is globally identified across the
+ConTime instance even when its routing makes it visible to several snapshot
+histories.
+
+Applying a new or changed marker replays each affected history from the
+marker's time. Applying an identical marker again is a deduplicated no-op. The
+default apply wrapper ignores markers, while custom wrappers receive events and
+markers together in an `InputBatch` and define all marker semantics.
+
+Markers may create a pending routed history, but they cannot initialize snapshot
+state. A marker-only history therefore does not invoke an apply wrapper or
+materialize a query result until an event supplies the snapshot identity.
+Retained markers can be inspected with `inspect_inputs` and follow the same
+history horizon as events.
+
+### Input Inspection
+
+`inspect_inputs` returns the canonical original temporal inputs currently retained by
 `contime` within a requested time range:
 
 ```rust
-let entries = contime.inspect_events(1_000..=2_000)?;
+let entries = contime.inspect_inputs(1_000..=2_000)?;
 ```
 
-Results are ordered by event time and id. Repeated submissions of the same
-event appear once, and each `EventJournalEntry` includes the snapshot ids
-selected when the event was routed.
+Results are ordered by input time and id. Repeated submissions of the same
+input appear once, and each `InputJournalEntry` includes the snapshot ids
+selected when the input was routed.
 
-Inspection follows the same retention rules as snapshot history. Events removed
+Inspection follows the same retention rules as snapshot history. Inputs removed
 when the history horizon advances are no longer returned. Persistence and
 loading events for replay remain responsibilities of the surrounding system.
 
@@ -185,10 +226,11 @@ It maintains queryable historical state from applied events.
 - Memory usage is bounded by the configured budget and the amount of retained history.
 - History pruning is driven by `advance_to` together with the configured history horizon.
 - Snapshot queries include events with `event.time() <= query_time`.
-- `inspect_events` exposes only original events still retained in memory; pruned events must be loaded from an external persistent source.
+- `inspect_inputs` exposes only original inputs still retained in memory; pruned inputs must be loaded from an external persistent source.
 - Checkpoints currently clone full snapshots, so the crate is best suited to relatively small snapshot payloads today.
 - Known deferred issues:
   - memory-budget admission is still approximate and does not reserve replay/checkpoint growth up front
+  - concurrent event application and horizon advancement are not transactionally ordered across workers; an event routed to multiple workers may be applied to only a subset if advancement interleaves with dispatch, so callers requiring all-or-nothing behavior must serialize application and advancement
 
 ## Current Status
 

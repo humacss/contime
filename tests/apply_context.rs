@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use contime::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, Event, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, Event, Input, InputBatch, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ContextValueAt {
@@ -63,7 +63,7 @@ impl ContextValueAt {
 
 impl Snapshot for ContextValueAt {
     type Time = i64;
-    type Event = OnContextValueChanged;
+    type Input = OnContextValueChanged;
 
     fn id(&self) -> u128 {
         Self::lane_id(self.entity_id)
@@ -80,13 +80,9 @@ impl Snapshot for ContextValueAt {
     fn conservative_size(&self) -> u64 {
         std::mem::size_of::<Self>() as u64
     }
-
-    fn from_event(event: &Self::Event) -> Self {
-        Self { entity_id: event.entity_id, time: event.time, value: event.value }
-    }
 }
 
-impl Event for OnContextValueChanged {
+impl Input for OnContextValueChanged {
     type Time = i64;
 
     fn id(&self) -> u128 {
@@ -102,14 +98,20 @@ impl Event for OnContextValueChanged {
     }
 }
 
+impl Event for OnContextValueChanged {}
+
 impl SnapshotEvent<ContextValueAt> for OnContextValueChanged {
     fn snapshot_id(&self) -> u128 {
         ContextValueAt::lane_id(self.entity_id)
     }
+
+    fn set_snapshot_identity(&self, snapshot: &mut ContextValueAt) {
+        snapshot.entity_id = self.entity_id;
+    }
 }
 
-impl ApplyEvents for ContextValueAt {
-    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+impl ApplyEvents<OnContextValueChanged> for ContextValueAt {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, OnContextValueChanged>) {
         if let Some(event) = batch.events.last().copied() {
             self.entity_id = event.entity_id;
             self.value = event.value;
@@ -119,39 +121,39 @@ impl ApplyEvents for ContextValueAt {
 }
 
 impl ApplyWrapper<ContextValueAt> for ApplyTrace {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut ContextValueAt,
-        batch: ApplyBatch<'_, OnContextValueChanged>,
+        batch: InputBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
     ) {
-        apply_inner.apply_event_batch(snapshot, batch);
+        apply_inner.apply_input_batch(snapshot, batch);
         self.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
     }
 }
 
 impl ApplyWrapper<ContextValueAt> for ApplyTraceSender {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut ContextValueAt,
-        batch: ApplyBatch<'_, OnContextValueChanged>,
+        batch: InputBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
     ) {
-        let event = batch.events.last().copied().expect("after apply should receive non-empty bucket");
-        apply_inner.apply_event_batch(snapshot, batch);
+        let event = batch.inputs.last().copied().expect("after apply should receive non-empty bucket");
+        apply_inner.apply_input_batch(snapshot, batch);
         self.tx.send((event.entity_id, event.time, event.value, snapshot.value)).unwrap();
     }
 }
 
 impl ApplyWrapper<ContextValueAt> for ApplyBatchTrace {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut ContextValueAt,
-        batch: ApplyBatch<'_, OnContextValueChanged>,
+        batch: InputBatch<'_, OnContextValueChanged>,
         apply_inner: ApplyInner<ContextValueAt>,
     ) {
-        self.applied.push((batch.snapshot_id, batch.time, batch.events.len()));
-        apply_inner.apply_event_batch(snapshot, batch);
+        self.applied.push((batch.snapshot_id, batch.time, batch.inputs.len()));
+        apply_inner.apply_input_batch(snapshot, batch);
     }
 }
 
@@ -163,85 +165,85 @@ contime::lanes! {
     ];
 }
 
-use context_contime::{EventLanes, SnapshotLanes};
+use context_contime::{InputLanes, SnapshotLanes};
 
 impl ApplyWrapper<SnapshotLanes> for ApplyTrace {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
-        batch: ApplyBatch<'_, EventLanes>,
+        batch: InputBatch<'_, InputLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
     ) {
-        apply_inner.apply_event_batch(snapshot, batch);
+        apply_inner.apply_input_batch(snapshot, batch);
         let SnapshotLanes::ContextValueAt(snapshot) = snapshot;
         self.applied.push((snapshot.entity_id, snapshot.time, snapshot.value));
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for ApplyTraceSender {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
-        batch: ApplyBatch<'_, EventLanes>,
+        batch: InputBatch<'_, InputLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
     ) {
-        let event = batch.events.last().copied().expect("wrapper should receive non-empty bucket");
-        let EventLanes::OnContextValueChanged(event) = event;
+        let event = batch.inputs.last().copied().expect("wrapper should receive non-empty bucket");
+        let InputLanes::OnContextValueChanged(event) = event;
         let event = event.clone();
-        apply_inner.apply_event_batch(snapshot, batch);
+        apply_inner.apply_input_batch(snapshot, batch);
         let SnapshotLanes::ContextValueAt(snapshot) = snapshot;
         self.tx.send((event.entity_id, event.time, event.value, snapshot.value)).unwrap();
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for WorkerIdTraceSender {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
-        batch: ApplyBatch<'_, EventLanes>,
+        batch: InputBatch<'_, InputLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
     ) {
-        apply_inner.apply_event_batch(snapshot, batch);
+        apply_inner.apply_input_batch(snapshot, batch);
         self.tx.send(self.worker_id).unwrap();
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for GlobalWorkerTraceSender {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
-        batch: ApplyBatch<'_, EventLanes>,
+        batch: InputBatch<'_, InputLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
     ) {
-        apply_inner.apply_event_batch(snapshot, batch);
+        apply_inner.apply_input_batch(snapshot, batch);
         self.tx.send((self.label, self.worker_id)).unwrap();
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for BlockingApplyTrace {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
-        batch: ApplyBatch<'_, EventLanes>,
+        batch: InputBatch<'_, InputLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
     ) {
         self.entered_tx.send(()).unwrap();
         self.release_rx.recv().unwrap();
         let snapshot_id = batch.snapshot_id;
-        apply_inner.apply_event_batch(snapshot, batch);
+        apply_inner.apply_input_batch(snapshot, batch);
         self.applied.lock().unwrap().push(snapshot_id);
     }
 }
 
 impl ApplyWrapper<SnapshotLanes> for ApplyBatchTrace {
-    fn apply_event_batch_wrapper(
+    fn apply_input_batch_wrapper(
         &mut self,
         snapshot: &mut SnapshotLanes,
-        batch: ApplyBatch<'_, EventLanes>,
+        batch: InputBatch<'_, InputLanes>,
         apply_inner: ApplyInner<SnapshotLanes>,
     ) {
-        self.applied.push((batch.snapshot_id, batch.time, batch.events.len()));
-        apply_inner.apply_event_batch(snapshot, batch);
+        self.applied.push((batch.snapshot_id, batch.time, batch.inputs.len()));
+        apply_inner.apply_input_batch(snapshot, batch);
     }
 }
 
@@ -250,7 +252,7 @@ fn context_free_apply_still_mutates_snapshot() {
     let event = OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 };
     let mut snapshot = ContextValueAt::default();
 
-    <ContextValueAt as ApplyEvents>::apply_events(
+    <ContextValueAt as ApplyEvents<OnContextValueChanged>>::apply_events(
         &mut snapshot,
         ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[&event] },
     );
@@ -264,10 +266,10 @@ fn apply_wrapper_receives_snapshot_after_inner_apply_without_changing_snapshot_s
     let mut snapshot = ContextValueAt::default();
     let mut context = ApplyTrace::default();
 
-    <ApplyTrace as ApplyWrapper<ContextValueAt>>::apply_event_batch_wrapper(
+    <ApplyTrace as ApplyWrapper<ContextValueAt>>::apply_input_batch_wrapper(
         &mut context,
         &mut snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[&event] },
+        InputBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, inputs: &[&event] },
         ApplyInner::default(),
     );
 
@@ -277,14 +279,14 @@ fn apply_wrapper_receives_snapshot_after_inner_apply_without_changing_snapshot_s
 
 #[test]
 fn generated_lane_dispatch_works_through_apply_wrapper() {
-    let event = EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 });
+    let event = InputLanes::OnContextValueChanged(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 });
     let mut snapshot = SnapshotLanes::ContextValueAt(ContextValueAt::default());
     let mut context = ApplyTrace::default();
 
-    <ApplyTrace as ApplyWrapper<SnapshotLanes>>::apply_event_batch_wrapper(
+    <ApplyTrace as ApplyWrapper<SnapshotLanes>>::apply_input_batch_wrapper(
         &mut context,
         &mut snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[&event] },
+        InputBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, inputs: &[&event] },
         ApplyInner::default(),
     );
 
@@ -294,14 +296,14 @@ fn generated_lane_dispatch_works_through_apply_wrapper() {
 
 #[test]
 fn generated_lane_dispatch_passes_routed_snapshot_id_to_apply_batch() {
-    let event = EventLanes::OnContextValueChanged(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 });
+    let event = InputLanes::OnContextValueChanged(OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 });
     let mut snapshot = SnapshotLanes::ContextValueAt(ContextValueAt::default());
     let mut context = ApplyBatchTrace::default();
 
-    <ApplyBatchTrace as ApplyWrapper<SnapshotLanes>>::apply_event_batch_wrapper(
+    <ApplyBatchTrace as ApplyWrapper<SnapshotLanes>>::apply_input_batch_wrapper(
         &mut context,
         &mut snapshot,
-        ApplyBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, events: &[&event] },
+        InputBatch { snapshot_id: ContextValueAt::lane_id(3), time: 2, inputs: &[&event] },
         ApplyInner::default(),
     );
 
@@ -313,9 +315,9 @@ fn generated_lane_dispatch_passes_routed_snapshot_id_to_apply_batch() {
 fn contime_workers_use_configured_apply_context() {
     let (tx, rx) = flume::bounded(1);
     let contime =
-        contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
+        contime::Contime::<SnapshotLanes, InputLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
 
-    contime.apply_events([OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 }]).unwrap();
+    contime.apply([OnContextValueChanged { event_id: 1, time: 2, entity_id: 3, value: 4 }].map(Into::into)).unwrap();
 
     assert_eq!(rx.try_recv().unwrap(), (3, 2, 4, 4));
     let snapshot = contime.query_at(3, &[3]).unwrap().pop().flatten().unwrap();
@@ -326,12 +328,14 @@ fn contime_workers_use_configured_apply_context() {
 fn contime_can_initialize_apply_context_per_worker() {
     let (tx, rx) = flume::bounded(64);
     let contime =
-        contime::Contime::<SnapshotLanes, EventLanes, WorkerIdTraceSender>::new_with_apply_context_factory(2, 100_000, |worker_id| {
+        contime::Contime::<SnapshotLanes, InputLanes, WorkerIdTraceSender>::new_with_apply_context_factory(2, 100_000, |worker_id| {
             WorkerIdTraceSender { worker_id, tx: tx.clone() }
         });
 
     for entity_id in 0..64 {
-        contime.apply_events([OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }]).unwrap();
+        contime
+            .apply([OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }].map(Into::into))
+            .unwrap();
     }
 
     let mut worker_ids = std::collections::BTreeSet::new();
@@ -346,7 +350,7 @@ fn contime_can_initialize_apply_context_per_worker() {
 fn contime_can_initialize_worker_contexts_from_global_context() {
     let (tx, rx) = flume::bounded(64);
     let global_context = GlobalTrace { label: "global", tx };
-    let contime = contime::Contime::<SnapshotLanes, EventLanes, GlobalWorkerTraceSender, GlobalTrace>::new_with_contexts(
+    let contime = contime::Contime::<SnapshotLanes, InputLanes, GlobalWorkerTraceSender, GlobalTrace>::new_with_contexts(
         2,
         100_000,
         global_context,
@@ -354,7 +358,9 @@ fn contime_can_initialize_worker_contexts_from_global_context() {
     );
 
     for entity_id in 0..64 {
-        contime.apply_events([OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }]).unwrap();
+        contime
+            .apply([OnContextValueChanged { event_id: entity_id, time: 1, entity_id, value: entity_id as i32 }].map(Into::into))
+            .unwrap();
     }
 
     let mut worker_ids = std::collections::BTreeSet::new();
@@ -371,14 +377,14 @@ fn contime_can_initialize_worker_contexts_from_global_context() {
 fn out_of_order_apply_runs_after_apply_for_replayed_events() {
     let (tx, rx) = flume::bounded(8);
     let contime =
-        contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
+        contime::Contime::<SnapshotLanes, InputLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
 
-    contime.apply_events([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }]).unwrap();
-    contime.apply_events([OnContextValueChanged { event_id: 30, time: 30, entity_id: 3, value: 30 }]).unwrap();
+    contime.apply([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }].map(Into::into)).unwrap();
+    contime.apply([OnContextValueChanged { event_id: 30, time: 30, entity_id: 3, value: 30 }].map(Into::into)).unwrap();
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
     assert_eq!(rx.try_recv().unwrap(), (3, 30, 30, 30));
 
-    contime.apply_events([OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 }]).unwrap();
+    contime.apply([OnContextValueChanged { event_id: 20, time: 20, entity_id: 3, value: 20 }].map(Into::into)).unwrap();
 
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
     assert_eq!(rx.try_recv().unwrap(), (3, 20, 20, 20));
@@ -390,11 +396,11 @@ fn out_of_order_apply_runs_after_apply_for_replayed_events() {
 fn duplicate_apply_does_not_run_after_apply() {
     let (tx, rx) = flume::bounded(4);
     let contime =
-        contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
+        contime::Contime::<SnapshotLanes, InputLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
     let event = OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 };
 
-    contime.apply_events([event.clone()]).unwrap();
-    contime.apply_events([event]).unwrap();
+    contime.apply([event.clone()].map(Into::into)).unwrap();
+    contime.apply([event].map(Into::into)).unwrap();
 
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
     assert!(rx.try_recv().is_err());
@@ -404,9 +410,9 @@ fn duplicate_apply_does_not_run_after_apply() {
 fn query_materialization_does_not_run_after_apply() {
     let (tx, rx) = flume::bounded(4);
     let contime =
-        contime::Contime::<SnapshotLanes, EventLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
+        contime::Contime::<SnapshotLanes, InputLanes, ApplyTraceSender>::new_with_apply_context(1, 100_000, ApplyTraceSender { tx });
 
-    contime.apply_events([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }]).unwrap();
+    contime.apply([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }].map(Into::into)).unwrap();
     assert_eq!(rx.try_recv().unwrap(), (3, 10, 10, 10));
 
     let snapshot = contime.query_at(11, &[3]).unwrap().pop().flatten().unwrap();
@@ -419,13 +425,13 @@ fn send_event_returns_after_enqueue_without_waiting_for_apply() {
     let (entered_tx, entered_rx) = flume::bounded(1);
     let (release_tx, release_rx) = flume::bounded(1);
     let applied = Arc::new(Mutex::new(Vec::new()));
-    let contime = contime::Contime::<SnapshotLanes, EventLanes, BlockingApplyTrace>::new_with_apply_context(
+    let contime = contime::Contime::<SnapshotLanes, InputLanes, BlockingApplyTrace>::new_with_apply_context(
         1,
         100_000,
         BlockingApplyTrace { entered_tx, release_rx, applied: Arc::clone(&applied) },
     );
 
-    contime.send_events([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }]).unwrap();
+    contime.send([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }].map(Into::into)).unwrap();
 
     entered_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
     assert!(applied.lock().unwrap().is_empty());

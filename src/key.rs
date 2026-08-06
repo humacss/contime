@@ -1,4 +1,4 @@
-pub use crate::{ContimeTime, Event, Snapshot};
+pub use crate::{ContimeTime, Input, Snapshot};
 
 #[derive(Default, Debug, Clone, PartialEq, PartialOrd, Ord, Eq)]
 pub struct ContimeKey<T: ContimeTime> {
@@ -7,8 +7,8 @@ pub struct ContimeKey<T: ContimeTime> {
 }
 
 impl<T: ContimeTime> ContimeKey<T> {
-    pub fn from_event<E: Event<Time = T>>(event: &E) -> Self {
-        ContimeKey { id: event.id(), time: event.time() }
+    pub fn from_input<I: Input<Time = T>>(input: &I) -> Self {
+        ContimeKey { id: input.id(), time: input.time() }
     }
 
     pub fn from_snapshot<S: Snapshot<Time = T>>(snapshot: &S) -> Self {

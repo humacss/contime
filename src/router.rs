@@ -6,24 +6,26 @@ use std::sync::{Arc, RwLock};
 use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 
-use crate::worker::WorkerEvent;
-use crate::{ApplyEvents, ApplyWrapper, ContimeKey, ContimeTime, EventJournalEntry, EventLanes, SnapshotLanes, Worker, WorkerInbound};
+use crate::worker::WorkerInput;
+use crate::{ApplyWrapper, ContimeKey, ContimeTime, Input, InputJournalEntry, InputLanes, SnapshotLanes, Worker, WorkerInbound};
 
-type RoutedWorkerEvents<SL, EL> = Vec<Vec<WorkerEvent<SL, EL>>>;
+type RoutedWorkerInputs<IL> = Vec<Vec<WorkerInput<IL>>>;
 
 #[derive(Debug)]
 pub enum RouterError<T: ContimeTime> {
     MemoryFull,
-    EventBeforeHistoryHorizon { event_time: T, earliest_time: T },
+    InputBeforeHistoryHorizon { input_time: T, earliest_time: T },
     Error,
 }
 
-pub struct Router<SL: SnapshotLanes<Event = EL> + ApplyEvents, EL: EventLanes<SL, C>, C = (), G = ()>
+pub struct Router<SL, IL, C = (), G = ()>
 where
+    SL: SnapshotLanes<Input = IL>,
+    IL: InputLanes<SL>,
     C: ApplyWrapper<SL>,
 {
     hasher: RandomState,
-    workers: Vec<Worker<SL, EL, C>>,
+    workers: Vec<Worker<SL, IL, C>>,
     memory_budget: Arc<AtomicU64>,
     memory_usage: Arc<AtomicU64>,
     current_time: Arc<RwLock<SL::Time>>,
@@ -32,11 +34,10 @@ where
     _context: PhantomData<C>,
 }
 
-impl<SL, EL> Router<SL, EL, ()>
+impl<SL, IL> Router<SL, IL, (), ()>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
-    (): ApplyWrapper<SL>,
-    EL: EventLanes<SL> + 'static,
+    SL: SnapshotLanes<Input = IL> + 'static,
+    IL: InputLanes<SL> + Send + 'static,
 {
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
         Self::new_with_apply_context(worker_count, memory_budget_bytes, ())
@@ -47,12 +48,11 @@ where
     }
 }
 
-impl<SL, EL, C> Router<SL, EL, C>
+impl<SL, IL, C> Router<SL, IL, C, ()>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
-    C: ApplyWrapper<SL> + 'static,
-    EL: EventLanes<SL, C> + 'static,
-    C: Clone + Send + 'static,
+    SL: SnapshotLanes<Input = IL> + 'static,
+    IL: InputLanes<SL> + Send + 'static,
+    C: ApplyWrapper<SL> + Clone + Send + 'static,
 {
     pub fn new_with_apply_context(worker_count: usize, memory_budget_bytes: u64, apply_context: C) -> Self {
         Self::new_with_contexts(worker_count, memory_budget_bytes, (), move |_, _| apply_context.clone())
@@ -70,11 +70,11 @@ where
     }
 }
 
-impl<SL, EL, C, G> Router<SL, EL, C, G>
+impl<SL, IL, C, G> Router<SL, IL, C, G>
 where
-    SL: SnapshotLanes<Event = EL> + ApplyEvents + 'static,
+    SL: SnapshotLanes<Input = IL> + 'static,
+    IL: InputLanes<SL> + Send + 'static,
     C: ApplyWrapper<SL> + Send + 'static,
-    EL: EventLanes<SL, C> + Send + 'static,
     G: Send + Sync + 'static,
 {
     pub fn new_with_contexts<F>(worker_count: usize, memory_budget_bytes: u64, global_context: G, make_apply_context: F) -> Self
@@ -97,14 +97,13 @@ where
         assert!(worker_count > 0, "worker_count must be greater than zero");
 
         let hasher = RandomState::new();
-
         let global_context = Arc::new(global_context);
         let memory_budget = Arc::new(AtomicU64::new(memory_budget_bytes));
         let memory_usage = Arc::new(AtomicU64::new(0));
-        let mut worker_txs = Vec::<Sender<WorkerInbound<SL, EL>>>::with_capacity(worker_count);
+        let mut worker_txs = Vec::<Sender<WorkerInbound<SL, IL>>>::with_capacity(worker_count);
         let mut worker_rxs = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
-            let (tx, rx) = unbounded::<WorkerInbound<SL, EL>>();
+            let (tx, rx) = unbounded::<WorkerInbound<SL, IL>>();
             worker_txs.push(tx);
             worker_rxs.push(rx);
         }
@@ -112,11 +111,11 @@ where
 
         let mut workers = Vec::with_capacity(worker_count);
         for (worker_index, rx) in worker_rxs.into_iter().enumerate() {
-            workers.push(Worker::<SL, EL, C>::with_parts(
+            workers.push(Worker::<SL, IL, C>::with_parts(
                 worker_txs[worker_index].clone(),
                 rx,
                 worker_index,
-                worker_txs.clone(),
+                Arc::clone(&worker_txs),
                 hasher.clone(),
                 Arc::clone(&memory_usage),
                 lower_time_horizon_delta.clone(),
@@ -140,126 +139,116 @@ where
         Arc::clone(&self.global_context)
     }
 
-    pub fn apply_events<I>(&self, event_lanes: I) -> Result<(), RouterError<SL::Time>>
+    pub fn apply<I>(&self, inputs: I) -> Result<(), RouterError<SL::Time>>
     where
-        I: IntoIterator<Item = EL>,
+        I: IntoIterator<Item = IL>,
     {
-        let worker_events = self.route_events(event_lanes)?;
-        let mut rxs = Vec::new();
+        let worker_inputs = self.route_inputs(inputs)?;
+        let mut replies = Vec::new();
 
-        for (worker_index, events) in worker_events.into_iter().enumerate() {
-            if events.is_empty() {
+        for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
+            if inputs.is_empty() {
                 continue;
             }
-
             let (tx, rx) = bounded(1);
             self.workers[worker_index]
                 .worker_inbound_tx
-                .send(WorkerInbound::Events { events, reply: tx })
+                .send(WorkerInbound::Inputs { inputs, reply: tx })
                 .map_err(|_| RouterError::Error)?;
-            rxs.push(rx);
+            replies.push(rx);
         }
 
-        for rx in rxs {
-            rx.recv().map_err(|_| RouterError::Error)?;
+        for reply in replies {
+            reply.recv().map_err(|_| RouterError::Error)?;
         }
         Ok(())
     }
 
-    pub fn send_events<I>(&self, event_lanes: I) -> Result<(), RouterError<SL::Time>>
+    pub fn send<I>(&self, inputs: I) -> Result<(), RouterError<SL::Time>>
     where
-        I: IntoIterator<Item = EL>,
+        I: IntoIterator<Item = IL>,
     {
-        let worker_events = self.route_events(event_lanes)?;
-
-        for (worker_index, events) in worker_events.into_iter().enumerate() {
-            if events.is_empty() {
+        let worker_inputs = self.route_inputs(inputs)?;
+        for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
+            if inputs.is_empty() {
                 continue;
             }
-
             let (tx, _rx) = bounded(1);
             self.workers[worker_index]
                 .worker_inbound_tx
-                .send(WorkerInbound::Events { events, reply: tx })
+                .send(WorkerInbound::Inputs { inputs, reply: tx })
                 .map_err(|_| RouterError::Error)?;
         }
-
         Ok(())
     }
 
-    fn route_events<I>(&self, event_lanes: I) -> Result<RoutedWorkerEvents<SL, EL>, RouterError<SL::Time>>
+    fn route_inputs<I>(&self, inputs: I) -> Result<RoutedWorkerInputs<IL>, RouterError<SL::Time>>
     where
-        I: IntoIterator<Item = EL>,
+        I: IntoIterator<Item = IL>,
     {
-        let mut worker_events = Vec::with_capacity(self.workers.len());
-        worker_events.resize_with(self.workers.len(), Vec::new);
+        let mut worker_inputs = Vec::with_capacity(self.workers.len());
+        worker_inputs.resize_with(self.workers.len(), Vec::new);
 
         let current_time = self.current_time.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let earliest_time = current_time.saturating_sub(self.lower_time_horizon_delta.clone());
-        let mut event_size = 0u64;
+        let mut input_size = 0u64;
         let mut journal_size = 0u64;
-        for event_lane in event_lanes {
-            let event_time = event_lane.time();
-            if event_time < earliest_time {
-                return Err(RouterError::EventBeforeHistoryHorizon { event_time, earliest_time });
+
+        for input in inputs {
+            let input_time = Input::time(&input);
+            if input_time < earliest_time {
+                return Err(RouterError::InputBeforeHistoryHorizon { input_time, earliest_time });
             }
-            let lane_size = event_lane.conservative_size();
-            event_size = event_size.saturating_add(lane_size);
-            let routed_snapshots = event_lane.routed_snapshots();
+            let lane_size = Input::conservative_size(&input);
+            input_size = input_size.saturating_add(lane_size);
             let mut routed_worker_indexes = Vec::new();
-            for routed in routed_snapshots {
-                let snapshot_id = routed.snapshot_id;
+            for snapshot_id in input.snapshot_ids() {
                 let index = self.worker_index(snapshot_id);
                 if !routed_worker_indexes.contains(&index) {
                     routed_worker_indexes.push(index);
                     journal_size = journal_size.saturating_add(lane_size);
                 }
                 journal_size = journal_size.saturating_add(size_of::<u128>() as u64);
-                worker_events[index].push(WorkerEvent {
-                    snapshot_id,
-                    event: event_lane.clone(),
-                    initial_snapshot: routed.initial_snapshot,
-                });
+                worker_inputs[index].push(WorkerInput { snapshot_id, input: input.clone() });
             }
         }
 
         let usage = self.memory_usage.load(Ordering::Relaxed);
         let budget = self.memory_budget.load(Ordering::Relaxed);
-        if usage.saturating_add(event_size).saturating_add(journal_size) >= budget {
+        if usage.saturating_add(input_size).saturating_add(journal_size) >= budget {
             return Err(RouterError::MemoryFull);
         }
 
-        Ok(worker_events)
+        Ok(worker_inputs)
     }
 
-    pub fn inspect_events<R>(&self, range: R) -> Result<Vec<EventJournalEntry<EL>>, RouterError<SL::Time>>
+    pub fn inspect_inputs<R>(&self, range: R) -> Result<Vec<InputJournalEntry<IL>>, RouterError<SL::Time>>
     where
         R: RangeBounds<SL::Time>,
     {
         let start = owned_bound(range.start_bound());
         let end = owned_bound(range.end_bound());
-        let mut rxs = Vec::with_capacity(self.workers.len());
+        let mut replies = Vec::with_capacity(self.workers.len());
 
         for worker in &self.workers {
             let (tx, rx) = bounded(1);
             worker
                 .worker_inbound_tx
-                .send(WorkerInbound::EventsInRange { start: start.clone(), end: end.clone(), reply: tx })
+                .send(WorkerInbound::InputsInRange { start: start.clone(), end: end.clone(), reply: tx })
                 .map_err(|_| RouterError::Error)?;
-            rxs.push(rx);
+            replies.push(rx);
         }
 
-        let mut merged = Vec::<EventJournalEntry<EL>>::new();
-        for rx in rxs {
-            for entry in rx.recv().map_err(|_| RouterError::Error)? {
-                let key = ContimeKey::from_event(&entry.event);
-                match merged.binary_search_by_key(&key, |entry| ContimeKey::from_event(&entry.event)) {
+        let mut merged = Vec::<InputJournalEntry<IL>>::new();
+        for reply in replies {
+            for entry in reply.recv().map_err(|_| RouterError::Error)? {
+                let key = ContimeKey::from_input(&entry.input);
+                match merged.binary_search_by_key(&key, |entry| ContimeKey::from_input(&entry.input)) {
                     Ok(index) => merge_snapshot_ids(&mut merged[index].routed_snapshot_ids, entry.routed_snapshot_ids),
                     Err(index) => merged.insert(index, entry),
                 }
             }
         }
-
         Ok(merged)
     }
 
@@ -270,36 +259,30 @@ where
 
         let mut requests_by_worker = Vec::with_capacity(self.workers.len());
         requests_by_worker.resize_with(self.workers.len(), Vec::new);
-
         for (position, snapshot_id) in snapshot_ids.iter().copied().enumerate() {
-            let index = self.worker_index(snapshot_id);
-            requests_by_worker[index].push((position, snapshot_id));
+            requests_by_worker[self.worker_index(snapshot_id)].push((position, snapshot_id));
         }
 
-        let mut rxs = Vec::new();
+        let mut replies = Vec::new();
         for (worker_index, snapshot_requests) in requests_by_worker.into_iter().enumerate() {
             if snapshot_requests.is_empty() {
                 continue;
             }
-
             let (tx, rx) = bounded(1);
             self.workers[worker_index]
                 .worker_inbound_tx
                 .send(WorkerInbound::SnapshotsAt { snapshot_requests, time: time.clone(), reply: tx })
                 .map_err(|_| RouterError::Error)?;
-            rxs.push(rx);
+            replies.push(rx);
         }
 
         let mut results = Vec::with_capacity(snapshot_ids.len());
         results.resize_with(snapshot_ids.len(), || None);
-
-        for rx in rxs {
-            let batch = rx.recv().map_err(|_| RouterError::Error)?;
-            for (position, snapshot_lane) in batch {
+        for reply in replies {
+            for (position, snapshot_lane) in reply.recv().map_err(|_| RouterError::Error)? {
                 results[position] = snapshot_lane;
             }
         }
-
         Ok(results)
     }
 
@@ -312,15 +295,14 @@ where
             *current = time.clone();
         }
 
-        let mut rxs = Vec::new();
+        let mut replies = Vec::new();
         for worker in &self.workers {
             let (tx, rx) = bounded(1);
             worker.worker_inbound_tx.send(WorkerInbound::AdvanceTime { time: time.clone(), reply: tx }).map_err(|_| RouterError::Error)?;
-            rxs.push(rx);
+            replies.push(rx);
         }
-
-        for rx in rxs {
-            rx.recv().map_err(|_| RouterError::Error)?;
+        for reply in replies {
+            reply.recv().map_err(|_| RouterError::Error)?;
         }
         Ok(())
     }
@@ -330,9 +312,7 @@ where
     }
 
     fn worker_index(&self, snapshot_id: u128) -> usize {
-        let hash = self.hasher.hash_one(snapshot_id);
-
-        hash as usize % self.workers.len()
+        self.hasher.hash_one(snapshot_id) as usize % self.workers.len()
     }
 }
 

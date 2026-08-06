@@ -1,22 +1,22 @@
-use crate::Event;
+use crate::Input;
 
-/// One canonical original event retained for inspection.
+/// One canonical temporal input retained for inspection.
 ///
 /// Journal entries follow the same horizon-based retention as snapshot
-/// history and are not a persistent event store.
+/// history and are not a persistent input store.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EventJournalEntry<E> {
-    /// The original event lane submitted to ConTime.
-    pub event: E,
-    /// Snapshot ids selected by the event lane's routing.
+pub struct InputJournalEntry<I> {
+    /// The original input lane submitted to ConTime.
+    pub input: I,
+    /// Snapshot ids selected by the input lane's routing.
     pub routed_snapshot_ids: Vec<u128>,
 }
 
-impl<E> EventJournalEntry<E>
+impl<I> InputJournalEntry<I>
 where
-    E: Event,
+    I: Input,
 {
     pub(crate) fn conservative_size(&self) -> u64 {
-        self.event.conservative_size().saturating_add((self.routed_snapshot_ids.len() * size_of::<u128>()) as u64)
+        Input::conservative_size(&self.input).saturating_add((self.routed_snapshot_ids.len() * size_of::<u128>()) as u64)
     }
 }

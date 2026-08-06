@@ -1,4 +1,4 @@
-use contime::{ApplyBatch, ApplyEvents, Event, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, Event, Input, Snapshot, SnapshotEvent, SnapshotLanes};
 
 type EventId = u128;
 type SnapshotId = u128;
@@ -14,7 +14,7 @@ pub struct BenchSnapshot {
 
 impl Snapshot for BenchSnapshot {
     type Time = i64;
-    type Event = BenchEvent;
+    type Input = BenchEvent;
 
     fn id(&self) -> u128 {
         self.id
@@ -27,12 +27,28 @@ impl Snapshot for BenchSnapshot {
         self.time = time;
     }
 
-    fn from_event(event: &<Self as Snapshot>::Event) -> Self {
-        Self { id: <BenchEvent as SnapshotEvent<BenchSnapshot>>::snapshot_id(event), ..Self::default() }
-    }
-
     fn conservative_size(&self) -> u64 {
         16 + 8 + 4
+    }
+}
+
+impl SnapshotLanes for BenchSnapshot {
+    fn materialize(snapshot_id: u128, input: &Self::Input) -> Option<Self> {
+        if input.snapshot_id() != snapshot_id {
+            return None;
+        }
+
+        let mut snapshot = Self::default();
+        input.set_snapshot_identity(&mut snapshot);
+        Some(snapshot)
+    }
+
+    fn lane_index(&self) -> usize {
+        0
+    }
+
+    fn input_lane_index(snapshot_id: u128, input: &Self::Input) -> Option<usize> {
+        (input.snapshot_id() == snapshot_id).then_some(0)
     }
 }
 
@@ -41,7 +57,7 @@ pub enum BenchEvent {
     Positive(EventId, Time, SnapshotId, u16),
 }
 
-impl Event for BenchEvent {
+impl Input for BenchEvent {
     type Time = i64;
 
     fn id(&self) -> u128 {
@@ -60,16 +76,22 @@ impl Event for BenchEvent {
     }
 }
 
+impl Event for BenchEvent {}
+
 impl SnapshotEvent<BenchSnapshot> for BenchEvent {
     fn snapshot_id(&self) -> u128 {
         match self {
             Self::Positive(snapshot_id, _time, _event_id, _value) => *snapshot_id,
         }
     }
+
+    fn set_snapshot_identity(&self, snapshot: &mut BenchSnapshot) {
+        snapshot.id = self.snapshot_id();
+    }
 }
 
-impl ApplyEvents for BenchSnapshot {
-    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+impl ApplyEvents<BenchEvent> for BenchSnapshot {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, BenchEvent>) {
         self.id = batch.snapshot_id;
         for event in batch.events.iter().copied() {
             match event {

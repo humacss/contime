@@ -1,6 +1,6 @@
 use std::ops::{Add, Sub};
 
-use contime::{ApplyBatch, ApplyEvents, ContimeEvent, ContimeSnapshot, Event, Snapshot, SnapshotEvent};
+use contime::{ApplyBatch, ApplyEvents, ContimeEvent, ContimeSnapshot, Event, Input, Snapshot, SnapshotEvent};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CompositeTime {
@@ -44,7 +44,7 @@ pub struct CompositeEvent {
     value: i32,
 }
 
-impl Event for CompositeEvent {
+impl Input for CompositeEvent {
     type Time = CompositeTime;
 
     fn id(&self) -> u128 {
@@ -60,6 +60,8 @@ impl Event for CompositeEvent {
     }
 }
 
+impl Event for CompositeEvent {}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CompositeSnapshot {
     id: u128,
@@ -69,7 +71,7 @@ pub struct CompositeSnapshot {
 
 impl Snapshot for CompositeSnapshot {
     type Time = CompositeTime;
-    type Event = CompositeEvent;
+    type Input = CompositeEvent;
 
     fn id(&self) -> u128 {
         self.id
@@ -86,20 +88,20 @@ impl Snapshot for CompositeSnapshot {
     fn conservative_size(&self) -> u64 {
         48 + self.values.len() as u64 * 4
     }
-
-    fn from_event(event: &Self::Event) -> Self {
-        Self { id: event.snapshot_id, time: event.time.clone(), values: Vec::new() }
-    }
 }
 
 impl SnapshotEvent<CompositeSnapshot> for CompositeEvent {
     fn snapshot_id(&self) -> u128 {
         self.snapshot_id
     }
+
+    fn set_snapshot_identity(&self, snapshot: &mut CompositeSnapshot) {
+        snapshot.id = self.snapshot_id;
+    }
 }
 
-impl ApplyEvents for CompositeSnapshot {
-    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Event>) {
+impl ApplyEvents<CompositeEvent> for CompositeSnapshot {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, CompositeEvent>) {
         self.values.extend(batch.events.iter().map(|event| event.value));
     }
 }
@@ -130,7 +132,6 @@ pub struct DerivedCompositeEvent {
 #[contime_snapshot(
     events = [DerivedCompositeEvent],
     id = [snapshot_id],
-    time = self.time.clone(),
     time_type = CompositeTime,
     bytes = 52,
     apply = {
@@ -160,8 +161,8 @@ contime::lanes! {
 fn composite_time_orders_minor_values_during_replay() {
     let contime = composite_lanes::Contime::new(1, 1_000_000);
 
-    contime.apply_events([event(2, 10, 2, 2)]).expect("later composite time should apply provisionally");
-    contime.apply_events([event(1, 10, 1, 1)]).expect("earlier composite time should trigger ordered replay");
+    contime.apply([event(2, 10, 2, 2)].map(Into::into)).expect("later composite time should apply provisionally");
+    contime.apply([event(1, 10, 1, 1)].map(Into::into)).expect("earlier composite time should trigger ordered replay");
 
     let snapshot: CompositeSnapshot = contime
         .query_at(CompositeTime::new(10, 2), &[1])
@@ -178,7 +179,7 @@ fn composite_time_orders_minor_values_during_replay() {
 #[test]
 fn composite_time_query_can_stop_between_minor_values() {
     let contime = composite_lanes::Contime::new(1, 1_000_000);
-    contime.apply_events([event(1, 10, 1, 1), event(2, 10, 2, 2)]).expect("composite-time events should apply");
+    contime.apply([event(1, 10, 1, 1), event(2, 10, 2, 2)].map(Into::into)).expect("composite-time events should apply");
 
     let snapshot: CompositeSnapshot = contime
         .query_at(CompositeTime::new(10, 1), &[1])
@@ -194,18 +195,18 @@ fn composite_time_query_can_stop_between_minor_values() {
 #[test]
 fn composite_time_horizon_uses_time_arithmetic() {
     let contime = composite_lanes::Contime::with_history_horizon(1, 1_000_000, CompositeTime::new(5, 99));
-    contime.apply_events([event(1, 5, 1, 1), event(2, 10, 1, 2)]).expect("events inside the initial horizon should apply");
+    contime.apply([event(1, 5, 1, 1), event(2, 10, 1, 2)].map(Into::into)).expect("events inside the initial horizon should apply");
 
     contime.advance_to(CompositeTime::new(10, 7)).expect("composite time should advance");
 
-    let error = contime.apply_events([event(3, 4, 99, 3)]).expect_err("event before the arithmetic horizon should be rejected");
+    let error = contime.apply([event(3, 4, 99, 3)].map(Into::into)).expect_err("event before the arithmetic horizon should be rejected");
     assert!(
         matches!(
             error,
-            contime::ContimeError::EventBeforeHistoryHorizon {
-                ref event_time,
+            contime::ContimeError::InputBeforeHistoryHorizon {
+                ref input_time,
                 ref earliest_time,
-            } if event_time == &CompositeTime::new(4, 99) && earliest_time == &CompositeTime::new(5, 0)
+            } if input_time == &CompositeTime::new(4, 99) && earliest_time == &CompositeTime::new(5, 0)
         ),
         "horizon subtraction should use the concrete time implementation and reset minor components: {error:?}"
     );
@@ -215,7 +216,7 @@ fn composite_time_horizon_uses_time_arithmetic() {
 fn derives_and_lanes_accept_an_explicit_composite_time_type() {
     let contime = derived_composite_lanes::Contime::new(1, 1_000_000);
     contime
-        .apply_events([DerivedCompositeEvent { id: 1, snapshot_id: 7, time: CompositeTime::new(10, 3), value: 42 }])
+        .apply([DerivedCompositeEvent { id: 1, snapshot_id: 7, time: CompositeTime::new(10, 3), value: 42 }].map(Into::into))
         .expect("derived composite-time event should apply");
 
     let snapshot: DerivedCompositeSnapshot = contime

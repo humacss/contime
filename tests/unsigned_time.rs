@@ -15,7 +15,6 @@ pub struct ValueChanged {
 #[contime_snapshot(
     events = [ValueChanged],
     id = [snapshot_id],
-    time = self.time,
     time_type = u64,
     bytes = 32,
     apply = {
@@ -46,7 +45,7 @@ fn unsigned_time_saturates_a_horizon_larger_than_current_time() {
     let contime = value_lanes::Contime::with_history_horizon(1, 1_000_000, 10);
 
     contime
-        .apply_events([ValueChanged { id: 1, snapshot_id: 7, time: 0, value: 42 }])
+        .apply([ValueChanged { id: 1, snapshot_id: 7, time: 0, value: 42 }].map(Into::into))
         .expect("an unsigned event at zero should remain valid while the horizon exceeds current time");
     contime.advance_to(5).expect("advancing unsigned time should safely calculate a horizon that saturates at zero");
 

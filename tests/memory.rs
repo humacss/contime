@@ -11,7 +11,7 @@ fn test_memory_full() {
 
     let mut hit_memory_full = false;
     for i in 0..1000u128 {
-        match c.apply_events([TestEvent::Positive(1, i as i64, i, 1)]) {
+        match c.apply([TestEvent::Positive(1, i as i64, i, 1)].map(Into::into)) {
             Ok(()) => {}
             Err(ContimeError::MemoryFull) => {
                 hit_memory_full = true;
@@ -32,7 +32,7 @@ fn test_memory_full_then_advance_frees() {
     // Fill up memory
     let mut last_applied = 0i64;
     for i in 0..1000u128 {
-        match c.apply_events([TestEvent::Positive(1, i as i64, i, 1)]) {
+        match c.apply([TestEvent::Positive(1, i as i64, i, 1)].map(Into::into)) {
             Ok(()) => {
                 last_applied = i as i64;
             }
@@ -47,7 +47,7 @@ fn test_memory_full_then_advance_frees() {
     c.advance_to(last_applied + 100).unwrap();
 
     // Should be able to apply new events now
-    let result = c.apply_events([TestEvent::Positive(1, last_applied + 200, (last_applied + 200) as u128, 1)]);
+    let result = c.apply([TestEvent::Positive(1, last_applied + 200, (last_applied + 200) as u128, 1)].map(Into::into));
     assert!(result.is_ok(), "expected event to succeed after advance freed memory");
 }
 
@@ -55,7 +55,8 @@ fn test_memory_full_then_advance_frees() {
 fn test_advance_basic() {
     let c = TestSnapshotContime::new(1, 100000);
 
-    c.apply_events([TestEvent::Positive(1, 1, 1, 10), TestEvent::Positive(1, 5, 5, 20), TestEvent::Positive(1, 10, 10, 30)]).unwrap();
+    c.apply([TestEvent::Positive(1, 1, 1, 10), TestEvent::Positive(1, 5, 5, 20), TestEvent::Positive(1, 10, 10, 30)].map(Into::into))
+        .unwrap();
 
     // Advance should not panic or error
     c.advance_to(100).unwrap();
@@ -65,14 +66,14 @@ fn test_advance_basic() {
 fn test_advance_to_prunes_and_keeps_future_apply_query_working() {
     let c = TestSnapshotContime::new(2, 100000);
 
-    c.apply_events([TestEvent::Positive(1, 1, 1, 10), TestEvent::Positive(2, 1, 2, 20)]).unwrap();
+    c.apply([TestEvent::Positive(1, 1, 1, 10), TestEvent::Positive(2, 1, 2, 20)].map(Into::into)).unwrap();
 
     c.advance_to(100).unwrap();
 
     // Should still be able to query and apply events after advance
-    c.apply_events([TestEvent::Positive(1, 200, 200, 5)]).unwrap();
+    c.apply([TestEvent::Positive(1, 200, 200, 5)].map(Into::into)).unwrap();
     let snap = query_one(&c, 201, 1);
-    assert_eq!(snap.sum, 15); // pruned history is carried by the promoted base snapshot
+    assert_eq!(snap.sum, 15); // pruned history is carried by the retained replay anchor
 }
 
 #[test]
@@ -80,9 +81,9 @@ fn test_event_before_history_horizon_is_rejected() {
     let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
     c.advance_to(100).unwrap();
 
-    let error = c.apply_events([TestEvent::Positive(1, 49, 1, 10)]).unwrap_err();
+    let error = c.apply([TestEvent::Positive(1, 49, 1, 10)].map(Into::into)).unwrap_err();
 
-    assert!(matches!(error, ContimeError::EventBeforeHistoryHorizon { event_time: 49, earliest_time: 50 }));
+    assert!(matches!(error, ContimeError::InputBeforeHistoryHorizon { input_time: 49, earliest_time: 50 }));
 }
 
 #[test]
@@ -90,7 +91,7 @@ fn test_event_at_history_horizon_is_accepted() {
     let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
     c.advance_to(100).unwrap();
 
-    c.apply_events([TestEvent::Positive(1, 50, 1, 10)]).unwrap();
+    c.apply([TestEvent::Positive(1, 50, 1, 10)].map(Into::into)).unwrap();
 
     assert_eq!(query_one(&c, 100, 1).sum, 10);
 }
@@ -98,11 +99,11 @@ fn test_event_at_history_horizon_is_accepted() {
 #[test]
 fn test_repeated_advance_to_uses_absolute_time() {
     let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
-    c.apply_events([TestEvent::Positive(1, 30, 30, 30)]).unwrap();
+    c.apply([TestEvent::Positive(1, 30, 30, 30)].map(Into::into)).unwrap();
 
     c.advance_to(60).unwrap();
     c.advance_to(70).unwrap();
-    c.apply_events([TestEvent::Positive(1, 25, 25, 5)]).unwrap();
+    c.apply([TestEvent::Positive(1, 25, 25, 5)].map(Into::into)).unwrap();
 
     assert_eq!(query_one(&c, 70, 1).items, vec![5, 30]);
 }
@@ -110,10 +111,10 @@ fn test_repeated_advance_to_uses_absolute_time() {
 #[test]
 fn test_pruning_preserves_effects_without_a_checkpoint_before_horizon() {
     let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
-    c.apply_events([TestEvent::Positive(1, 10, 10, 10), TestEvent::Positive(1, 100, 100, 100)]).unwrap();
+    c.apply([TestEvent::Positive(1, 10, 10, 10), TestEvent::Positive(1, 100, 100, 100)].map(Into::into)).unwrap();
 
     c.advance_to(100).unwrap();
-    c.apply_events([TestEvent::Positive(1, 60, 60, 60)]).unwrap();
+    c.apply([TestEvent::Positive(1, 60, 60, 60)].map(Into::into)).unwrap();
 
     let snapshot = query_one(&c, 100, 1);
     assert_eq!(snapshot.sum, 170);

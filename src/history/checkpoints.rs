@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ops::Bound;
 
-use crate::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, Snapshot};
+use crate::{ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, InputBatch, InputLanes, Snapshot, SnapshotLanes};
 
 use super::storage::LocalSnapshotHistory;
 
@@ -119,12 +119,13 @@ pub(super) fn get_checkpoint_for_apply<S>(
     latest_event_key_before_apply: Option<ContimeKey<S::Time>>,
     _single_changed_event_key: Option<ContimeKey<S::Time>>,
     changed_event_count: usize,
-) -> CheckpointForApply<S>
+) -> Option<CheckpointForApply<S>>
 where
-    S: Snapshot + ApplyEvents + 'static,
+    S: SnapshotLanes + 'static,
+    S::Input: InputLanes<S>,
 {
     let preserve_previous_tip = latest_event_key_before_apply.as_ref().is_none_or(|latest| earliest_changed_time > latest.time);
-    let previous_event_count = history.events.len().saturating_sub(changed_event_count);
+    let previous_event_count = history.inputs.len().saturating_sub(changed_event_count);
     let protected_previous_tip =
         latest_event_key_before_apply.as_ref().filter(|_| preserve_previous_tip && is_event_count_cadence(history, previous_event_count));
 
@@ -137,21 +138,22 @@ pub(super) fn apply_events_to_checkpoint<S, C>(
     context: &mut C,
 ) -> AppliedCheckpoint<S>
 where
-    S: Snapshot + ApplyEvents + 'static,
+    S: SnapshotLanes + 'static,
+    S::Input: InputLanes<S>,
     C: ApplyWrapper<S>,
 {
     let mut event_count = 0usize;
     let mut materialized_checkpoints = Vec::new();
     let mut stored_first_changed_checkpoint = false;
 
-    apply_event_buckets::<S, _>(
+    apply_input_buckets::<S, _>(
         history.snapshot_id,
-        &history.events,
+        &history.inputs,
         checkpoint.start.clone(),
         checkpoint.end.clone(),
         |bucket_last_key, bucket_len, batch| {
             let batch_time = batch.time.clone();
-            context.apply_event_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default());
+            context.apply_input_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default());
             event_count += bucket_len;
 
             if !checkpoint.preserve_previous_tip && !stored_first_changed_checkpoint && batch_time >= checkpoint.first_changed_time {
@@ -172,7 +174,7 @@ where
     AppliedCheckpoint {
         stale_start: checkpoint.stale_start,
         bytes_delta: checkpoint.bytes_delta,
-        final_key: history.events.keys().next_back().cloned(),
+        final_key: history.latest_input_key(),
         final_snapshot: checkpoint.snapshot,
         materialized_checkpoints,
     }
@@ -180,7 +182,7 @@ where
 
 pub(super) fn commit_applied_checkpoint<S>(history: &mut LocalSnapshotHistory<S>, applied_checkpoint: AppliedCheckpoint<S>) -> i64
 where
-    S: Snapshot + ApplyEvents + 'static,
+    S: SnapshotLanes + 'static,
 {
     let mut bytes_delta = applied_checkpoint.bytes_delta;
 
@@ -206,9 +208,10 @@ fn get_recomputed_checkpoint_for_apply<S>(
     time: S::Time,
     preserve_previous_tip: bool,
     protected_previous_tip: Option<&ContimeKey<S::Time>>,
-) -> CheckpointForApply<S>
+) -> Option<CheckpointForApply<S>>
 where
-    S: Snapshot + ApplyEvents + 'static,
+    S: SnapshotLanes + 'static,
+    S::Input: InputLanes<S>,
 {
     let mut recompute_boundary = first_key_at_time(time.clone());
     if !preserve_previous_tip {
@@ -231,7 +234,7 @@ where
             let (key, checkpoint) = &history.checkpoints[index];
             (checkpoint.clone(), Bound::Excluded(key.clone()))
         }
-        None => (history.base_snapshot.clone(), Bound::Unbounded),
+        None => (materialize_snapshot(history, Bound::Unbounded)?, Bound::Unbounded),
     };
 
     let stale_start = if remove_recompute_checkpoint {
@@ -240,7 +243,7 @@ where
         Some(checkpoint_partition_before(&history.checkpoints, &recompute_boundary))
     };
 
-    CheckpointForApply {
+    Some(CheckpointForApply {
         snapshot,
         start,
         end: Bound::Unbounded,
@@ -248,7 +251,15 @@ where
         preserve_previous_tip,
         first_changed_time: time,
         bytes_delta: 0,
-    }
+    })
+}
+
+fn materialize_snapshot<S>(history: &LocalSnapshotHistory<S>, end: Bound<ContimeKey<S::Time>>) -> Option<S>
+where
+    S: SnapshotLanes + 'static,
+    S::Input: InputLanes<S>,
+{
+    history.inputs.range((Bound::Unbounded, end)).find_map(|(_key, input)| S::materialize(history.snapshot_id, input))
 }
 
 fn is_event_count_cadence<S>(history: &LocalSnapshotHistory<S>, event_count: usize) -> bool
@@ -266,72 +277,52 @@ where
         return true;
     }
 
-    is_event_count_cadence(history, history.events.len())
+    is_event_count_cadence(history, history.inputs.len())
 }
 
-pub(super) fn apply_event_buckets<S, F>(
+pub(super) fn apply_input_buckets<S, F>(
     snapshot_id: u128,
-    events: &BTreeMap<ContimeKey<S::Time>, S::Event>,
+    inputs: &BTreeMap<ContimeKey<S::Time>, S::Input>,
     start: Bound<ContimeKey<S::Time>>,
     end: Bound<ContimeKey<S::Time>>,
     mut apply_bucket: F,
 ) where
-    S: Snapshot + ApplyEvents + 'static,
-    F: FnMut(&ContimeKey<S::Time>, usize, ApplyBatch<'_, S::Event>),
+    S: SnapshotLanes + 'static,
+    S::Input: InputLanes<S>,
+    F: FnMut(&ContimeKey<S::Time>, usize, InputBatch<'_, S::Input>),
 {
-    let mut iter = events.range((start, end)).peekable();
-    while let Some((first_key, first_event)) = iter.next() {
-        let bucket_time = first_key.time.clone();
-        let mut bucket_last_key = first_key;
+    let mut input_iter = inputs.range((start, end)).peekable();
 
-        if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
-            let bucket = [first_event];
-            let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-            apply_bucket(bucket_last_key, 1, batch);
-            continue;
+    while let Some((input_key, _input)) = input_iter.peek() {
+        let bucket_time = input_key.time.clone();
+        let mut bucket_last_key = ContimeKey { time: bucket_time.clone(), id: u128::MIN };
+        let mut input_bucket = Vec::new();
+
+        while input_iter.peek().is_some_and(|(key, _)| key.time == bucket_time) {
+            let (key, input) = input_iter.next().expect("peeked input must exist");
+            bucket_last_key = bucket_last_key.max(key.clone());
+            input_bucket.push(input);
         }
 
-        let (second_key, second_event) = iter.next().expect("same-time bucket second event must exist");
-        bucket_last_key = second_key;
-
-        if iter.peek().is_none_or(|(next_key, _next_event)| next_key.time != bucket_time) {
-            let bucket = [first_event, second_event];
-            let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-            apply_bucket(bucket_last_key, 2, batch);
-            continue;
-        }
-
-        let remaining_same_time = iter.clone().take_while(|(key, _event)| key.time == bucket_time).count();
-        let mut bucket = Vec::with_capacity(2 + remaining_same_time);
-        bucket.push(first_event);
-        bucket.push(second_event);
-
-        while let Some((next_key, _next_event)) = iter.peek() {
-            if next_key.time != bucket_time {
-                break;
-            }
-            let (key, event) = iter.next().expect("peeked event must exist");
-            bucket_last_key = key;
-            bucket.push(event);
-        }
-
-        let bucket_len = bucket.len();
-        let batch = ApplyBatch { snapshot_id, time: bucket_time, events: &bucket };
-        apply_bucket(bucket_last_key, bucket_len, batch);
+        let event_count = input_bucket.iter().filter(|input| input.is_event()).count();
+        apply_bucket(&bucket_last_key, event_count, InputBatch { snapshot_id, time: bucket_time, inputs: &input_bucket });
     }
 }
 
-pub(super) fn get_checkpoint_at<S>(history: &LocalSnapshotHistory<S>, time: S::Time) -> S
+pub(super) fn get_checkpoint_at<S>(history: &LocalSnapshotHistory<S>, time: S::Time) -> Option<S>
 where
-    S: Snapshot + ApplyEvents + 'static,
+    S: SnapshotLanes + 'static,
+    S::Input: InputLanes<S>,
+    (): ApplyWrapper<S>,
 {
     let mut context = ();
     get_checkpoint_at_with_context(history, time, &mut context)
 }
 
-pub(super) fn get_checkpoint_at_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: S::Time, context: &mut C) -> S
+pub(super) fn get_checkpoint_at_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: S::Time, context: &mut C) -> Option<S>
 where
-    S: Snapshot + ApplyEvents + 'static,
+    S: SnapshotLanes + 'static,
+    S::Input: InputLanes<S>,
     C: ApplyWrapper<S>,
 {
     let checkpoint_boundary = last_key_at_time(time.clone());
@@ -340,31 +331,36 @@ where
 
     let (mut snapshot, recompute_start) = match checkpoint_entry {
         Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
-        None => (history.base_snapshot.clone(), Bound::Unbounded),
+        None => (materialize_snapshot(history, Bound::Unbounded)?, Bound::Unbounded),
     };
 
     let end_key = last_key_at_time(time.clone());
 
-    apply_event_buckets::<S, _>(
+    apply_input_buckets::<S, _>(
         history.snapshot_id,
-        &history.events,
+        &history.inputs,
         recompute_start,
         Bound::Included(end_key),
         |_bucket_last_key, _bucket_len, batch| {
             let batch_time = batch.time.clone();
-            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
+            context.apply_input_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
             snapshot.set_time(batch_time);
         },
     );
 
     snapshot.set_time(time);
 
-    snapshot
+    Some(snapshot)
 }
 
-pub(super) fn get_checkpoint_before_with_context<S, C>(history: &LocalSnapshotHistory<S>, time: S::Time, context: &mut C) -> S
+pub(super) fn get_checkpoint_before_with_context<S, C>(
+    history: &LocalSnapshotHistory<S>,
+    time: S::Time,
+    context: &mut C,
+) -> Option<(ContimeKey<S::Time>, S)>
 where
-    S: Snapshot + ApplyEvents + 'static,
+    S: SnapshotLanes + 'static,
+    S::Input: InputLanes<S>,
     C: ApplyWrapper<S>,
 {
     let boundary = first_key_at_time(time);
@@ -372,20 +368,27 @@ where
 
     let (mut snapshot, recompute_start) = match checkpoint_entry {
         Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
-        None => (history.base_snapshot.clone(), Bound::Unbounded),
+        None => (materialize_snapshot(history, Bound::Excluded(boundary.clone()))?, Bound::Unbounded),
     };
 
-    apply_event_buckets::<S, _>(
+    let final_key = history
+        .inputs
+        .range((Bound::Unbounded, Bound::Excluded(boundary.clone())))
+        .next_back()
+        .map(|(key, _input)| key.clone())
+        .or_else(|| checkpoint_entry.map(|(key, _checkpoint)| key.clone()))?;
+
+    apply_input_buckets::<S, _>(
         history.snapshot_id,
-        &history.events,
+        &history.inputs,
         recompute_start,
         Bound::Excluded(boundary),
         |_bucket_last_key, _bucket_len, batch| {
             let batch_time = batch.time.clone();
-            context.apply_event_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
+            context.apply_input_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
             snapshot.set_time(batch_time);
         },
     );
 
-    snapshot
+    Some((final_key, snapshot))
 }
