@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `contime::InputJournalEntry`
+ --> tests/ui/removed_input_inspection.rs:1:15
+  |
+1 | use contime::{InputJournalEntry, TestInputLanes, TestSnapshotContime};
+  |               ^^^^^^^^^^^^^^^^^ no `InputJournalEntry` in the root
+
+error[E0599]: no method named `inspect_inputs` found for struct `Contime` in the current scope
+ --> tests/ui/removed_input_inspection.rs:7:21
+  |
+7 |     let _ = contime.inspect_inputs(..);
+  |                     ^^^^^^^^^^^^^^ method not found in `Contime<TestSnapshotLanes, TestInputLanes>`

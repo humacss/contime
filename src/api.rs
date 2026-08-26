@@ -1,11 +1,10 @@
 use std::marker::PhantomData;
-use std::ops::{Bound, RangeBounds};
 use std::sync::{Arc, RwLock};
 
 use crossbeam_channel::{unbounded, Receiver};
 
 use crate::rejection::merge_event_rejections;
-use crate::{ApplyWrapper, ContimeKey, ContimeTime, EventRejection, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
+use crate::{ApplyWrapper, EventRejection, InputLanes, Router, RouterError, SnapshotLanes};
 
 fn collect_event_rejections(response_rx: &Receiver<Vec<EventRejection>>, expected: usize) -> Result<Vec<EventRejection>, ContimeError> {
     let mut rejections = Vec::new();
@@ -245,30 +244,6 @@ where
         Ok(())
     }
 
-    /// Returns retained canonical temporal inputs whose timestamps are within `range`.
-    pub fn inspect_inputs<R>(&self, range: R) -> Result<Vec<InputJournalEntry<IL>>, ContimeError>
-    where
-        R: RangeBounds<SL::Time>,
-    {
-        let start = owned_bound(range.start_bound());
-        let end = owned_bound(range.end_bound());
-        let (response_tx, response_rx) = unbounded();
-        let expected = self.router.dispatch_inspection(start, end, &response_tx)?;
-        drop(response_tx);
-
-        let mut merged = Vec::<InputJournalEntry<IL>>::new();
-        for _ in 0..expected {
-            for entry in response_rx.recv().map_err(|_| ContimeError::ResponseDisconnected)? {
-                let key = ContimeKey::from_input(&entry.input);
-                match merged.binary_search_by_key(&key, |entry| ContimeKey::from_input(&entry.input)) {
-                    Ok(index) => merge_snapshot_ids(&mut merged[index].routed_snapshot_ids, entry.routed_snapshot_ids),
-                    Err(index) => merged.insert(index, entry),
-                }
-            }
-        }
-        Ok(merged)
-    }
-
     pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, ContimeError> {
         if snapshot_ids.is_empty() {
             return Ok(Vec::new());
@@ -287,22 +262,6 @@ where
             }
         }
         Ok(results)
-    }
-}
-
-fn owned_bound<T: ContimeTime>(bound: Bound<&T>) -> Bound<T> {
-    match bound {
-        Bound::Included(value) => Bound::Included(value.clone()),
-        Bound::Excluded(value) => Bound::Excluded(value.clone()),
-        Bound::Unbounded => Bound::Unbounded,
-    }
-}
-
-fn merge_snapshot_ids(existing: &mut Vec<u128>, incoming: Vec<u128>) {
-    for snapshot_id in incoming {
-        if let Err(index) = existing.binary_search(&snapshot_id) {
-            existing.insert(index, snapshot_id);
-        }
     }
 }
 

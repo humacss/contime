@@ -208,7 +208,6 @@ fn benchmark_send_persistent_matrix(runner: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut elapsed = Duration::ZERO;
                     for _ in 0..iterations {
-                        let _ = contime.inspect_inputs(..).expect("inspection should synchronize the previous send");
                         contime.advance_to(next_time).expect("benchmark horizon should advance");
                         let time = next_time;
                         next_time += 1;
@@ -218,7 +217,7 @@ fn benchmark_send_persistent_matrix(runner: &mut Criterion) {
                         elapsed += started.elapsed();
                         black_box(());
                     }
-                    let _ = contime.inspect_inputs(..).expect("inspection should synchronize the final send");
+                    contime.advance_to(next_time).expect("benchmark horizon should synchronize the final send");
                     elapsed
                 });
             });

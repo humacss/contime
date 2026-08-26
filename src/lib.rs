@@ -11,8 +11,7 @@
 //! 2. Generate lane enums with [`lanes!`], or define compatible lane types manually.
 //! 3. Construct a [`Contime`] with a worker count and memory budget.
 //! 4. Apply events and markers through one generated input lane.
-//! 5. Query state with [`Contime::query_at`] or inspect retained original inputs
-//!    with [`Contime::inspect_inputs`].
+//! 5. Query state with [`Contime::query_at`].
 //!
 //! Point queries include all events at or before the complete ordered query time.
 //! Markers are global temporal records routed into replay batches for custom
@@ -41,15 +40,10 @@
 //! let snapshot: TestSnapshot = contime.query_at(6, &[1]).unwrap().pop().flatten().unwrap().into();
 //! assert_eq!(snapshot.sum, 5);
 //!
-//! let inputs = contime.inspect_inputs(4..=5).unwrap();
-//! assert_eq!(inputs.len(), 2);
-//! assert_eq!(inputs[0].input.time(), 4);
-//! assert_eq!(inputs[1].input.time(), 5);
 //! ```
 mod api;
 mod batch;
 mod history;
-mod journal;
 mod key;
 mod rejection;
 mod router;
@@ -74,7 +68,6 @@ pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
 pub use history::{ApplyInner, ApplyWrapper, SnapshotHistory};
 #[doc(hidden)]
 pub use history::{HistoryInputs, HistoryInsert};
-pub use journal::InputJournalEntry;
 pub use rejection::{EventRejection, EventRejectionReason};
 #[doc(hidden)]
 pub use router::RoutePartitionBenchmark;

@@ -1,6 +1,5 @@
 use std::collections::hash_map::Entry;
 use std::marker::PhantomData;
-use std::ops::Bound;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -9,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use ahash::{AHashMap, RandomState};
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::{ApplyWrapper, ContimeKey, ContimeTime, EventRejection, Input, InputJournalEntry, InputLanes, SnapshotHistory, SnapshotLanes};
+use crate::{ApplyWrapper, EventRejection, InputLanes, SnapshotHistory, SnapshotLanes};
 
 mod admission;
 
@@ -44,7 +43,6 @@ pub enum Completion<T> {
 
 pub enum WorkerInbound<SL: SnapshotLanes, IL> {
     Inputs { inputs: Vec<WorkerInput<IL>>, completion: Completion<Vec<EventRejection>> },
-    InputsInRange { start: Bound<SL::Time>, end: Bound<SL::Time>, reply: Sender<Vec<InputJournalEntry<IL>>> },
     SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: SL::Time, reply: Sender<Vec<(usize, Option<SL>)>> },
     AdvanceTime { time: SL::Time, reply: Sender<()> },
     Shutdown,
@@ -201,7 +199,6 @@ fn handle_worker<SL, IL, C>(
     C: ApplyWrapper<SL>,
 {
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
-    let mut input_log = Vec::<InputJournalEntry<IL>>::new();
     let mut admission = WorkerAdmission::new(lower_time_horizon_delta.clone());
 
     while is_running.load(Ordering::Relaxed) {
@@ -214,25 +211,17 @@ fn handle_worker<SL, IL, C>(
                     let bytes_delta = history.advance_with_context(new_time.clone(), &mut apply_context);
                     fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed);
                 }
-                let drop_time = new_time.saturating_sub(lower_time_horizon_delta.clone());
-                let bytes_removed = prune_input_log(&mut input_log, drop_time);
-                fetch_saturating_add_signed(&memory_usage, -bytes_removed, Ordering::Relaxed);
                 fetch_saturating_add_signed(&memory_usage, -(identity_bytes_removed as i64), Ordering::Relaxed);
                 let _ = reply.send(());
             }
             Ok(WorkerInbound::Inputs { inputs, completion }) => {
                 let admitted = admission.admit(inputs, &memory_budget, &memory_usage);
-                let journal_bytes = record_worker_inputs(&mut input_log, &admitted.inputs);
                 let history_bytes =
                     apply_inputs_to_histories(&mut history_by_id, lower_time_horizon_delta.clone(), &mut apply_context, admitted.inputs);
-                let actual_bytes = (admitted.identity_bytes as i64).saturating_add(journal_bytes).saturating_add(history_bytes);
+                let actual_bytes = (admitted.identity_bytes as i64).saturating_add(history_bytes);
                 let reconciliation = actual_bytes.saturating_sub(admitted.reserved_bytes as i64);
                 fetch_saturating_add_signed(&memory_usage, reconciliation, Ordering::Relaxed);
                 complete(completion, admitted.rejections);
-            }
-            Ok(WorkerInbound::InputsInRange { start, end, reply }) => {
-                let inputs = input_log.iter().filter(|entry| time_is_in_range(Input::time(&entry.input), &start, &end)).cloned().collect();
-                let _ = reply.send(inputs);
             }
             Ok(WorkerInbound::SnapshotsAt { snapshot_requests, time, reply }) => {
                 let mut results = Vec::with_capacity(snapshot_requests.len());
@@ -247,56 +236,6 @@ fn handle_worker<SL, IL, C>(
             Ok(WorkerInbound::Shutdown) | Err(_) => return,
         }
     }
-}
-
-fn record_worker_inputs<IL>(input_log: &mut Vec<InputJournalEntry<IL>>, inputs: &[WorkerInput<IL>]) -> i64
-where
-    IL: Input + Clone,
-{
-    let mut bytes_delta = 0i64;
-    for routed_input in inputs {
-        let key = ContimeKey::from_input(&routed_input.input);
-        match input_log.binary_search_by_key(&key, |entry| ContimeKey::from_input(&entry.input)) {
-            Ok(index) => {
-                let entry = &mut input_log[index];
-                if let Err(route_index) = entry.routed_snapshot_ids.binary_search(&routed_input.snapshot_id) {
-                    entry.routed_snapshot_ids.insert(route_index, routed_input.snapshot_id);
-                    bytes_delta = bytes_delta.saturating_add(size_of::<u128>() as i64);
-                }
-            }
-            Err(index) => {
-                let entry = InputJournalEntry { input: routed_input.input.clone(), routed_snapshot_ids: vec![routed_input.snapshot_id] };
-                bytes_delta = bytes_delta.saturating_add(entry.conservative_size() as i64);
-                input_log.insert(index, entry);
-            }
-        }
-    }
-    bytes_delta
-}
-
-fn prune_input_log<IL>(input_log: &mut Vec<InputJournalEntry<IL>>, time: IL::Time) -> i64
-where
-    IL: Input,
-{
-    let drop_key = ContimeKey { time, id: u128::MIN };
-    let first_kept = input_log.partition_point(|entry| ContimeKey::from_input(&entry.input) < drop_key);
-    let bytes_removed = input_log[..first_kept].iter().fold(0i64, |size, entry| size.saturating_add(entry.conservative_size() as i64));
-    input_log.drain(..first_kept);
-    bytes_removed
-}
-
-fn time_is_in_range<T: ContimeTime>(time: T, start: &Bound<T>, end: &Bound<T>) -> bool {
-    let after_start = match start {
-        Bound::Included(start) => time >= *start,
-        Bound::Excluded(start) => time > *start,
-        Bound::Unbounded => true,
-    };
-    let before_end = match end {
-        Bound::Included(end) => time <= *end,
-        Bound::Excluded(end) => time < *end,
-        Bound::Unbounded => true,
-    };
-    after_start && before_end
 }
 
 fn complete<T>(completion: Completion<T>, value: T) {

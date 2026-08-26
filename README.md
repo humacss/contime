@@ -120,7 +120,7 @@ The public API is small. In practice you do five things:
 2. Derive `ContimeEvent` and `ContimeSnapshot`, or implement `Input`, `Event`, `SnapshotEvent`, `Snapshot`, and `ApplyEvents` manually.
 3. Generate `SnapshotLanes`, `InputLanes`, and a typed `Contime` alias with `contime::lanes!`.
 4. Create a `Contime` instance with a worker count and memory budget.
-5. Apply inputs, optionally advance the retained history horizon with `advance_to`, then query state with `query_at` or inspect retained original inputs with `inspect_inputs`.
+5. Apply inputs, optionally advance the retained history horizon with `advance_to`, then query state with `query_at`.
 
 `send` is fire-and-forget after worker enqueue and returns
 `Result<(), ContimeError>`. `apply` waits only for workers affected by its input
@@ -129,8 +129,8 @@ means every affected worker accepted or idempotently ignored the inputs.
 Rejections contain exactly `event_id` and `reason`; the current reasons are
 `BeforeHistoryHorizon` and `MemoryFull`. Identical `(event_id, reason)` pairs
 from several workers are returned once, while different reasons for one event
-remain distinct. `Contime` also owns query ordering, input-inspection merging,
-current time, and advancement completion waits.
+remain distinct. `Contime` also owns query ordering, current time, and
+advancement completion waits.
 
 Advanced integrations may also add marker variants to the generated
 `InputLanes`. Markers are opaque temporal records routed into the same replay
@@ -264,25 +264,7 @@ markers together in an `InputBatch` and define all marker semantics.
 Markers may create a pending routed history, but they cannot initialize snapshot
 state. A marker-only history therefore does not invoke an apply wrapper or
 materialize a query result until an event supplies the snapshot identity.
-Retained markers can be inspected with `inspect_inputs` and follow the same
-history horizon as events.
-
-### Input Inspection
-
-`inspect_inputs` returns the canonical original temporal inputs currently retained by
-`contime` within a requested time range:
-
-```rust
-let entries = contime.inspect_inputs(1_000..=2_000)?;
-```
-
-Results are ordered by input time and id. Repeated submissions of the same
-input appear once, and each `InputJournalEntry` includes the snapshot ids
-selected when the input was routed.
-
-Inspection follows the same retention rules as snapshot history. Inputs removed
-when the history horizon advances are no longer returned. Persistence and
-loading events for replay remain responsibilities of the surrounding system.
+Retained markers follow the same per-snapshot history horizon as events.
 
 ## `contime` is
 
@@ -309,7 +291,6 @@ It maintains queryable historical state from applied events.
 - Memory usage is bounded by the configured budget and the amount of retained history.
 - History pruning is driven by `advance_to` together with the configured history horizon.
 - Snapshot queries include events with `event.time() <= query_time`.
-- `inspect_inputs` exposes only original inputs still retained in memory; pruned inputs must be loaded from an external persistent source.
 - Checkpoints currently clone full snapshots, so the crate is best suited to relatively small snapshot payloads today.
 - Known deferred issues:
   - memory-budget admission is still approximate and does not reserve replay/checkpoint growth up front
