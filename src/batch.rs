@@ -1,6 +1,6 @@
 use ahash::AHashMap;
 
-use crate::history::RETAINED_ID_BYTES;
+use crate::history::{checkpoint_conservative_size, CHECKPOINT_INTERVAL, RETAINED_ID_BYTES};
 use crate::{EventRejection, EventRejectionReason, Input, InputLanes, SnapshotLanes};
 
 /// Opaque prepared snapshot batch used by doc-hidden benchmark boundary adapters.
@@ -9,6 +9,8 @@ pub struct SnapshotInputBatch<IL> {
     pub(crate) snapshot_id: u128,
     pub(crate) inputs: Vec<IL>,
     pub(crate) conservative_bytes: u64,
+    pub(crate) apply_allocation_bytes: u64,
+    event_count: usize,
     snapshot_materialization_accounted: bool,
 }
 
@@ -37,23 +39,43 @@ where
         let Some((&final_snapshot_id, earlier_snapshot_ids)) = routed_snapshot_ids.split_last() else {
             continue;
         };
-        let conservative_bytes = conservative_route_bytes::<SL, IL>(&input);
+        let conservative_bytes = conservative_route_bytes(&input);
+        let apply_allocation_bytes = input.conservative_allocation_size();
+        let is_event = input.is_event();
 
         for &snapshot_id in earlier_snapshot_ids {
-            push_routed_input::<SL, IL>(&mut batches, &mut batch_index_by_snapshot, snapshot_id, input.clone(), conservative_bytes);
+            push_routed_input::<SL, IL>(
+                &mut batches,
+                &mut batch_index_by_snapshot,
+                snapshot_id,
+                input.clone(),
+                conservative_bytes,
+                apply_allocation_bytes,
+                is_event,
+            );
         }
-        push_routed_input::<SL, IL>(&mut batches, &mut batch_index_by_snapshot, final_snapshot_id, input, conservative_bytes);
+        push_routed_input::<SL, IL>(
+            &mut batches,
+            &mut batch_index_by_snapshot,
+            final_snapshot_id,
+            input,
+            conservative_bytes,
+            apply_allocation_bytes,
+            is_event,
+        );
+    }
+
+    for batch in &mut batches {
+        let possible_checkpoint_count = batch.event_count.div_ceil(CHECKPOINT_INTERVAL) as u64;
+        batch.conservative_bytes =
+            batch.conservative_bytes.saturating_add(batch.apply_allocation_bytes.saturating_mul(possible_checkpoint_count));
     }
 
     batches
 }
 
-fn conservative_route_bytes<SL, IL>(input: &IL) -> u64
-where
-    SL: SnapshotLanes<Input = IL>,
-    IL: InputLanes<SL>,
-{
-    input.conservative_size().saturating_add(input.conservative_allocation_size()).saturating_add(RETAINED_ID_BYTES)
+fn conservative_route_bytes<I: Input>(input: &I) -> u64 {
+    input.conservative_size().saturating_add(RETAINED_ID_BYTES)
 }
 
 pub(crate) fn total_conservative_bytes<IL>(batches: &[SnapshotInputBatch<IL>]) -> u64 {
@@ -79,6 +101,8 @@ fn push_routed_input<SL, IL>(
     snapshot_id: u128,
     input: IL,
     conservative_bytes: u64,
+    apply_allocation_bytes: u64,
+    is_event: bool,
 ) where
     SL: SnapshotLanes<Input = IL>,
     IL: InputLanes<SL>,
@@ -89,6 +113,8 @@ fn push_routed_input<SL, IL>(
             snapshot_id,
             inputs: Vec::new(),
             conservative_bytes: 0,
+            apply_allocation_bytes: 0,
+            event_count: 0,
             snapshot_materialization_accounted: false,
         });
         batch_index
@@ -96,13 +122,14 @@ fn push_routed_input<SL, IL>(
     let batch = &mut batches[batch_index];
     if !batch.snapshot_materialization_accounted {
         if let Some(snapshot) = SL::materialize(snapshot_id, &input) {
-            batch.conservative_bytes =
-                batch.conservative_bytes.saturating_add(snapshot.conservative_size()).saturating_add(std::mem::size_of::<u64>() as u64);
+            batch.conservative_bytes = batch.conservative_bytes.saturating_add(checkpoint_conservative_size(&snapshot));
             batch.snapshot_materialization_accounted = true;
         }
     }
     batch.inputs.push(input);
     batch.conservative_bytes = batch.conservative_bytes.saturating_add(conservative_bytes);
+    batch.apply_allocation_bytes = batch.apply_allocation_bytes.saturating_add(apply_allocation_bytes);
+    batch.event_count += usize::from(is_event);
 }
 
 /// Test and benchmark access to production API grouping without exposing its internal batch type.

@@ -6,6 +6,13 @@ use crate::{ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, InputBatch, Input
 use super::storage::LocalSnapshotHistory;
 use super::HistoryInputs;
 
+pub(crate) fn checkpoint_conservative_size<S>(snapshot: &S) -> u64
+where
+    S: Snapshot,
+{
+    snapshot.conservative_size().saturating_add(size_of::<ContimeKey<S::Time>>() as u64).saturating_add(size_of::<u64>() as u64)
+}
+
 pub(super) fn first_key_at_time<T: ContimeTime>(time: T) -> ContimeKey<T> {
     ContimeKey { time, id: u128::MIN }
 }
@@ -79,7 +86,7 @@ pub(super) fn push_checkpoint<S>(
 where
     S: Snapshot,
 {
-    let bytes_delta = checkpoint.conservative_size() as i64 + size_of::<u64>() as i64;
+    let bytes_delta = checkpoint_conservative_size(&checkpoint) as i64;
     checkpoints.push_back((key, checkpoint, history_input_count));
     bytes_delta
 }
@@ -90,7 +97,7 @@ where
 {
     let mut bytes_delta = 0;
     for (_key, removed, _history_input_count) in checkpoints.drain(start..) {
-        bytes_delta -= removed.conservative_size() as i64 + size_of::<u64>() as i64;
+        bytes_delta -= checkpoint_conservative_size(&removed) as i64;
     }
     bytes_delta
 }

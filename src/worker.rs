@@ -10,7 +10,7 @@ use crossbeam_channel::{Receiver, Sender};
 use crate::batch::{group_inputs_by_snapshot, memory_full_rejections, total_conservative_bytes, SnapshotInputBatch};
 use crate::memory::MemoryTracker;
 use crate::rejection::merge_event_rejections;
-use crate::{ApplyWrapper, EventRejection, InputLanes, SnapshotHistory, SnapshotLanes};
+use crate::{ApplyWrapper, ContimeTime, EventRejection, EventRejectionReason, InputLanes, SnapshotHistory, SnapshotLanes};
 
 pub type SnapshotId = u128;
 
@@ -182,7 +182,11 @@ fn handle_worker<SL, IL, C>(
             }
             Ok(WorkerInbound::Inputs { snapshot_batches, conservative_bytes, completion }) => {
                 let existing_replay_bytes = snapshot_batches.iter().fold(0_u64, |total, batch| {
-                    total.saturating_add(history_by_id.get(&batch.snapshot_id).map_or(0, SnapshotHistory::conservative_replay_reservation))
+                    total.saturating_add(
+                        history_by_id
+                            .get(&batch.snapshot_id)
+                            .map_or(0, |history| history.conservative_replay_reservation(batch.apply_allocation_bytes)),
+                    )
                 });
                 let reservation_bytes = conservative_bytes.saturating_add(existing_replay_bytes);
                 if !memory.try_reserve(reservation_bytes) {
@@ -193,6 +197,15 @@ fn handle_worker<SL, IL, C>(
                 let mut actual_delta = 0_i64;
                 let mut rejections = Vec::new();
                 for batch in snapshot_batches {
+                    if let Some(stale_rejections) = stale_unseen_batch_rejections(
+                        history_by_id.contains_key(&batch.snapshot_id),
+                        &batch,
+                        current_time.clone(),
+                        lower_time_horizon_delta.clone(),
+                    ) {
+                        merge_event_rejections(&mut rejections, stale_rejections);
+                        continue;
+                    }
                     let history = match history_by_id.entry(batch.snapshot_id) {
                         Entry::Occupied(entry) => entry.into_mut(),
                         Entry::Vacant(entry) => {
@@ -227,6 +240,27 @@ fn handle_worker<SL, IL, C>(
     }
 }
 
+fn stale_unseen_batch_rejections<SL, IL>(
+    history_exists: bool,
+    batch: &SnapshotInputBatch<IL>,
+    current_time: SL::Time,
+    lower_time_horizon_delta: SL::Time,
+) -> Option<Vec<EventRejection>>
+where
+    SL: SnapshotLanes<Input = IL>,
+    IL: InputLanes<SL>,
+{
+    if history_exists {
+        return None;
+    }
+    let earliest_retained_time = current_time.saturating_sub(lower_time_horizon_delta);
+    batch
+        .inputs
+        .iter()
+        .all(|input| input.time() < earliest_retained_time.clone())
+        .then(|| batch.inputs.iter().map(|input| EventRejection::new(input.id(), EventRejectionReason::BeforeHistoryHorizon)).collect())
+}
+
 fn complete<T>(completion: Completion<T>, value: T) {
     if let Completion::Respond(response) = completion {
         let _ = response.send(value);
@@ -237,8 +271,9 @@ fn complete<T>(completion: Completion<T>, value: T) {
 mod tests {
     use crossbeam_channel::{bounded, TryRecvError};
 
-    use super::{complete, Completion};
-    use crate::{EventRejection, EventRejectionReason};
+    use super::{complete, stale_unseen_batch_rejections, Completion};
+    use crate::batch::group_inputs_by_snapshot;
+    use crate::{EventRejection, EventRejectionReason, TestEvent, TestInputLanes, TestSnapshotLanes};
 
     #[test]
     fn responding_completion_sends_exactly_one_batch_result() {
@@ -249,5 +284,22 @@ mod tests {
 
         assert_eq!(response_rx.recv().unwrap(), expected);
         assert_eq!(response_rx.try_recv(), Err(TryRecvError::Empty));
+    }
+
+    #[test]
+    fn stale_only_batch_for_unseen_snapshot_is_rejected_before_history_creation() {
+        let mut batches = group_inputs_by_snapshot::<TestSnapshotLanes, TestInputLanes, _>([
+            TestEvent::Positive(7, 49, 11, 1).into(),
+            TestEvent::Positive(7, 20, 12, 1).into(),
+        ]);
+        let batch = batches.pop().unwrap();
+
+        assert_eq!(
+            stale_unseen_batch_rejections(false, &batch, 100, 50),
+            Some(vec![
+                EventRejection::new(11, EventRejectionReason::BeforeHistoryHorizon),
+                EventRejection::new(12, EventRejectionReason::BeforeHistoryHorizon),
+            ])
+        );
     }
 }

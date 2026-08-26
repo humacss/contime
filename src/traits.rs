@@ -140,7 +140,9 @@ pub trait InputLanes<SL: Snapshot<Input = Self>>: Input<Time = SL::Time> + Clone
 
     /// Returns the apply-time allocation estimate for this routed input.
     /// Markers return zero because they have no snapshot-application behavior.
-    fn conservative_allocation_size(&self) -> u64;
+    fn conservative_allocation_size(&self) -> u64 {
+        0
+    }
 
     /// Applies the concrete event variants in `batch` to `snapshot` using the
     /// cumulative raw history input count represented by that batch.

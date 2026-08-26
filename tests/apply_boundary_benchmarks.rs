@@ -1,9 +1,54 @@
 use contime::{
-    EventRejection, EventRejectionReason, RouterApplyBenchmark, SnapshotBatchBenchmark, TestEvent, TestInputLanes, TestSnapshot,
-    TestSnapshotLanes, WorkerApplyBenchmark,
+    ContimeEvent, ContimeSnapshot, EventRejection, EventRejectionReason, RouterApplyBenchmark, SnapshotBatchBenchmark, TestEvent,
+    TestInputLanes, TestSnapshot, TestSnapshotLanes, WorkerApplyBenchmark,
 };
 
 const MEMORY_BUDGET_BYTES: u64 = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
+#[contime_event(id = self.event_id, time = self.time, bytes = 48)]
+pub struct MultiWorkerEvent {
+    event_id: u128,
+    time: i64,
+    left_snapshot_id: u128,
+    right_snapshot_id: u128,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, ContimeSnapshot)]
+#[contime_snapshot(
+    events = [MultiWorkerEvent],
+    id = [left_snapshot_id],
+    bytes = 32,
+    apply = {
+        self.applied += batch.events.len() as u64;
+    }
+)]
+struct LeftSnapshot {
+    left_snapshot_id: u128,
+    time: i64,
+    applied: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, ContimeSnapshot)]
+#[contime_snapshot(
+    events = [MultiWorkerEvent],
+    id = [right_snapshot_id],
+    bytes = 32,
+    apply = {
+        self.applied += batch.events.len() as u64;
+    }
+)]
+struct RightSnapshot {
+    right_snapshot_id: u128,
+    time: i64,
+    applied: u64,
+}
+
+contime::lanes! {
+    mod multi_worker_lanes;
+    snapshots [LeftSnapshot, RightSnapshot];
+    routes [MultiWorkerEvent => [LeftSnapshot, RightSnapshot]];
+}
 
 fn inputs() -> Vec<TestInputLanes> {
     (1..=3).map(|event_id| TestEvent::Positive(7, 10, event_id, 1).into()).collect()
@@ -54,6 +99,25 @@ fn router_boundary_reports_the_worker_that_loses_a_shared_reservation() {
     assert_eq!(rejections.len(), 1);
     assert_eq!(rejections[0].reason, EventRejectionReason::MemoryFull);
     let materialized = [router.snapshot_at(first_snapshot_id, 10).is_some(), router.snapshot_at(second_snapshot_id, 10).is_some()];
+    assert_eq!(materialized.into_iter().filter(|exists| *exists).count(), 1);
+}
+
+#[test]
+fn one_multi_route_event_reports_one_rejection_when_only_one_worker_applies_it() {
+    let estimate =
+        SnapshotBatchBenchmark::total_conservative_bytes::<multi_worker_lanes::SnapshotLanes, multi_worker_lanes::InputLanes, _>([
+            MultiWorkerEvent { event_id: 77, time: 10, left_snapshot_id: 1, right_snapshot_id: 2 }.into(),
+        ]);
+    assert_eq!(estimate % 2, 0, "the two symmetric snapshot routes must have equal estimates");
+
+    let router = RouterApplyBenchmark::<multi_worker_lanes::SnapshotLanes, multi_worker_lanes::InputLanes>::new(2, estimate / 2, 100);
+    let [left_snapshot_id, right_snapshot_id] = router.snapshot_ids_on_distinct_workers();
+    let event = MultiWorkerEvent { event_id: 77, time: 10, left_snapshot_id, right_snapshot_id };
+
+    let rejections = router.apply_snapshot_batches(router.prepare_snapshot_batches([event.into()]));
+
+    assert_eq!(rejections, vec![EventRejection::new(77, EventRejectionReason::MemoryFull)]);
+    let materialized = [router.snapshot_at(left_snapshot_id, 10).is_some(), router.snapshot_at(right_snapshot_id, 10).is_some()];
     assert_eq!(materialized.into_iter().filter(|exists| *exists).count(), 1);
 }
 
