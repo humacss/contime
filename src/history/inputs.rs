@@ -45,12 +45,21 @@ where
         (self.ordered.len(), self.late.len())
     }
 
+    pub fn latest_entry_key(&self) -> Option<(T, u128)> {
+        self.latest_key().map(|key| (key.time, key.id))
+    }
+
     pub fn entries(&self) -> impl Iterator<Item = (T, u128, &I)> {
         self.iter().map(|(key, input)| (key.time.clone(), key.id, input))
     }
 
     pub fn insert_batch(&mut self, inputs: Vec<I>) -> HistoryInsert<T> {
         self.insert_batch_with(inputs, |_| {})
+    }
+
+    pub fn prune_before_time(&mut self, time: T) -> (usize, u64) {
+        let pruned = self.prune_before(&ContimeKey { time, id: u128::MIN });
+        (pruned.count(), pruned.bytes())
     }
 
     pub(crate) fn insert_batch_with<F>(&mut self, inputs: Vec<I>, mut on_insert: F) -> HistoryInsert<T>
@@ -84,6 +93,7 @@ where
             }
         }
 
+        self.assert_invariants();
         inserted
     }
 
@@ -136,6 +146,7 @@ where
             pruned.record(&input);
         }
 
+        self.assert_invariants();
         pruned
     }
 
@@ -143,6 +154,19 @@ where
         let index = self.ordered.partition_point(|(key, _input)| key < target);
         self.ordered.get(index).is_some_and(|(key, _input)| key == target) || self.late.contains_key(target)
     }
+
+    #[cfg(debug_assertions)]
+    fn assert_invariants(&self) {
+        assert!(self.ordered.iter().zip(self.ordered.iter().skip(1)).all(|(left, right)| left.0 < right.0));
+        if let Some((ordered_tail, _input)) = self.ordered.back() {
+            assert!(self.late.keys().all(|late_key| late_key < ordered_tail));
+        }
+        assert_eq!(self.len(), self.iter().count());
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    fn assert_invariants(&self) {}
 }
 
 fn as_ref_bound<T>(bound: &Bound<T>) -> Bound<&T> {
