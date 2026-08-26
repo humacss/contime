@@ -178,6 +178,15 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         })
         .collect::<Vec<_>>();
 
+    let event_allocation_size_arms = routes
+        .iter()
+        .map(|route| {
+            let key = &route.key;
+            let event_ty = &route.event_ty;
+            quote! { Self::#key(event) => <#event_ty as ::contime::Event>::conservative_allocation_size(event), }
+        })
+        .collect::<Vec<_>>();
+
     let marker_id_arms = markers
         .iter()
         .map(|marker| {
@@ -391,6 +400,10 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         let variant = &marker.variant;
         quote! { Self::#variant(_) => false, }
     });
+    let marker_allocation_size_arms = markers.iter().map(|marker| {
+        let variant = &marker.variant;
+        quote! { Self::#variant(_) => 0, }
+    });
 
     let event_from_impls = routes
         .iter()
@@ -547,6 +560,13 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                     }
                 }
 
+                fn conservative_allocation_size(&self) -> u64 {
+                    match self {
+                        #( #event_allocation_size_arms )*
+                        #( #marker_allocation_size_arms )*
+                    }
+                }
+
                 fn apply_events(
                     snapshot: &mut SnapshotLanes,
                     batch: ::contime::InputBatch<'_, Self>,
@@ -578,6 +598,7 @@ fn expand_contime_event(input: DeriveInput) -> Result<TokenStream2> {
     let time = config.time.ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `time = ...`"))?;
     let time_type = config.time_type.unwrap_or_else(|| syn::parse_quote!(i64));
     let bytes = config.bytes.ok_or_else(|| Error::new(attr.span(), "`contime_event` requires `bytes = ...`"))?;
+    let allocation_bytes = config.allocation_bytes.unwrap_or_else(|| syn::parse_quote!(0));
 
     Ok(quote! {
         impl ::contime::Input for #name {
@@ -596,7 +617,11 @@ fn expand_contime_event(input: DeriveInput) -> Result<TokenStream2> {
             }
         }
 
-        impl ::contime::Event for #name {}
+        impl ::contime::Event for #name {
+            fn conservative_allocation_size(&self) -> u64 {
+                #allocation_bytes
+            }
+        }
     })
 }
 
@@ -676,6 +701,13 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         .map(|event| {
             let variant = trailing_ident(event)?;
             Ok(quote! { Self::#variant(event) => <#event as ::contime::Input>::conservative_size(event), })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let event_allocation_size_arms = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event)?;
+            Ok(quote! { Self::#variant(event) => <#event as ::contime::Event>::conservative_allocation_size(event), })
         })
         .collect::<Result<Vec<_>>>()?;
     let event_snapshot_id_arms = events
@@ -765,7 +797,13 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
             }
         }
 
-        impl #impl_generics ::contime::Event for #event_enum #type_generics #where_clause {}
+        impl #impl_generics ::contime::Event for #event_enum #type_generics #where_clause {
+            fn conservative_allocation_size(&self) -> u64 {
+                match self {
+                    #( #event_allocation_size_arms )*
+                }
+            }
+        }
 
         impl #impl_generics ::contime::SnapshotEvent<#name #type_generics> for #event_enum #type_generics #where_clause {
             fn snapshot_id(&self) -> u128 {
@@ -1049,6 +1087,7 @@ struct EventDeriveConfig {
     time: Option<Expr>,
     time_type: Option<Type>,
     bytes: Option<Expr>,
+    allocation_bytes: Option<Expr>,
 }
 
 struct SnapshotDeriveConfig {
@@ -1219,7 +1258,7 @@ impl From<NewRouteEntry> for RouteEntry {
 
 impl Parse for EventDeriveConfig {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut config = Self { id: None, time: None, time_type: None, bytes: None };
+        let mut config = Self { id: None, time: None, time_type: None, bytes: None, allocation_bytes: None };
         while !input.is_empty() {
             let key = input.parse::<Ident>()?;
             input.parse::<Token![=]>()?;
@@ -1228,6 +1267,7 @@ impl Parse for EventDeriveConfig {
                 "time" => config.time = Some(input.parse::<Expr>()?),
                 "time_type" => config.time_type = Some(input.parse::<Type>()?),
                 "bytes" => config.bytes = Some(input.parse::<Expr>()?),
+                "allocation_bytes" => config.allocation_bytes = Some(input.parse::<Expr>()?),
                 other => {
                     return Err(Error::new(key.span(), format!("unknown contime_event option `{other}`")));
                 }

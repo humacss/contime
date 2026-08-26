@@ -28,7 +28,13 @@ impl Input for TestEvent {
     }
 }
 
-impl Event for TestEvent {}
+impl Event for TestEvent {
+    fn conservative_allocation_size(&self) -> u64 {
+        // `TestSnapshot::apply_events` pushes one `i16`. A fresh `Vec<i16>`
+        // currently allocates capacity for four elements on its first push.
+        4 * std::mem::size_of::<i16>() as u64
+    }
+}
 
 impl SnapshotEvent<TestSnapshot> for TestEvent {
     fn snapshot_id(&self) -> u128 {

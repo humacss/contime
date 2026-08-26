@@ -41,7 +41,17 @@ pub trait Input: Send + Sync + Debug {
 }
 
 /// A temporal input with snapshot-application behavior.
-pub trait Event: Input {}
+pub trait Event: Input {
+    /// Returns a conservative upper bound for additional snapshot-state
+    /// allocation caused by applying this event.
+    ///
+    /// This is distinct from [`Input::conservative_size`], which describes the
+    /// retained event itself. Events that only update inline state allocate no
+    /// additional bytes.
+    fn conservative_allocation_size(&self) -> u64 {
+        0
+    }
+}
 
 /// A temporal input interpreted by an apply wrapper rather than a snapshot.
 pub trait Marker: Input {}
@@ -128,6 +138,10 @@ pub trait InputLanes<SL: Snapshot<Input = Self>>: Input<Time = SL::Time> + Clone
     /// Returns whether this input has snapshot-application behavior.
     fn is_event(&self) -> bool;
 
+    /// Returns the apply-time allocation estimate for this routed input.
+    /// Markers return zero because they have no snapshot-application behavior.
+    fn conservative_allocation_size(&self) -> u64;
+
     /// Applies the concrete event variants in `batch` to `snapshot` using the
     /// cumulative raw history input count represented by that batch.
     fn apply_events(snapshot: &mut SL, batch: InputBatch<'_, Self>, history_input_count: u64);
@@ -147,6 +161,10 @@ where
 
     fn is_event(&self) -> bool {
         true
+    }
+
+    fn conservative_allocation_size(&self) -> u64 {
+        <E as Event>::conservative_allocation_size(self)
     }
 
     fn apply_events(snapshot: &mut S, batch: InputBatch<'_, Self>, history_input_count: u64) {

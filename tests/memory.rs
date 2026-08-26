@@ -1,7 +1,26 @@
-use contime::{TestEvent, TestSnapshot, TestSnapshotContime};
+use contime::{ContimeError, EventRejection, EventRejectionReason, TestEvent, TestSnapshot, TestSnapshotContime};
 
 fn query_one(contime: &TestSnapshotContime, time: i64, snapshot_id: u128) -> TestSnapshot {
     contime.query_at(time, &[snapshot_id]).unwrap().pop().flatten().unwrap().into()
+}
+
+#[test]
+fn api_precheck_rejects_the_complete_apply_request() {
+    let contime = TestSnapshotContime::new(1, 1);
+    let rejections = contime.apply([TestEvent::Positive(1, 10, 10, 1), TestEvent::Positive(1, 10, 20, 1)].map(Into::into)).unwrap();
+
+    assert_eq!(
+        rejections,
+        vec![EventRejection::new(10, EventRejectionReason::MemoryFull), EventRejection::new(20, EventRejectionReason::MemoryFull),]
+    );
+    assert!(contime.query_at(10, &[1]).unwrap()[0].is_none());
+}
+
+#[test]
+fn api_precheck_returns_memory_full_error_for_send() {
+    let contime = TestSnapshotContime::new(1, 1);
+
+    assert!(matches!(contime.send([TestEvent::Positive(1, 10, 10, 1).into()]), Err(ContimeError::MemoryFull)));
 }
 
 #[test]

@@ -24,7 +24,11 @@ impl Input for ValueChanged {
     }
 }
 
-impl Event for ValueChanged {}
+impl Event for ValueChanged {
+    fn conservative_allocation_size(&self) -> u64 {
+        4 * size_of::<u128>() as u64
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ValueAt {

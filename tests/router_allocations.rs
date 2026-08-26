@@ -42,15 +42,16 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 fn one_worker_partition_uses_request_level_allocations() {
     let partitioner = RoutePartitionBenchmark::new(1);
     let inputs = (0..1_000).map(|event_id| TestEvent::Positive(7, 10, event_id, 1).into()).collect::<Vec<TestInputLanes>>();
+    let batches = partitioner.prepare::<TestSnapshotLanes, TestInputLanes, _>(inputs);
     ALLOCATIONS.store(0, Ordering::Relaxed);
     COUNTING.store(true, Ordering::Relaxed);
 
-    let (affected_workers, routed_events) = partitioner.partition::<TestSnapshotLanes, TestInputLanes, _>(inputs);
+    let (affected_workers, snapshot_batches) = partitioner.partition(batches);
 
     COUNTING.store(false, Ordering::Relaxed);
     let allocations = ALLOCATIONS.load(Ordering::Relaxed);
     println!("one-worker 1,000-event partition allocations: {allocations}");
     assert!(allocations <= 8, "router allocated {allocations} times for one 1,000-event worker batch");
     assert_eq!(affected_workers, 1);
-    assert_eq!(routed_events, 1_000);
+    assert_eq!(snapshot_batches, 1);
 }
