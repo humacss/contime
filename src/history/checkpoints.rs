@@ -1,9 +1,10 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::ops::Bound;
 
 use crate::{ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, InputBatch, InputLanes, Snapshot, SnapshotLanes};
 
 use super::storage::LocalSnapshotHistory;
+use super::HistoryInputs;
 
 pub(super) fn first_key_at_time<T: ContimeTime>(time: T) -> ContimeKey<T> {
     ContimeKey { time, id: u128::MIN }
@@ -305,7 +306,7 @@ where
 
 pub(super) fn apply_input_buckets<S, F>(
     snapshot_id: u128,
-    inputs: &BTreeMap<ContimeKey<S::Time>, S::Input>,
+    inputs: &HistoryInputs<S::Time, S::Input>,
     start: Bound<ContimeKey<S::Time>>,
     end: Bound<ContimeKey<S::Time>>,
     mut apply_bucket: F,
@@ -315,11 +316,12 @@ pub(super) fn apply_input_buckets<S, F>(
     F: FnMut(&ContimeKey<S::Time>, usize, usize, InputBatch<'_, S::Input>),
 {
     let mut input_iter = inputs.range((start, end)).peekable();
+    let mut input_bucket = Vec::new();
 
     while let Some((input_key, _input)) = input_iter.peek() {
         let bucket_time = input_key.time.clone();
         let mut bucket_last_key = ContimeKey { time: bucket_time.clone(), id: u128::MIN };
-        let mut input_bucket = Vec::new();
+        input_bucket.clear();
 
         while input_iter.peek().is_some_and(|(key, _)| key.time == bucket_time) {
             let (key, input) = input_iter.next().expect("peeked input must exist");
@@ -402,9 +404,7 @@ where
 
     let final_key = history
         .inputs
-        .range((Bound::Unbounded, Bound::Excluded(boundary.clone())))
-        .next_back()
-        .map(|(key, _input)| key.clone())
+        .latest_key_before(&boundary)
         .or_else(|| checkpoint_entry.map(|(key, _checkpoint, _history_input_count)| key.clone()))?;
 
     apply_input_buckets::<S, _>(

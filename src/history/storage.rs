@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 
-use crate::{ContimeKey, ContimeTime, Input, InputLanes, Snapshot, SnapshotLanes};
+use crate::{ContimeKey, ContimeTime, InputLanes, Snapshot, SnapshotLanes};
 
 use super::checkpoints::{get_checkpoint_at, get_checkpoint_at_with_context, get_checkpoint_before_with_context};
+use super::HistoryInputs;
 
 type SnapshotId = u128;
 
@@ -23,8 +24,8 @@ where
     pub checkpoints: VecDeque<(ContimeKey<S::Time>, S, u64)>,
     /// Checkpoint containing the accumulated state of inputs pruned before the horizon.
     pub(super) replay_anchor_key: Option<ContimeKey<S::Time>>,
-    /// Routed temporal inputs keyed by time and id.
-    pub inputs: BTreeMap<ContimeKey<S::Time>, S::Input>,
+    /// Routed temporal inputs exposed through representation-neutral ordered iteration.
+    pub inputs: HistoryInputs<S::Time, S::Input>,
     /// Interval between generated checkpoints during replay.
     pub checkpoint_interval: usize,
 
@@ -55,7 +56,7 @@ where
                 snapshot_lane_index: Some(snapshot_lane_index),
                 checkpoints,
                 replay_anchor_key: None,
-                inputs: BTreeMap::new(),
+                inputs: HistoryInputs::new(),
                 checkpoint_interval: CHECKPOINT_INTERVAL,
             },
             snapshot_size,
@@ -72,7 +73,7 @@ where
                 snapshot_lane_index: None,
                 checkpoints: VecDeque::new(),
                 replay_anchor_key: None,
-                inputs: BTreeMap::new(),
+                inputs: HistoryInputs::new(),
                 checkpoint_interval: CHECKPOINT_INTERVAL,
             },
             0,
@@ -121,11 +122,10 @@ where
             self.replay_anchor_key = Some(key);
         }
 
-        let kept_inputs = self.inputs.split_off(&drop_key);
-        for input in self.inputs.values() {
-            bytes_delta -= input.conservative_size() as i64;
-        }
-        self.inputs = kept_inputs;
+        let input_count_before_prune = self.inputs.len();
+        let pruned = self.inputs.prune_before(&drop_key);
+        debug_assert_eq!(input_count_before_prune - self.inputs.len(), pruned.count());
+        bytes_delta -= pruned.bytes() as i64;
 
         bytes_delta
     }
@@ -388,6 +388,31 @@ mod tests {
     }
 
     #[test]
+    fn ordered_then_late_history_replays_across_both_stores() {
+        let snapshot = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1_000);
+        apply_one(&mut history, TestEvent::Positive(1, 10, 10, 1));
+        apply_one(&mut history, TestEvent::Positive(1, 30, 30, 3));
+
+        apply_one(&mut history, TestEvent::Positive(1, 20, 20, 2));
+
+        assert_eq!(history.inputs.storage_counts(), (2, 1));
+        assert_eq!(history.snapshot_only_at(30).items, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn same_time_late_id_replays_the_complete_bucket_in_id_order() {
+        let snapshot = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1_000);
+        apply_one(&mut history, TestEvent::Positive(1, 10, 20, 2));
+
+        apply_one(&mut history, TestEvent::Negative(1, 10, 10, 1));
+
+        assert_eq!(history.inputs.storage_counts(), (1, 1));
+        assert_eq!(history.snapshot_only_at(10).items, vec![-1, 2]);
+    }
+
+    #[test]
     fn batch_after_apply_observes_final_bucket_state() {
         let snapshot = ContextSnapshot { id: 1, time: 0, sum: 0 };
         let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
@@ -539,7 +564,7 @@ mod tests {
         assert_eq!(anchor.sum, 15);
         assert_eq!(anchor.items, vec![5, 10]);
         assert_eq!(anchor.time, 35);
-        assert_eq!(history.inputs.keys().map(|key| key.time).collect::<Vec<_>>(), vec![45]);
+        assert_eq!(history.inputs.entries().map(|(time, _id, _input)| time).collect::<Vec<_>>(), vec![45]);
         assert_eq!(history.snapshot_only_at(45).items, vec![5, 10, 20]);
     }
 
@@ -585,6 +610,21 @@ mod tests {
         let delta = history.advance(120);
         assert!(delta < 0);
         assert_eq!(history.inputs.len(), 1); // only t=80 remains
+    }
+
+    #[test]
+    fn advance_prunes_ordered_and_late_inputs_after_folding_them_into_the_anchor() {
+        let base = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(base, 0, 0);
+        apply_one(&mut history, TestEvent::Positive(1, 10, 10, 1));
+        apply_one(&mut history, TestEvent::Positive(1, 30, 30, 3));
+        apply_one(&mut history, TestEvent::Positive(1, 20, 20, 2));
+        assert_eq!(history.inputs.storage_counts(), (2, 1));
+
+        history.advance(40);
+
+        assert!(history.inputs.is_empty());
+        assert_eq!(first_checkpoint(&history).expect("replay anchor").items, vec![1, 2, 3]);
     }
 
     #[test]

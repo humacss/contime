@@ -1,6 +1,4 @@
-use std::collections::btree_map::Entry;
-
-use crate::{ContimeKey, Input, InputBatch, InputLanes, Snapshot, SnapshotLanes};
+use crate::{ContimeKey, InputBatch, InputLanes, Snapshot, SnapshotLanes};
 
 use super::checkpoints::{
     apply_events_to_checkpoint, commit_applied_checkpoint, get_checkpoint_for_apply, AppliedCheckpoint, CheckpointForApply,
@@ -147,52 +145,34 @@ where
     }
 
     fn insert_input_batch(&mut self, inputs: Vec<S::Input>) -> InsertedInputBatch<S::Time> {
-        let latest_input_key_before_apply = self.latest_input_key();
-        let mut earliest_changed_time: Option<S::Time> = None;
-        let mut bytes_delta = 0;
-        let mut changed_event_count = 0usize;
-        let mut single_changed_event_key = None;
-        for input in inputs {
-            let input_time = Input::time(&input);
-            let input_key = ContimeKey::from_input(&input);
-            earliest_changed_time = Some(match earliest_changed_time {
-                Some(current) => current.min(input_time),
-                None => input_time,
-            });
-
-            let Entry::Vacant(entry) = self.inputs.entry(input_key.clone()) else { continue };
-
+        let snapshot_id = self.snapshot_id;
+        let snapshot_lane_index = &mut self.snapshot_lane_index;
+        let inserted = self.inputs.insert_batch_with(inputs, |input| {
             if input.is_event() {
-                let input_lane_index = S::input_lane_index(self.snapshot_id, &input).unwrap_or_else(|| {
-                    panic!("snapshot id {} received an event that cannot materialize its snapshot lane", self.snapshot_id)
-                });
-                match self.snapshot_lane_index {
-                    Some(snapshot_lane_index) if snapshot_lane_index != input_lane_index => {
-                        panic!("snapshot id {} received an event for a different snapshot lane", self.snapshot_id);
+                let input_lane_index = S::input_lane_index(snapshot_id, input)
+                    .unwrap_or_else(|| panic!("snapshot id {snapshot_id} received an event that cannot materialize its snapshot lane"));
+                match *snapshot_lane_index {
+                    Some(existing_lane_index) if existing_lane_index != input_lane_index => {
+                        panic!("snapshot id {snapshot_id} received an event for a different snapshot lane");
                     }
                     Some(_) => {}
-                    None => self.snapshot_lane_index = Some(input_lane_index),
+                    None => *snapshot_lane_index = Some(input_lane_index),
                 }
             }
-
-            bytes_delta += input.conservative_size() as i64;
-            entry.insert(input);
-            changed_event_count += 1;
-            single_changed_event_key = (changed_event_count == 1).then_some(input_key);
-        }
+        });
 
         InsertedInputBatch {
-            changed: changed_event_count != 0,
-            bytes_delta,
-            earliest_changed_time: earliest_changed_time.unwrap_or_default(),
-            latest_input_key_before_apply,
-            single_changed_input_key: single_changed_event_key,
-            changed_event_count,
+            changed: inserted.inserted_count != 0,
+            bytes_delta: inserted.bytes_delta,
+            earliest_changed_time: inserted.earliest_time.unwrap_or_default(),
+            latest_input_key_before_apply: inserted.latest_key_before,
+            single_changed_input_key: inserted.single_key,
+            changed_event_count: inserted.inserted_count,
         }
     }
 
     pub(super) fn latest_input_key(&self) -> Option<ContimeKey<S::Time>> {
-        self.inputs.keys().next_back().cloned()
+        self.inputs.latest_key()
     }
 }
 
