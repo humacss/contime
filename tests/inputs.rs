@@ -130,7 +130,6 @@ fn one_apply_call_batches_events_and_markers_through_the_same_input_lane() {
     assert_eq!(applied_batches.load(Ordering::Relaxed), 1, "one same-time input batch invoked the wrapper more than once");
     let snapshot: TestSnapshot = contime.query_at(10, &[1]).unwrap().pop().flatten().unwrap().into();
     assert_eq!(snapshot.sum, 0, "the marker did not suppress the event submitted in the same input batch");
-    assert_eq!(contime.inspect_inputs(..).unwrap().len(), 2, "unified inspection did not retain both temporal inputs");
 }
 
 #[test]
@@ -176,15 +175,6 @@ fn changed_payload_with_the_same_identity_is_a_noop() {
 
     let snapshot: TestSnapshot = contime.query_at(10, &[1]).unwrap().pop().flatten().unwrap().into();
     assert_eq!(snapshot.sum, 7, "a duplicate identity replaced the first canonical marker payload");
-    let inputs = contime.inspect_inputs(..).unwrap();
-    let inspected_marker = inputs
-        .iter()
-        .find_map(|entry| match &entry.input {
-            input_lanes::InputLanes::SuppressInput(marker) => Some(marker),
-            input_lanes::InputLanes::TestEvent(_) => None,
-        })
-        .expect("the retained marker input should remain inspectable");
-    assert_eq!(inspected_marker.event_id, 100, "inspection replaced the first canonical marker payload");
 }
 
 #[test]
@@ -197,12 +187,6 @@ fn event_and_marker_with_the_same_identity_keep_the_first_input() {
 
     let snapshot: TestSnapshot = contime.query_at(10, &[1]).unwrap().pop().flatten().unwrap().into();
     assert_eq!(snapshot.sum, 5, "a marker with an occupied identity replaced the canonical event");
-    let inputs = contime.inspect_inputs(..).unwrap();
-    assert_eq!(inputs.len(), 1, "an event and marker with one canonical identity were retained as separate inputs");
-    assert!(
-        matches!(inputs[0].input, input_lanes::InputLanes::TestEvent(_)),
-        "the first canonical input was not retained under the shared identity"
-    );
 }
 
 #[test]
@@ -214,7 +198,6 @@ fn plain_marker_creates_pending_history_without_materializing_a_snapshot() {
 
     let snapshot = contime.query_at(10, &[7]).unwrap().pop().flatten();
     assert!(snapshot.is_none(), "a marker-only history materialized a snapshot without an event");
-    assert_eq!(contime.inspect_inputs(..).unwrap().len(), 1, "the pending marker was not retained for later replay");
 }
 
 #[test]
@@ -279,18 +262,6 @@ fn default_apply_wrapper_ignores_plain_markers() {
 }
 
 #[test]
-fn input_inspection_returns_one_global_input_with_every_route() {
-    type DefaultInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes>;
-    let contime = DefaultInputContime::new(2, 100_000);
-
-    contime.apply([SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: vec![7, 3] }.into()]).unwrap();
-
-    let entries = contime.inspect_inputs(..).unwrap();
-    assert_eq!(entries.len(), 1, "one globally identified input was exposed once per route");
-    assert_eq!(entries[0].routed_snapshot_ids, vec![3, 7], "input inspection lost or misordered routed snapshot IDs");
-}
-
-#[test]
 fn stale_inputs_are_reported_while_valid_batch_inputs_apply() {
     type DefaultInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes>;
     let contime = DefaultInputContime::with_history_horizon(1, 100_000, 50);
@@ -304,21 +275,16 @@ fn stale_inputs_are_reported_while_valid_batch_inputs_apply() {
     let snapshot: TestSnapshot =
         contime.query_at(70, &[1]).unwrap().pop().flatten().expect("the valid input should materialize the snapshot").into();
     assert_eq!(snapshot.sum, 7);
-    let inputs = contime.inspect_inputs(..).unwrap();
-    assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0].input.id(), 300);
 }
 
 #[test]
-fn unrouted_inputs_do_not_consume_the_memory_budget_or_enter_history() {
+fn unrouted_inputs_do_not_consume_the_memory_budget() {
     type DefaultInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes>;
     let contime = DefaultInputContime::new(1, 1);
 
     contime
         .apply([SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: Vec::new() }.into()])
         .expect("an unrouted input should be discarded before memory accounting");
-
-    assert!(contime.inspect_inputs(..).unwrap().is_empty(), "an unrouted input entered worker history");
 }
 
 #[test]
@@ -330,8 +296,6 @@ fn unrouted_inputs_are_discarded_before_history_horizon_validation() {
     contime
         .apply([SuppressInput { id: 1_000, time: 49, event_id: 100, snapshot_ids: Vec::new() }.into()])
         .expect("an unrouted input should be discarded before horizon validation");
-
-    assert!(contime.inspect_inputs(..).unwrap().is_empty(), "an unrouted historical input entered worker history");
 }
 
 #[test]

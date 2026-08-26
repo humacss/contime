@@ -39,20 +39,6 @@ fn query_dispatch_returns_one_affected_worker() {
 }
 
 #[test]
-fn inspection_dispatch_returns_every_worker() {
-    let router = Router::<TestSnapshotLanes, TestInputLanes>::new(8, 1_000_000);
-    let (response_tx, response_rx) = unbounded();
-
-    let affected = router.dispatch_inspection(std::ops::Bound::Unbounded, std::ops::Bound::Unbounded, &response_tx).unwrap();
-
-    assert_eq!(affected, 8);
-    for _ in 0..8 {
-        assert!(response_rx.recv().unwrap().is_empty());
-    }
-    assert!(response_rx.try_recv().is_err());
-}
-
-#[test]
 fn advance_dispatch_returns_every_worker() {
     let router = Router::<TestSnapshotLanes, TestInputLanes>::new(8, 1_000_000);
     let (response_tx, response_rx) = unbounded();

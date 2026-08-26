@@ -1,5 +1,4 @@
 use std::marker::PhantomData;
-use std::ops::Bound;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
@@ -12,7 +11,7 @@ pub use partition::RoutePartitionBenchmark;
 use partition::RoutePartitioner;
 
 use crate::worker::Completion;
-use crate::{ApplyWrapper, EventRejection, InputJournalEntry, InputLanes, SnapshotLanes, Worker, WorkerInbound};
+use crate::{ApplyWrapper, EventRejection, InputLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
 pub enum RouterError {
@@ -203,21 +202,6 @@ where
             affected_workers += 1;
         }
         Ok(affected_workers)
-    }
-
-    pub(crate) fn dispatch_inspection(
-        &self,
-        start: Bound<SL::Time>,
-        end: Bound<SL::Time>,
-        response: &Sender<Vec<InputJournalEntry<IL>>>,
-    ) -> Result<usize, RouterError> {
-        for worker in &self.workers {
-            worker
-                .worker_inbound_tx
-                .send(WorkerInbound::InputsInRange { start: start.clone(), end: end.clone(), reply: response.clone() })
-                .map_err(|_| RouterError::WorkerUnavailable)?;
-        }
-        Ok(self.workers.len())
     }
 
     pub(crate) fn dispatch_query(
