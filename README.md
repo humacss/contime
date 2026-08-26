@@ -61,9 +61,10 @@ B-tree. Replay merges the two already-ordered sources by `(time, input ID)`, so
 late events preserve deterministic history without making normal ordered
 admission pay for a tree insertion.
 
-Input identity is global and independent of timestamps while an input is
-retained. Reusing a retained ID is therefore an idempotent no-op even if the new
-input carries another time or payload. The retained-ID set is pruned with the
+Input identity is independent of timestamps while an input is retained.
+Each affected worker owns identity and horizon admission for its histories;
+reusing a retained ID is therefore an idempotent no-op even if the new input
+carries another time or payload. Worker identity sets are pruned with the
 history horizon, after which the forgotten ID may be admitted again.
 
 `LocalSnapshotHistory::inputs` is a representation-neutral `HistoryInputs`
@@ -87,11 +88,19 @@ default before normal replay begins.
 
 ### Flow
 
-When an `Event` input arrives from the user, it is sent to the `Router`.
-
-The `Router` extracts only the `snapshot_id` from the input, hashes it, and routes everything to the correct `Worker`.
+When an `Input` arrives, the `Router` visits its `snapshot_id` routes, hashes
+each ID, partitions one request-level batch per affected worker, and dispatches
+those batches. Route extraction uses a visitor and creates no snapshot-ID
+vector per input. The router does not admit inputs, inspect history, merge
+results, receive worker messages, or wait.
 
 Each `Worker` maintains a unique set of `snapshot_id`s and works in a dedicated thread running lockless code.
+
+Workers own retained input identity, history-horizon checks, and memory
+admission. A worker responds once after processing the complete batch for a
+synchronous request. `Contime` owns request-scoped response channels and merges
+worker results directly; concurrent synchronous calls therefore cannot consume
+one another's responses.
 
 A worker history remains pending while it contains only markers. Its first applicable event
 materializes the statically generated snapshot-lane variant inside the history. A snapshot id
@@ -112,6 +121,16 @@ The public API is small. In practice you do five things:
 3. Generate `SnapshotLanes`, `InputLanes`, and a typed `Contime` alias with `contime::lanes!`.
 4. Create a `Contime` instance with a worker count and memory budget.
 5. Apply inputs, optionally advance the retained history horizon with `advance_to`, then query state with `query_at` or inspect retained original inputs with `inspect_inputs`.
+
+`send` is fire-and-forget after worker enqueue and returns
+`Result<(), ContimeError>`. `apply` waits only for workers affected by its input
+batch and returns `Result<Vec<EventRejection>, ContimeError>`. An empty vector
+means every affected worker accepted or idempotently ignored the inputs.
+Rejections contain exactly `event_id` and `reason`; the current reasons are
+`BeforeHistoryHorizon` and `MemoryFull`. Identical `(event_id, reason)` pairs
+from several workers are returned once, while different reasons for one event
+remain distinct. `Contime` also owns query ordering, input-inspection merging,
+current time, and advancement completion waits.
 
 Advanced integrations may also add marker variants to the generated
 `InputLanes`. Markers are opaque temporal records routed into the same replay
@@ -312,6 +331,59 @@ macOS 26.3.1 (25D771280a), with rustc 1.90.0 and the optimized benchmark
 profile. Every interval is Criterion's exact `[low estimate high]` result from
 20 samples. The “before” run used the same benchmark harness immediately before
 the hybrid history implementation; the “after” run used this implementation.
+
+### Router and API boundary
+
+These isolated measurements were collected on 2026-08-26 on an Apple M3 Pro,
+macOS 26.3.1 (25D771280a), with rustc 1.90.0 and the optimized benchmark
+profile. Every interval below is Criterion's exact `[low estimate high]` result
+from 30 samples.
+
+The partition cases construct inputs outside the timed region and run the exact
+partitioner used by production dispatch. The multi-target fixture routes every
+input to three snapshot IDs. The enqueue cases time one already-built vector
+being sent through the same crossbeam channel primitive used by workers; vector
+construction, partitioning, worker replay, and consumer-side destruction are
+excluded. API completion creates one request channel, supplies the named count
+of empty worker rejection vectors, receives them, and performs the production
+aggregation path. It excludes routing, worker scheduling, admission, history,
+and replay.
+
+| Boundary | Shape | Count | Time |
+| --- | --- | ---: | ---: |
+| Partition | Single target, one worker | 1 | `[103.35 ns 103.67 ns 104.03 ns]` |
+| Partition | Single target, one worker | 100 | `[680.37 ns 681.59 ns 682.67 ns]` |
+| Partition | Single target, one worker | 1,000 | `[6.8081 µs 6.8701 µs 6.9583 µs]` |
+| Partition | Single target, eight workers | 1 | `[293.70 ns 294.71 ns 295.60 ns]` |
+| Partition | Single target, eight workers | 100 | `[1.2563 µs 1.2616 µs 1.2653 µs]` |
+| Partition | Single target, eight workers | 1,000 | `[7.8877 µs 7.9062 µs 7.9229 µs]` |
+| Partition | Three targets, eight workers | 1 | `[307.23 ns 308.01 ns 308.60 ns]` |
+| Partition | Three targets, eight workers | 100 | `[3.3050 µs 3.3095 µs 3.3136 µs]` |
+| Partition | Three targets, eight workers | 1,000 | `[32.076 µs 32.149 µs 32.215 µs]` |
+| Enqueue | One worker message | 1 | `[9.5300 ns 9.6141 ns 9.6736 ns]` |
+| Enqueue | One worker message | 100 | `[10.142 ns 10.834 ns 11.705 ns]` |
+| Enqueue | One worker message | 1,000 | `[9.3010 ns 9.5532 ns 9.8233 ns]` |
+| API completion | Empty rejection vectors | 1 worker | `[149.61 ns 150.07 ns 150.61 ns]` |
+| API completion | Empty rejection vectors | 2 workers | `[159.98 ns 160.75 ns 161.34 ns]` |
+| API completion | Empty rejection vectors | 8 workers | `[241.07 ns 241.64 ns 242.24 ns]` |
+
+The counting-allocator regression reports exactly 3 allocations for a
+1,000-event, one-worker partition: request-level worker buckets and one reused
+route scratch buffer. It detects a return to per-input snapshot-ID or
+worker-index vectors.
+
+Reproduce these boundaries with:
+
+```bash
+cargo test --test router_allocations -- --nocapture --test-threads=1
+cargo bench --bench router -- router_partition --sample-size 30
+cargo bench --bench router -- router_enqueue --sample-size 30
+cargo bench --bench router -- api_completion --sample-size 30
+```
+
+The historical measurements below use 20 samples and cover different
+boundaries. They should not be compared directly with the isolated router
+numbers as though they measured the same work.
 
 | Boundary | Inputs | Before | After |
 | --- | ---: | ---: | ---: |
