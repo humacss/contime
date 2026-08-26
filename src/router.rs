@@ -8,7 +8,7 @@ use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 
 use crate::api::merge_event_rejections;
-use crate::worker::WorkerInput;
+use crate::worker::{Completion, WorkerInput};
 use crate::{
     ApplyWrapper, ContimeKey, ContimeTime, EventRejection, EventRejectionReason, Input, InputJournalEntry, InputLanes, SnapshotLanes,
     Worker, WorkerInbound,
@@ -190,6 +190,7 @@ where
     {
         let (worker_inputs, rejections) = self.route_inputs(inputs)?;
         let mut replies = Vec::new();
+        let mut merged = Vec::new();
 
         for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
             if inputs.is_empty() {
@@ -198,15 +199,15 @@ where
             let (tx, rx) = bounded(1);
             self.workers[worker_index]
                 .worker_inbound_tx
-                .send(WorkerInbound::Inputs { inputs, reply: tx })
+                .send(WorkerInbound::Inputs { inputs, completion: Completion::Respond(tx) })
                 .map_err(|_| RouterError::Error)?;
             replies.push(rx);
         }
 
         for reply in replies {
-            reply.recv().map_err(|_| RouterError::Error)?;
+            let worker_rejections = reply.recv().map_err(|_| RouterError::Error)?;
+            merge_event_rejections(&mut merged, worker_rejections);
         }
-        let mut merged = Vec::new();
         merge_event_rejections(&mut merged, rejections);
         Ok(merged)
     }
@@ -220,10 +221,9 @@ where
             if inputs.is_empty() {
                 continue;
             }
-            let (tx, _rx) = bounded(1);
             self.workers[worker_index]
                 .worker_inbound_tx
-                .send(WorkerInbound::Inputs { inputs, reply: tx })
+                .send(WorkerInbound::Inputs { inputs, completion: Completion::None })
                 .map_err(|_| RouterError::Error)?;
         }
         Ok(())
