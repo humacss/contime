@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use crossbeam_channel::{unbounded, Receiver};
 
+use crate::memory::MemoryTracker;
 use crate::rejection::merge_event_rejections;
 use crate::{ApplyWrapper, EventRejection, InputLanes, Router, RouterError, SnapshotLanes};
 
@@ -57,6 +58,8 @@ where
     C: ApplyWrapper<SL>,
 {
     router: Router<SL, IL, C, G>,
+    #[allow(dead_code)] // Used by API admission in the snapshot-batched pipeline task.
+    memory: MemoryTracker,
     current_time: RwLock<SL::Time>,
     apply_context: Option<C>,
     global_context: Arc<G>,
@@ -70,8 +73,10 @@ where
 {
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
         let router = Router::<SL, IL>::new(worker_count, memory_budget_bytes);
+        let memory = router.memory_tracker();
         Self {
             router,
+            memory,
             current_time: RwLock::new(SL::Time::default()),
             apply_context: Some(()),
             global_context: Arc::new(()),
@@ -81,8 +86,10 @@ where
 
     pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: SL::Time) -> Self {
         let router = Router::<SL, IL>::with_history_horizon(worker_count, memory_budget_bytes, lower_time_horizon_delta);
+        let memory = router.memory_tracker();
         Self {
             router,
+            memory,
             current_time: RwLock::new(SL::Time::default()),
             apply_context: Some(()),
             global_context: Arc::new(()),
@@ -99,8 +106,10 @@ where
 {
     pub fn new_with_apply_context(worker_count: usize, memory_budget_bytes: u64, apply_context: C) -> Self {
         let router = Router::<SL, IL, C>::new_with_apply_context(worker_count, memory_budget_bytes, apply_context.clone());
+        let memory = router.memory_tracker();
         Self {
             router,
+            memory,
             current_time: RwLock::new(SL::Time::default()),
             apply_context: Some(apply_context),
             global_context: Arc::new(()),
@@ -120,8 +129,10 @@ where
             lower_time_horizon_delta,
             apply_context.clone(),
         );
+        let memory = router.memory_tracker();
         Self {
             router,
+            memory,
             current_time: RwLock::new(SL::Time::default()),
             apply_context: Some(apply_context),
             global_context: Arc::new(()),
@@ -193,8 +204,9 @@ where
             global_context,
             make_apply_context,
         );
+        let memory = router.memory_tracker();
         let global_context = router.global_context();
-        Self { router, current_time: RwLock::new(SL::Time::default()), apply_context: None, global_context, _context: PhantomData }
+        Self { router, memory, current_time: RwLock::new(SL::Time::default()), apply_context: None, global_context, _context: PhantomData }
     }
 
     pub fn global_context(&self) -> Arc<G> {

@@ -45,6 +45,7 @@ mod api;
 mod batch;
 mod history;
 mod key;
+mod memory;
 mod rejection;
 mod router;
 mod time;

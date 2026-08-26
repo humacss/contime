@@ -1,6 +1,5 @@
 use std::collections::hash_map::Entry;
 use std::marker::PhantomData;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -8,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use ahash::{AHashMap, RandomState};
 use crossbeam_channel::{Receiver, Sender};
 
+use crate::memory::MemoryTracker;
 use crate::{ApplyWrapper, EventRejection, InputLanes, SnapshotHistory, SnapshotLanes};
 
 mod admission;
@@ -91,16 +91,14 @@ where
         _worker_index: usize,
         _worker_txs: Arc<Vec<Sender<WorkerInbound<SL, IL>>>>,
         _hasher: RandomState,
-        memory_budget: Arc<AtomicU64>,
-        memory_usage: Arc<AtomicU64>,
+        memory: MemoryTracker,
         lower_time_horizon_delta: SL::Time,
         apply_context: C,
     ) -> Self {
         let is_running = Arc::new(AtomicBool::new(true));
         let worker_running = Arc::clone(&is_running);
-        let worker_memory_usage = Arc::clone(&memory_usage);
         let thread = thread::spawn(move || {
-            handle_worker(worker_running, worker_inbound_rx, memory_budget, worker_memory_usage, lower_time_horizon_delta, apply_context);
+            handle_worker(worker_running, worker_inbound_rx, memory, lower_time_horizon_delta, apply_context);
         });
 
         Self { worker_inbound_tx, threads: vec![thread], is_running, _context: PhantomData }
@@ -121,8 +119,7 @@ where
             0,
             worker_txs,
             RandomState::new(),
-            Arc::new(AtomicU64::new(memory_budget_bytes)),
-            Arc::new(AtomicU64::new(0)),
+            MemoryTracker::new(memory_budget_bytes),
             lower_time_horizon_delta,
             (),
         );
@@ -176,21 +173,10 @@ where
     }
 }
 
-fn fetch_saturating_add_signed(atomic: &Arc<AtomicU64>, delta: i64, order: Ordering) {
-    loop {
-        let current = atomic.load(order);
-        let new_value = if delta >= 0 { current.saturating_add(delta as u64) } else { current.saturating_sub((-delta) as u64) };
-        if atomic.compare_exchange_weak(current, new_value, order, Ordering::Relaxed).is_ok() {
-            break;
-        }
-    }
-}
-
 fn handle_worker<SL, IL, C>(
     is_running: Arc<AtomicBool>,
     worker_inbound_rx: Receiver<WorkerInbound<SL, IL>>,
-    memory_budget: Arc<AtomicU64>,
-    memory_usage: Arc<AtomicU64>,
+    memory: MemoryTracker,
     lower_time_horizon_delta: SL::Time,
     mut apply_context: C,
 ) where
@@ -209,18 +195,18 @@ fn handle_worker<SL, IL, C>(
                 let identity_bytes_removed = admission.advance_to(new_time.clone());
                 for history in history_by_id.values_mut() {
                     let bytes_delta = history.advance_with_context(new_time.clone(), &mut apply_context);
-                    fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed);
+                    memory.apply_delta(bytes_delta);
                 }
-                fetch_saturating_add_signed(&memory_usage, -(identity_bytes_removed as i64), Ordering::Relaxed);
+                memory.apply_delta(-(identity_bytes_removed as i64));
                 let _ = reply.send(());
             }
             Ok(WorkerInbound::Inputs { inputs, completion }) => {
-                let admitted = admission.admit(inputs, &memory_budget, &memory_usage);
+                let admitted = admission.admit(inputs, &memory);
                 let history_bytes =
                     apply_inputs_to_histories(&mut history_by_id, lower_time_horizon_delta.clone(), &mut apply_context, admitted.inputs);
                 let actual_bytes = (admitted.identity_bytes as i64).saturating_add(history_bytes);
                 let reconciliation = actual_bytes.saturating_sub(admitted.reserved_bytes as i64);
-                fetch_saturating_add_signed(&memory_usage, reconciliation, Ordering::Relaxed);
+                memory.apply_delta(reconciliation);
                 complete(completion, admitted.rejections);
             }
             Ok(WorkerInbound::SnapshotsAt { snapshot_requests, time, reply }) => {
