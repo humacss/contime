@@ -193,7 +193,11 @@ fn derived_snapshot_compaction_is_delegated_through_generated_lanes() {
 fn derived_event_route_initializes_only_snapshot_identity() {
     let input = derived_lanes::InputLanes::from(OnDerivedValueChanged { event_id: 10, entity_id: 7, time: 5, value: 99 });
 
-    let snapshot_ids = <derived_lanes::InputLanes as contime::InputLanes<derived_lanes::SnapshotLanes>>::snapshot_ids(&input);
+    let mut snapshot_ids = Vec::new();
+    <derived_lanes::InputLanes as contime::InputLanes<derived_lanes::SnapshotLanes>>::visit_snapshot_ids(&input, &mut |snapshot_id| {
+        snapshot_ids.push(snapshot_id);
+    });
+    assert_eq!(snapshot_ids, vec![7]);
     let snapshot: DerivedValueAt = <derived_lanes::SnapshotLanes as contime::SnapshotLanes>::materialize(snapshot_ids[0], &input)
         .expect("derived event should materialize its snapshot lane")
         .into();

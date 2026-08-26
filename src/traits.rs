@@ -110,16 +110,20 @@ where
 
 /// Routes a plain marker through a generated snapshot lane universe.
 pub trait InputRoute {
-    /// Returns the snapshot ids whose histories should retain this marker.
-    /// An empty result discards the marker before horizon validation or memory accounting.
-    fn snapshot_ids(&self) -> Vec<u128>;
+    /// Visits the snapshot ids whose histories should retain this marker.
+    /// Visiting no ids discards the marker before horizon validation or memory accounting.
+    fn visit_snapshot_ids<F>(&self, visit: &mut F)
+    where
+        F: FnMut(u128);
 }
 
 /// The generated union of every temporal input accepted by one ConTime instance.
 pub trait InputLanes<SL: Snapshot<Input = Self>>: Input<Time = SL::Time> + Clone {
-    /// Returns the snapshot ids whose histories should retain this input.
-    /// An empty result discards the input before horizon validation or memory accounting.
-    fn snapshot_ids(&self) -> Vec<u128>;
+    /// Visits the snapshot ids whose histories should retain this input.
+    /// Visiting no ids discards the input before horizon validation or memory accounting.
+    fn visit_snapshot_ids<F>(&self, visit: &mut F)
+    where
+        F: FnMut(u128);
 
     /// Returns whether this input has snapshot-application behavior.
     fn is_event(&self) -> bool;
@@ -134,8 +138,11 @@ where
     S: Snapshot<Input = E> + ApplyEvents<E> + Default,
     E: Event<Time = S::Time> + SnapshotEvent<S> + Clone,
 {
-    fn snapshot_ids(&self) -> Vec<u128> {
-        vec![self.snapshot_id()]
+    fn visit_snapshot_ids<F>(&self, visit: &mut F)
+    where
+        F: FnMut(u128),
+    {
+        visit(self.snapshot_id());
     }
 
     fn is_event(&self) -> bool {

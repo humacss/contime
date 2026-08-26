@@ -44,9 +44,26 @@ contime::lanes! {
 }
 
 impl InputRoute for SuppressInput {
-    fn snapshot_ids(&self) -> Vec<u128> {
-        self.snapshot_ids.clone()
+    fn visit_snapshot_ids<F>(&self, visit: &mut F)
+    where
+        F: FnMut(u128),
+    {
+        for &snapshot_id in &self.snapshot_ids {
+            visit(snapshot_id);
+        }
     }
+}
+
+#[test]
+fn marker_route_visitor_preserves_dynamic_order_and_empty_routes() {
+    let routed = SuppressInput { id: 1, time: 10, event_id: 2, snapshot_ids: vec![7, 3] };
+    let mut visited = Vec::new();
+    <SuppressInput as InputRoute>::visit_snapshot_ids(&routed, &mut |snapshot_id| visited.push(snapshot_id));
+    assert_eq!(visited, vec![7, 3]);
+
+    let unrouted = SuppressInput { id: 3, time: 10, event_id: 4, snapshot_ids: Vec::new() };
+    <SuppressInput as InputRoute>::visit_snapshot_ids(&unrouted, &mut |snapshot_id| visited.push(snapshot_id));
+    assert_eq!(visited, vec![7, 3]);
 }
 
 #[derive(Clone)]

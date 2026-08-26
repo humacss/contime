@@ -111,8 +111,11 @@ impl Input for SuppressEvent {
 impl Marker for SuppressEvent {}
 
 impl InputRoute for SuppressEvent {
-    fn snapshot_ids(&self) -> Vec<u128> {
-        vec![self.snapshot_id]
+    fn visit_snapshot_ids<F>(&self, visit: &mut F)
+    where
+        F: FnMut(u128),
+    {
+        visit(self.snapshot_id);
     }
 }
 

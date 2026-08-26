@@ -409,9 +409,13 @@ fn repeated_route_keys_merge_targets_across_fragments() {
 #[test]
 fn merged_event_materializes_each_foreign_target_identity() {
     let event = merged_route_lanes::InputLanes::from(OnSharedValueChanged { event_id: 14, time: 8, entity_id: 2, value: 34 });
-    let snapshot_ids = <merged_route_lanes::InputLanes as contime::InputLanes<merged_route_lanes::SnapshotLanes>>::snapshot_ids(&event);
+    let mut snapshot_ids = Vec::new();
+    <merged_route_lanes::InputLanes as contime::InputLanes<merged_route_lanes::SnapshotLanes>>::visit_snapshot_ids(
+        &event,
+        &mut |snapshot_id| snapshot_ids.push(snapshot_id),
+    );
 
-    assert_eq!(snapshot_ids.len(), 2, "merged event did not produce one route per target snapshot type");
+    assert_eq!(snapshot_ids, vec![30_002, 40_002], "merged event did not visit target snapshot types in declaration order");
     for snapshot_id in snapshot_ids {
         let snapshot = <merged_route_lanes::SnapshotLanes as contime::SnapshotLanes>::materialize(snapshot_id, &event)
             .expect("event should materialize its routed snapshot lane");
