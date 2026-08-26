@@ -370,17 +370,17 @@ Each row removes exactly one outer subsystem:
 
 | Measured entry point | Total time | Time per event | Approximate cost added over the next row |
 | --- | ---: | ---: | ---: |
-| Public API | `[64.703 µs 65.048 µs 65.530 µs]` | `65.048 ns` | `~9.625 µs` grouping, API completion, and result merge |
-| Router | `[55.322 µs 55.423 µs 55.529 µs]` | `55.423 ns` | not separable from worker at this resolution |
-| Worker | `[55.087 µs 55.247 µs 55.437 µs]` | `55.247 ns` | `~13.357 µs` worker message, reservation, lookup, and dispatch |
-| Snapshot history | `[41.696 µs 41.890 µs 42.173 µs]` | `41.890 ns` | direct history baseline |
+| Public API | `[64.473 µs 64.929 µs 65.531 µs]` | `64.929 ns` | `~9.253 µs` grouping, API completion, and result merge |
+| Router | `[55.431 µs 55.676 µs 56.007 µs]` | `55.676 ns` | not separable from worker at this resolution |
+| Worker | `[55.301 µs 55.624 µs 56.084 µs]` | `55.624 ns` | `~13.541 µs` worker message, reservation, lookup, and dispatch |
+| Snapshot history | `[41.963 µs 42.083 µs 42.164 µs]` | `42.083 ns` | direct history baseline |
 
 The approximate costs subtract Criterion point estimates. They are diagnostic,
 not independent measurements. Router and worker confidence intervals overlap,
-so their `176 ns` point-estimate difference is not separable from scheduling
-noise. The largest remaining outer-layer residual is the `~13.357 µs` between
+so their `52 ns` point-estimate difference is not separable from scheduling
+noise. The largest remaining outer-layer residual is the `~13.541 µs` between
 worker entry and direct history entry; the history itself remains the dominant
-part of the full `65.048 µs` API round trip.
+part of the full `64.929 µs` API round trip.
 
 Reproduce the 30-sample stack with:
 
