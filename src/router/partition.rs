@@ -1,7 +1,12 @@
 use ahash::RandomState;
 
-use crate::worker::WorkerInput;
+use crate::batch::{group_inputs_by_snapshot, SnapshotInputBatch};
 use crate::{InputLanes, SnapshotLanes};
+
+pub(crate) struct WorkerInputBatch<IL> {
+    pub(crate) snapshot_batches: Vec<SnapshotInputBatch<IL>>,
+    pub(crate) conservative_bytes: u64,
+}
 
 pub(crate) struct RoutePartitioner {
     worker_count: usize,
@@ -22,38 +27,21 @@ impl RoutePartitioner {
         self.hasher.hash_one(snapshot_id) as usize % self.worker_count
     }
 
-    pub(crate) fn partition<SL, IL, I>(&self, inputs: I) -> Vec<Vec<WorkerInput<IL>>>
-    where
-        SL: SnapshotLanes<Input = IL>,
-        IL: InputLanes<SL>,
-        I: IntoIterator<Item = IL>,
-    {
-        let inputs = inputs.into_iter();
-        let input_capacity = inputs.size_hint().0;
-        let bucket_capacity = input_capacity.div_ceil(self.worker_count);
-        let mut worker_inputs = Vec::with_capacity(self.worker_count);
-        worker_inputs.resize_with(self.worker_count, || Vec::with_capacity(bucket_capacity));
-        let mut routed_snapshots = Vec::<(u128, usize)>::new();
+    pub(crate) fn partition_snapshot_batches<IL>(&self, batches: Vec<SnapshotInputBatch<IL>>) -> Vec<WorkerInputBatch<IL>> {
+        let batch_capacity = batches.len().div_ceil(self.worker_count);
+        let mut worker_batches = Vec::with_capacity(self.worker_count);
+        worker_batches.resize_with(self.worker_count, || WorkerInputBatch {
+            snapshot_batches: Vec::with_capacity(batch_capacity),
+            conservative_bytes: 0,
+        });
 
-        for input in inputs {
-            routed_snapshots.clear();
-            input.visit_snapshot_ids(&mut |snapshot_id| routed_snapshots.push((snapshot_id, self.worker_index(snapshot_id))));
-            if routed_snapshots.is_empty() {
-                continue;
-            }
-            let route_count = routed_snapshots.len();
-            let mut input = Some(input);
-            for (route_position, &(snapshot_id, worker_index)) in routed_snapshots.iter().enumerate() {
-                let routed_input = if route_position + 1 == route_count {
-                    input.take().expect("the final route owns the input")
-                } else {
-                    input.as_ref().expect("earlier routes retain the input").clone()
-                };
-                worker_inputs[worker_index].push(WorkerInput { snapshot_id, input: routed_input });
-            }
+        for batch in batches {
+            let worker = &mut worker_batches[self.worker_index(batch.snapshot_id)];
+            worker.conservative_bytes = worker.conservative_bytes.saturating_add(batch.conservative_bytes);
+            worker.snapshot_batches.push(batch);
         }
 
-        worker_inputs
+        worker_batches
     }
 }
 
@@ -68,15 +56,19 @@ impl RoutePartitionBenchmark {
         Self { partitioner: RoutePartitioner::new(worker_count) }
     }
 
-    pub fn partition<SL, IL, I>(&self, inputs: I) -> (usize, usize)
+    pub fn prepare<SL, IL, I>(&self, inputs: I) -> Vec<SnapshotInputBatch<IL>>
     where
         SL: SnapshotLanes<Input = IL>,
         IL: InputLanes<SL>,
         I: IntoIterator<Item = IL>,
     {
-        let worker_inputs = self.partitioner.partition::<SL, IL, I>(inputs);
-        let affected_workers = worker_inputs.iter().filter(|inputs| !inputs.is_empty()).count();
-        let routed_events = worker_inputs.iter().map(Vec::len).sum();
-        (affected_workers, routed_events)
+        group_inputs_by_snapshot::<SL, IL, I>(inputs)
+    }
+
+    pub fn partition<IL>(&self, batches: Vec<SnapshotInputBatch<IL>>) -> (usize, usize) {
+        let worker_batches = self.partitioner.partition_snapshot_batches(batches);
+        let affected_workers = worker_batches.iter().filter(|batch| !batch.snapshot_batches.is_empty()).count();
+        let snapshot_batches = worker_batches.iter().map(|batch| batch.snapshot_batches.len()).sum();
+        (affected_workers, snapshot_batches)
     }
 }

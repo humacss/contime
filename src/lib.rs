@@ -62,7 +62,7 @@ use worker::{Worker, WorkerInbound};
 pub use api::CompletionBenchmark;
 pub use api::{Contime, ContimeError};
 #[doc(hidden)]
-pub use batch::SnapshotBatchBenchmark;
+pub use batch::{SnapshotBatchBenchmark, SnapshotInputBatch};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
@@ -79,7 +79,7 @@ pub use traits::{
     ApplyBatch, ApplyEvents, Event, Input, InputBatch, InputLanes, InputRoute, Marker, Snapshot, SnapshotEvent, SnapshotLanes,
 };
 #[doc(hidden)]
-pub use worker::{WorkerApplyBatch, WorkerApplyBenchmark};
+pub use worker::WorkerApplyBenchmark;
 
 mod test;
 pub use test::*;

@@ -12,12 +12,10 @@ impl MemoryTracker {
         Self { budget: Arc::new(AtomicU64::new(budget_bytes)), usage: Arc::new(AtomicU64::new(0)) }
     }
 
-    #[allow(dead_code)] // Used by API admission in the snapshot-batched pipeline task.
     pub(crate) fn remaining(&self) -> u64 {
         self.budget.load(Ordering::Relaxed).saturating_sub(self.usage.load(Ordering::Relaxed))
     }
 
-    #[allow(dead_code)] // Used by API admission in the snapshot-batched pipeline task.
     pub(crate) fn can_fit(&self, bytes: u64) -> bool {
         bytes <= self.remaining()
     }
@@ -27,7 +25,6 @@ impl MemoryTracker {
         self.usage.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(bytes).filter(|next| *next <= budget)).is_ok()
     }
 
-    #[allow(dead_code)] // Used by whole-message reconciliation in the snapshot-batched pipeline task.
     pub(crate) fn release(&self, bytes: u64) {
         self.usage.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| Some(used.saturating_sub(bytes))).ok();
     }
@@ -40,11 +37,13 @@ impl MemoryTracker {
             .ok();
     }
 
-    #[allow(dead_code)] // Used by whole-message reconciliation in the snapshot-batched pipeline task.
     pub(crate) fn reconcile_reservation(&self, reserved: u64, actual_delta: i64) {
         if actual_delta >= 0 {
             let actual_growth = actual_delta as u64;
-            debug_assert!(actual_growth <= reserved, "actual memory growth exceeded its conservative reservation");
+            debug_assert!(
+                actual_growth <= reserved,
+                "actual memory growth ({actual_growth} bytes) exceeded its conservative reservation ({reserved} bytes)"
+            );
             self.release(reserved.saturating_sub(actual_growth));
         } else {
             self.release(reserved);

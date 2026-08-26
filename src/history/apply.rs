@@ -105,7 +105,6 @@ where
         self.apply_inserted_input_batch(applied_batch, context)
     }
 
-    #[allow(dead_code)] // Wired into the worker in the snapshot-batched pipeline task.
     pub(crate) fn apply_routed_input_batch<C>(&mut self, inputs: Vec<S::Input>, context: &mut C) -> HistoryApplyResult
     where
         C: ApplyWrapper<S>,
@@ -209,7 +208,6 @@ where
     }
 }
 
-#[allow(dead_code)] // Wired into the worker in the snapshot-batched pipeline task.
 pub(crate) struct HistoryApplyResult {
     pub(crate) bytes_delta: i64,
     pub(crate) rejections: Vec<EventRejection>,

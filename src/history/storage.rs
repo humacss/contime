@@ -130,9 +130,16 @@ where
         bytes_delta
     }
 
-    #[allow(dead_code)] // Used by routed history admission in the next pipeline task.
     pub(crate) fn earliest_retained_time(&self) -> S::Time {
         self.current_time.clone().saturating_sub(self.lower_time_horizon_delta.clone())
+    }
+
+    pub(crate) fn conservative_replay_reservation(&self) -> u64 {
+        self.checkpoints
+            .iter()
+            .map(|(_key, checkpoint, _history_input_count)| checkpoint.conservative_size().saturating_add(size_of::<u64>() as u64))
+            .max()
+            .unwrap_or(0)
     }
 
     /// Reconstructs the snapshot state at `time`.

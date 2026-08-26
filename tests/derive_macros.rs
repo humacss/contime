@@ -66,12 +66,20 @@ fn snapshot_derive_preserves_generic_target_type() {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
-#[contime_event(id = self.event_id, time = self.time, bytes = 32)]
+#[contime_event(id = self.event_id, time = self.time, bytes = 32, allocation_bytes = 64)]
 pub struct OnDerivedValueChanged {
     event_id: u128,
     entity_id: u128,
     time: i64,
     value: i32,
+}
+
+#[test]
+fn derived_event_reports_retained_and_allocation_sizes_separately() {
+    let event = OnDerivedValueChanged { event_id: 1, entity_id: 7, time: 11, value: 3 };
+
+    assert_eq!(32, contime::Input::conservative_size(&event));
+    assert_eq!(64, <OnDerivedValueChanged as contime::Event>::conservative_allocation_size(&event));
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, ContimeSnapshot)]

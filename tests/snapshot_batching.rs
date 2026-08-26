@@ -65,3 +65,14 @@ fn api_grouping_discards_unrouted_inputs() {
 
     assert_eq!(grouped, vec![(5, vec![2])]);
 }
+
+#[test]
+fn routed_event_accounts_retained_allocation_and_snapshot_bytes_once() {
+    let total = SnapshotBatchBenchmark::total_conservative_bytes::<batching_lanes::SnapshotLanes, batching_lanes::InputLanes, _>([
+        TestEvent::Positive(7, 10, 1, 1).into(),
+    ]);
+
+    // 42 retained event + 8 apply allocation + 32 retained identity
+    // + 28 clean snapshot + 8 checkpoint key.
+    assert_eq!(118, total);
+}

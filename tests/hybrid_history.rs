@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::mem::size_of;
 
 use contime::{HistoryInputs, Input, TestEvent};
 
@@ -53,7 +54,10 @@ fn hybrid_history_matches_a_canonical_btree_across_ordered_late_and_pruned_input
                 let removed_keys = reference.range(..(horizon, u128::MIN)).map(|(key, _input)| *key).collect::<Vec<_>>();
                 let expected_bytes = removed_keys
                     .iter()
-                    .map(|key| reference.get(key).expect("a collected reference key must exist").conservative_size())
+                    .map(|key| {
+                        reference.get(key).expect("a collected reference key must exist").conservative_size()
+                            + (2 * size_of::<u128>()) as u64
+                    })
                     .sum::<u64>();
                 for key in &removed_keys {
                     let removed = reference.remove(key).expect("a collected reference key must be removable");

@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use crossbeam_channel::{unbounded, Receiver};
 
+use crate::batch::{group_inputs_by_snapshot, memory_full_rejections, total_conservative_bytes};
 use crate::memory::MemoryTracker;
 use crate::rejection::merge_event_rejections;
 use crate::{ApplyWrapper, EventRejection, InputLanes, Router, RouterError, SnapshotLanes};
@@ -34,6 +35,8 @@ impl CompletionBenchmark {
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
 pub enum ContimeError {
+    /// The complete asynchronous request exceeded the API's current conservative memory estimate.
+    MemoryFull,
     /// A worker stopped accepting operation messages.
     WorkerUnavailable,
     /// An affected worker exited without completing a synchronous request.
@@ -58,7 +61,6 @@ where
     C: ApplyWrapper<SL>,
 {
     router: Router<SL, IL, C, G>,
-    #[allow(dead_code)] // Used by API admission in the snapshot-batched pipeline task.
     memory: MemoryTracker,
     current_time: RwLock<SL::Time>,
     apply_context: Option<C>,
@@ -240,8 +242,13 @@ where
     where
         I: IntoIterator<Item = IL>,
     {
+        let batches = group_inputs_by_snapshot::<SL, IL, I>(inputs);
+        let conservative_bytes = total_conservative_bytes(&batches);
+        if !self.memory.can_fit(conservative_bytes) {
+            return Ok(memory_full_rejections(&batches));
+        }
         let (response_tx, response_rx) = unbounded();
-        let expected = self.router.dispatch_inputs(inputs, Some(&response_tx))?;
+        let expected = self.router.dispatch_snapshot_batches(batches, Some(&response_tx))?;
         drop(response_tx);
 
         collect_event_rejections(&response_rx, expected)
@@ -252,7 +259,12 @@ where
     where
         I: IntoIterator<Item = IL>,
     {
-        self.router.dispatch_inputs(inputs, None)?;
+        let batches = group_inputs_by_snapshot::<SL, IL, I>(inputs);
+        let conservative_bytes = total_conservative_bytes(&batches);
+        if !self.memory.can_fit(conservative_bytes) {
+            return Err(ContimeError::MemoryFull);
+        }
+        self.router.dispatch_snapshot_batches(batches, None)?;
         Ok(())
     }
 
