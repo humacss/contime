@@ -1,4 +1,4 @@
-use contime::{ContimeError, TestEvent, TestSnapshot, TestSnapshotContime};
+use contime::{TestEvent, TestSnapshot, TestSnapshotContime};
 
 fn query_one(contime: &TestSnapshotContime, time: i64, snapshot_id: u128) -> TestSnapshot {
     contime.query_at(time, &[snapshot_id]).unwrap().pop().flatten().unwrap().into()
@@ -12,11 +12,11 @@ fn test_memory_full() {
     let mut hit_memory_full = false;
     for i in 0..1000u128 {
         match c.apply([TestEvent::Positive(1, i as i64, i, 1)].map(Into::into)) {
-            Ok(_) => {}
-            Err(ContimeError::MemoryFull) => {
+            Ok(rejections) if rejections.iter().any(|rejection| rejection.reason == contime::EventRejectionReason::MemoryFull) => {
                 hit_memory_full = true;
                 break;
             }
+            Ok(_) => {}
             Err(err) => panic!("unexpected error: {:?}", err),
         }
     }
@@ -33,10 +33,11 @@ fn test_memory_full_then_advance_frees() {
     let mut last_applied = 0i64;
     for i in 0..1000u128 {
         match c.apply([TestEvent::Positive(1, i as i64, i, 1)].map(Into::into)) {
-            Ok(_) => {
+            Ok(rejections) if rejections.is_empty() => {
                 last_applied = i as i64;
             }
-            Err(ContimeError::MemoryFull) => break,
+            Ok(rejections) if rejections.iter().any(|rejection| rejection.reason == contime::EventRejectionReason::MemoryFull) => break,
+            Ok(rejections) => panic!("unexpected rejections: {rejections:?}"),
             Err(err) => panic!("unexpected error: {:?}", err),
         }
     }

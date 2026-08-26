@@ -11,6 +11,10 @@ use crossbeam_channel::{Receiver, Sender};
 
 use crate::{ApplyWrapper, ContimeKey, ContimeTime, EventRejection, Input, InputJournalEntry, InputLanes, SnapshotHistory, SnapshotLanes};
 
+mod admission;
+
+use admission::WorkerAdmission;
+
 pub type SnapshotId = u128;
 
 pub struct WorkerInput<IL> {
@@ -74,6 +78,7 @@ where
         _worker_index: usize,
         _worker_txs: Arc<Vec<Sender<WorkerInbound<SL, IL>>>>,
         _hasher: RandomState,
+        memory_budget: Arc<AtomicU64>,
         memory_usage: Arc<AtomicU64>,
         lower_time_horizon_delta: SL::Time,
         apply_context: C,
@@ -82,7 +87,7 @@ where
         let worker_running = Arc::clone(&is_running);
         let worker_memory_usage = Arc::clone(&memory_usage);
         let thread = thread::spawn(move || {
-            handle_worker(worker_running, worker_inbound_rx, worker_memory_usage, lower_time_horizon_delta, apply_context);
+            handle_worker(worker_running, worker_inbound_rx, memory_budget, worker_memory_usage, lower_time_horizon_delta, apply_context);
         });
 
         Self { worker_inbound_tx, threads: vec![thread], is_running, _context: PhantomData }
@@ -102,6 +107,7 @@ fn fetch_saturating_add_signed(atomic: &Arc<AtomicU64>, delta: i64, order: Order
 fn handle_worker<SL, IL, C>(
     is_running: Arc<AtomicBool>,
     worker_inbound_rx: Receiver<WorkerInbound<SL, IL>>,
+    memory_budget: Arc<AtomicU64>,
     memory_usage: Arc<AtomicU64>,
     lower_time_horizon_delta: SL::Time,
     mut apply_context: C,
@@ -112,12 +118,14 @@ fn handle_worker<SL, IL, C>(
 {
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
     let mut input_log = Vec::<InputJournalEntry<IL>>::new();
+    let mut admission = WorkerAdmission::new(lower_time_horizon_delta.clone());
 
     while is_running.load(Ordering::Relaxed) {
         let inbound = worker_inbound_rx.recv();
 
         match inbound {
             Ok(WorkerInbound::AdvanceTime { time: new_time, reply }) => {
+                let identity_bytes_removed = admission.advance_to(new_time.clone());
                 for history in history_by_id.values_mut() {
                     let bytes_delta = history.advance_with_context(new_time.clone(), &mut apply_context);
                     fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed);
@@ -125,13 +133,18 @@ fn handle_worker<SL, IL, C>(
                 let drop_time = new_time.saturating_sub(lower_time_horizon_delta.clone());
                 let bytes_removed = prune_input_log(&mut input_log, drop_time);
                 fetch_saturating_add_signed(&memory_usage, -bytes_removed, Ordering::Relaxed);
+                fetch_saturating_add_signed(&memory_usage, -(identity_bytes_removed as i64), Ordering::Relaxed);
                 let _ = reply.send(());
             }
             Ok(WorkerInbound::Inputs { inputs, completion }) => {
-                let bytes_delta = record_worker_inputs(&mut input_log, &inputs);
-                fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed);
-                apply_inputs_to_histories(&mut history_by_id, &memory_usage, lower_time_horizon_delta.clone(), &mut apply_context, inputs);
-                complete(completion, Vec::new());
+                let admitted = admission.admit(inputs, &memory_budget, &memory_usage);
+                let journal_bytes = record_worker_inputs(&mut input_log, &admitted.inputs);
+                let history_bytes =
+                    apply_inputs_to_histories(&mut history_by_id, lower_time_horizon_delta.clone(), &mut apply_context, admitted.inputs);
+                let actual_bytes = (admitted.identity_bytes as i64).saturating_add(journal_bytes).saturating_add(history_bytes);
+                let reconciliation = actual_bytes.saturating_sub(admitted.reserved_bytes as i64);
+                fetch_saturating_add_signed(&memory_usage, reconciliation, Ordering::Relaxed);
+                complete(completion, admitted.rejections);
             }
             Ok(WorkerInbound::InputsInRange { start, end, reply }) => {
                 let inputs = input_log.iter().filter(|entry| time_is_in_range(Input::time(&entry.input), &start, &end)).cloned().collect();
@@ -210,15 +223,16 @@ fn complete<T>(completion: Completion<T>, value: T) {
 
 fn apply_inputs_to_histories<SL, IL, C>(
     history_by_id: &mut AHashMap<SnapshotId, SnapshotHistory<SL>>,
-    memory_usage: &Arc<AtomicU64>,
     lower_time_horizon_delta: SL::Time,
     apply_context: &mut C,
     inputs: Vec<WorkerInput<IL>>,
-) where
+) -> i64
+where
     SL: SnapshotLanes<Input = IL> + 'static,
     IL: InputLanes<SL>,
     C: ApplyWrapper<SL>,
 {
+    let mut bytes_delta = 0i64;
     let mut inputs_by_snapshot = AHashMap::<SnapshotId, Vec<IL>>::new();
     for routed_input in inputs {
         inputs_by_snapshot.entry(routed_input.snapshot_id).or_default().push(routed_input.input);
@@ -230,13 +244,13 @@ fn apply_inputs_to_histories<SL, IL, C>(
             Entry::Vacant(entry) => {
                 let (history, base_delta) =
                     SnapshotHistory::new_with_snapshot_id(snapshot_id, SL::Time::default(), lower_time_horizon_delta.clone());
-                fetch_saturating_add_signed(memory_usage, base_delta, Ordering::Relaxed);
+                bytes_delta = bytes_delta.saturating_add(base_delta);
                 entry.insert(history)
             }
         };
-        let bytes_delta = history.apply_input_batch(inputs, apply_context);
-        fetch_saturating_add_signed(memory_usage, bytes_delta, Ordering::Relaxed);
+        bytes_delta = bytes_delta.saturating_add(history.apply_input_batch(inputs, apply_context));
     }
+    bytes_delta
 }
 
 #[cfg(test)]

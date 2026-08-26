@@ -2,7 +2,9 @@ use std::marker::PhantomData;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 
-use crate::{ApplyWrapper, ContimeTime, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
+use crossbeam_channel::unbounded;
+
+use crate::{ApplyWrapper, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
 
 /// One input that ConTime could not admit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,25 +39,17 @@ pub(crate) fn merge_event_rejections(target: &mut Vec<EventRejection>, incoming:
 
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
-pub enum ContimeError<T: ContimeTime> {
-    /// Applying the input would exceed the configured memory budget.
-    MemoryFull,
-    /// The temporal input predates the earliest time retained by this instance.
-    InputBeforeHistoryHorizon { input_time: T, earliest_time: T },
-    /// The requested snapshot id has no known history.
-    NotFound,
-    /// Internal routing error.
-    RouterError(RouterError<T>),
+pub enum ContimeError {
+    /// A worker stopped accepting operation messages.
+    WorkerUnavailable,
+    /// An affected worker exited without completing a synchronous request.
+    ResponseDisconnected,
 }
 
-impl<T: ContimeTime> From<RouterError<T>> for ContimeError<T> {
-    fn from(error: RouterError<T>) -> Self {
+impl From<RouterError> for ContimeError {
+    fn from(error: RouterError) -> Self {
         match error {
-            RouterError::MemoryFull => Self::MemoryFull,
-            RouterError::InputBeforeHistoryHorizon { input_time, earliest_time } => {
-                Self::InputBeforeHistoryHorizon { input_time, earliest_time }
-            }
-            other => Self::RouterError(other),
+            RouterError::WorkerUnavailable => Self::WorkerUnavailable,
         }
     }
 }
@@ -189,7 +183,7 @@ where
         Arc::clone(&self.global_context)
     }
 
-    pub fn advance_to(&self, time: SL::Time) -> Result<(), ContimeError<SL::Time>> {
+    pub fn advance_to(&self, time: SL::Time) -> Result<(), ContimeError> {
         Ok(self.router.advance_to(time)?)
     }
 
@@ -198,30 +192,40 @@ where
     }
 
     /// Applies temporal inputs synchronously and waits for all affected workers.
-    pub fn apply<I>(&self, inputs: I) -> Result<Vec<EventRejection>, ContimeError<SL::Time>>
+    pub fn apply<I>(&self, inputs: I) -> Result<Vec<EventRejection>, ContimeError>
     where
         I: IntoIterator<Item = IL>,
     {
-        Ok(self.router.apply(inputs)?)
+        let (response_tx, response_rx) = unbounded();
+        let expected = self.router.dispatch_inputs(inputs, Some(&response_tx))?;
+        drop(response_tx);
+
+        let mut rejections = Vec::new();
+        for _ in 0..expected {
+            let worker_rejections = response_rx.recv().map_err(|_| ContimeError::ResponseDisconnected)?;
+            merge_event_rejections(&mut rejections, worker_rejections);
+        }
+        Ok(rejections)
     }
 
     /// Enqueues temporal inputs without waiting for replay to finish.
-    pub fn send<I>(&self, inputs: I) -> Result<(), ContimeError<SL::Time>>
+    pub fn send<I>(&self, inputs: I) -> Result<(), ContimeError>
     where
         I: IntoIterator<Item = IL>,
     {
-        Ok(self.router.send(inputs)?)
+        self.router.dispatch_inputs(inputs, None)?;
+        Ok(())
     }
 
     /// Returns retained canonical temporal inputs whose timestamps are within `range`.
-    pub fn inspect_inputs<R>(&self, range: R) -> Result<Vec<InputJournalEntry<IL>>, ContimeError<SL::Time>>
+    pub fn inspect_inputs<R>(&self, range: R) -> Result<Vec<InputJournalEntry<IL>>, ContimeError>
     where
         R: RangeBounds<SL::Time>,
     {
         Ok(self.router.inspect_inputs(range)?)
     }
 
-    pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, ContimeError<SL::Time>> {
+    pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, ContimeError> {
         Ok(self.router.query_at(time, snapshot_ids)?)
     }
 }

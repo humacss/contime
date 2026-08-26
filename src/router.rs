@@ -1,64 +1,17 @@
-use std::collections::{BTreeMap, HashSet};
 use std::marker::PhantomData;
 use std::ops::{Bound, RangeBounds};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, RwLock};
 
 use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 
-use crate::api::merge_event_rejections;
 use crate::worker::{Completion, WorkerInput};
-use crate::{
-    ApplyWrapper, ContimeKey, ContimeTime, EventRejection, EventRejectionReason, Input, InputJournalEntry, InputLanes, SnapshotLanes,
-    Worker, WorkerInbound,
-};
-
-type RoutedWorkerInputs<IL> = Vec<Vec<WorkerInput<IL>>>;
-type RoutedInputsResult<IL, T> = Result<(RoutedWorkerInputs<IL>, Vec<EventRejection>), RouterError<T>>;
-
-struct CanonicalInputIndex<T> {
-    retained_ids: HashSet<u128>,
-    ids_by_retention_time: BTreeMap<T, Vec<u128>>,
-}
-
-impl<T> Default for CanonicalInputIndex<T> {
-    fn default() -> Self {
-        Self { retained_ids: HashSet::new(), ids_by_retention_time: BTreeMap::new() }
-    }
-}
-
-impl<T> CanonicalInputIndex<T>
-where
-    T: ContimeTime,
-{
-    fn contains(&self, input_id: u128) -> bool {
-        self.retained_ids.contains(&input_id)
-    }
-
-    fn insert(&mut self, input_id: u128, time: T) {
-        assert!(self.retained_ids.insert(input_id), "canonical input ID was inserted twice");
-        self.ids_by_retention_time.entry(time).or_default().push(input_id);
-    }
-
-    fn prune_before(&mut self, earliest_time: T) -> usize {
-        let retained = self.ids_by_retention_time.split_off(&earliest_time);
-        let removed = std::mem::replace(&mut self.ids_by_retention_time, retained);
-        removed.into_values().flatten().filter(|input_id| self.retained_ids.remove(input_id)).count()
-    }
-}
-
-const fn canonical_input_index_entry_size<T>() -> u64 {
-    // One ID in the identity set, one ID in its retention bucket, and a
-    // conservative repeated time charge even when IDs share a bucket.
-    (size_of::<u128>() * 2 + size_of::<T>()) as u64
-}
+use crate::{ApplyWrapper, ContimeKey, ContimeTime, EventRejection, InputJournalEntry, InputLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
-pub enum RouterError<T: ContimeTime> {
-    MemoryFull,
-    InputBeforeHistoryHorizon { input_time: T, earliest_time: T },
-    Error,
+pub enum RouterError {
+    WorkerUnavailable,
 }
 
 pub struct Router<SL, IL, C = (), G = ()>
@@ -69,11 +22,7 @@ where
 {
     hasher: RandomState,
     workers: Vec<Worker<SL, IL, C>>,
-    memory_budget: Arc<AtomicU64>,
-    memory_usage: Arc<AtomicU64>,
     current_time: Arc<RwLock<SL::Time>>,
-    canonical_inputs: Mutex<CanonicalInputIndex<SL::Time>>,
-    lower_time_horizon_delta: SL::Time,
     global_context: Arc<G>,
     _context: PhantomData<C>,
 }
@@ -161,138 +110,62 @@ where
                 worker_index,
                 Arc::clone(&worker_txs),
                 hasher.clone(),
+                Arc::clone(&memory_budget),
                 Arc::clone(&memory_usage),
                 lower_time_horizon_delta.clone(),
                 make_apply_context(worker_index, Arc::clone(&global_context)),
             ));
         }
 
-        Self {
-            hasher,
-            workers,
-            memory_budget,
-            memory_usage,
-            current_time: Arc::new(RwLock::new(SL::Time::default())),
-            canonical_inputs: Mutex::new(CanonicalInputIndex::default()),
-            lower_time_horizon_delta,
-            global_context,
-            _context: PhantomData,
-        }
+        Self { hasher, workers, current_time: Arc::new(RwLock::new(SL::Time::default())), global_context, _context: PhantomData }
     }
 
     pub fn global_context(&self) -> Arc<G> {
         Arc::clone(&self.global_context)
     }
 
-    pub fn apply<I>(&self, inputs: I) -> Result<Vec<EventRejection>, RouterError<SL::Time>>
-    where
-        I: IntoIterator<Item = IL>,
-    {
-        let (worker_inputs, rejections) = self.route_inputs(inputs)?;
-        let mut replies = Vec::new();
-        let mut merged = Vec::new();
-
-        for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
-            if inputs.is_empty() {
-                continue;
-            }
-            let (tx, rx) = bounded(1);
-            self.workers[worker_index]
-                .worker_inbound_tx
-                .send(WorkerInbound::Inputs { inputs, completion: Completion::Respond(tx) })
-                .map_err(|_| RouterError::Error)?;
-            replies.push(rx);
-        }
-
-        for reply in replies {
-            let worker_rejections = reply.recv().map_err(|_| RouterError::Error)?;
-            merge_event_rejections(&mut merged, worker_rejections);
-        }
-        merge_event_rejections(&mut merged, rejections);
-        Ok(merged)
-    }
-
-    pub fn send<I>(&self, inputs: I) -> Result<(), RouterError<SL::Time>>
-    where
-        I: IntoIterator<Item = IL>,
-    {
-        let (worker_inputs, _rejections) = self.route_inputs(inputs)?;
-        for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
-            if inputs.is_empty() {
-                continue;
-            }
-            self.workers[worker_index]
-                .worker_inbound_tx
-                .send(WorkerInbound::Inputs { inputs, completion: Completion::None })
-                .map_err(|_| RouterError::Error)?;
-        }
-        Ok(())
-    }
-
-    fn route_inputs<I>(&self, inputs: I) -> RoutedInputsResult<IL, SL::Time>
+    pub(crate) fn dispatch_inputs<I>(&self, inputs: I, response: Option<&Sender<Vec<EventRejection>>>) -> Result<usize, RouterError>
     where
         I: IntoIterator<Item = IL>,
     {
         let mut worker_inputs = Vec::with_capacity(self.workers.len());
         worker_inputs.resize_with(self.workers.len(), Vec::new);
-
-        let current_time = self.current_time.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-        let earliest_time = current_time.saturating_sub(self.lower_time_horizon_delta.clone());
-        let mut canonical_inputs = self.canonical_inputs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut accepted_ids = HashSet::new();
-        let mut accepted_inputs = Vec::new();
-        let mut rejections = Vec::new();
-        let mut input_size = 0u64;
-        let mut journal_size = 0u64;
         let mut routed_snapshots = Vec::<(u128, usize)>::new();
 
         for input in inputs {
-            let input_id = Input::id(&input);
-            if canonical_inputs.contains(input_id) || accepted_ids.contains(&input_id) {
-                continue;
-            }
             routed_snapshots.clear();
             input.visit_snapshot_ids(&mut |snapshot_id| routed_snapshots.push((snapshot_id, self.worker_index(snapshot_id))));
             if routed_snapshots.is_empty() {
                 continue;
             }
-            let input_time = Input::time(&input);
-            if input_time < earliest_time {
-                rejections.push(EventRejection::new(input_id, EventRejectionReason::BeforeHistoryHorizon));
+            let route_count = routed_snapshots.len();
+            let mut input = Some(input);
+            for (route_position, &(snapshot_id, worker_index)) in routed_snapshots.iter().enumerate() {
+                let routed_input = if route_position + 1 == route_count {
+                    input.take().expect("the final route owns the input")
+                } else {
+                    input.as_ref().expect("earlier routes retain the input").clone()
+                };
+                worker_inputs[worker_index].push(WorkerInput { snapshot_id, input: routed_input });
+            }
+        }
+
+        let mut affected_workers = 0;
+        for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
+            if inputs.is_empty() {
                 continue;
             }
-            accepted_ids.insert(input_id);
-            accepted_inputs.push((input_id, input_time));
-            let lane_size = Input::conservative_size(&input);
-            input_size = input_size.saturating_add(lane_size);
-            journal_size = journal_size.saturating_add(canonical_input_index_entry_size::<SL::Time>());
-            let mut routed_worker_indexes = Vec::new();
-            for &(snapshot_id, index) in &routed_snapshots {
-                if !routed_worker_indexes.contains(&index) {
-                    routed_worker_indexes.push(index);
-                    journal_size = journal_size.saturating_add(lane_size);
-                }
-                journal_size = journal_size.saturating_add(size_of::<u128>() as u64);
-                worker_inputs[index].push(WorkerInput { snapshot_id, input: input.clone() });
-            }
+            let completion = response.map_or(Completion::None, |response| Completion::Respond(response.clone()));
+            self.workers[worker_index]
+                .worker_inbound_tx
+                .send(WorkerInbound::Inputs { inputs, completion })
+                .map_err(|_| RouterError::WorkerUnavailable)?;
+            affected_workers += 1;
         }
-
-        let usage = self.memory_usage.load(Ordering::Relaxed);
-        let budget = self.memory_budget.load(Ordering::Relaxed);
-        if usage.saturating_add(input_size).saturating_add(journal_size) >= budget {
-            return Err(RouterError::MemoryFull);
-        }
-
-        for (input_id, time) in accepted_inputs {
-            canonical_inputs.insert(input_id, time);
-        }
-        self.memory_usage
-            .fetch_add((accepted_ids.len() as u64).saturating_mul(canonical_input_index_entry_size::<SL::Time>()), Ordering::Relaxed);
-
-        Ok((worker_inputs, rejections))
+        Ok(affected_workers)
     }
 
-    pub fn inspect_inputs<R>(&self, range: R) -> Result<Vec<InputJournalEntry<IL>>, RouterError<SL::Time>>
+    pub fn inspect_inputs<R>(&self, range: R) -> Result<Vec<InputJournalEntry<IL>>, RouterError>
     where
         R: RangeBounds<SL::Time>,
     {
@@ -305,13 +178,13 @@ where
             worker
                 .worker_inbound_tx
                 .send(WorkerInbound::InputsInRange { start: start.clone(), end: end.clone(), reply: tx })
-                .map_err(|_| RouterError::Error)?;
+                .map_err(|_| RouterError::WorkerUnavailable)?;
             replies.push(rx);
         }
 
         let mut merged = Vec::<InputJournalEntry<IL>>::new();
         for reply in replies {
-            for entry in reply.recv().map_err(|_| RouterError::Error)? {
+            for entry in reply.recv().map_err(|_| RouterError::WorkerUnavailable)? {
                 let key = ContimeKey::from_input(&entry.input);
                 match merged.binary_search_by_key(&key, |entry| ContimeKey::from_input(&entry.input)) {
                     Ok(index) => merge_snapshot_ids(&mut merged[index].routed_snapshot_ids, entry.routed_snapshot_ids),
@@ -322,7 +195,7 @@ where
         Ok(merged)
     }
 
-    pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError<SL::Time>> {
+    pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, RouterError> {
         if snapshot_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -342,21 +215,21 @@ where
             self.workers[worker_index]
                 .worker_inbound_tx
                 .send(WorkerInbound::SnapshotsAt { snapshot_requests, time: time.clone(), reply: tx })
-                .map_err(|_| RouterError::Error)?;
+                .map_err(|_| RouterError::WorkerUnavailable)?;
             replies.push(rx);
         }
 
         let mut results = Vec::with_capacity(snapshot_ids.len());
         results.resize_with(snapshot_ids.len(), || None);
         for reply in replies {
-            for (position, snapshot_lane) in reply.recv().map_err(|_| RouterError::Error)? {
+            for (position, snapshot_lane) in reply.recv().map_err(|_| RouterError::WorkerUnavailable)? {
                 results[position] = snapshot_lane;
             }
         }
         Ok(results)
     }
 
-    pub fn advance_to(&self, time: SL::Time) -> Result<(), RouterError<SL::Time>> {
+    pub fn advance_to(&self, time: SL::Time) -> Result<(), RouterError> {
         {
             let mut current = self.current_time.write().unwrap_or_else(std::sync::PoisonError::into_inner);
             if time <= *current {
@@ -368,16 +241,15 @@ where
         let mut replies = Vec::new();
         for worker in &self.workers {
             let (tx, rx) = bounded(1);
-            worker.worker_inbound_tx.send(WorkerInbound::AdvanceTime { time: time.clone(), reply: tx }).map_err(|_| RouterError::Error)?;
+            worker
+                .worker_inbound_tx
+                .send(WorkerInbound::AdvanceTime { time: time.clone(), reply: tx })
+                .map_err(|_| RouterError::WorkerUnavailable)?;
             replies.push(rx);
         }
         for reply in replies {
-            reply.recv().map_err(|_| RouterError::Error)?;
+            reply.recv().map_err(|_| RouterError::WorkerUnavailable)?;
         }
-        let earliest_time = time.saturating_sub(self.lower_time_horizon_delta.clone());
-        let removed_ids = self.canonical_inputs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).prune_before(earliest_time);
-        let removed_bytes = (removed_ids as u64).saturating_mul(canonical_input_index_entry_size::<SL::Time>());
-        let _ = self.memory_usage.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |usage| Some(usage.saturating_sub(removed_bytes)));
         Ok(())
     }
 
@@ -403,5 +275,36 @@ fn merge_snapshot_ids(existing: &mut Vec<u128>, incoming: Vec<u128>) {
         if let Err(index) = existing.binary_search(&snapshot_id) {
             existing.insert(index, snapshot_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ahash::RandomState;
+    use crossbeam_channel::unbounded;
+
+    use super::Router;
+    use crate::{TestEvent, TestInputLanes, TestSnapshotLanes};
+
+    #[test]
+    fn dispatch_inputs_reports_only_affected_workers() {
+        let mut router = Router::<TestSnapshotLanes, TestInputLanes>::new(8, 1_000_000);
+        router.hasher = RandomState::with_seeds(1, 2, 3, 4);
+        let first_snapshot_id = 1;
+        let first_worker = router.worker_index(first_snapshot_id);
+        let second_snapshot_id = (2..).find(|snapshot_id| router.worker_index(*snapshot_id) != first_worker).unwrap();
+        let (response_tx, response_rx) = unbounded();
+
+        let affected = router
+            .dispatch_inputs(
+                [TestEvent::Positive(first_snapshot_id, 10, 100, 1).into(), TestEvent::Positive(second_snapshot_id, 10, 200, 1).into()],
+                Some(&response_tx),
+            )
+            .unwrap();
+
+        assert_eq!(affected, 2);
+        assert!(response_rx.recv().unwrap().is_empty());
+        assert!(response_rx.recv().unwrap().is_empty());
+        assert!(response_rx.try_recv().is_err());
     }
 }
