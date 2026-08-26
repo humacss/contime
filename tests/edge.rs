@@ -17,10 +17,11 @@ fn test_negative_event_application() {
 }
 
 #[test]
-fn duplicate_event_ids_at_different_times_keep_the_first_input() {
+fn duplicate_event_id_at_a_different_time_is_a_noop() {
     let c = TestSnapshotContime::new(1, 100000);
 
-    c.apply([TestEvent::Positive(1, 1, 0, 10), TestEvent::Positive(1, 5, 0, 20)].map(Into::into)).unwrap();
+    c.apply([TestEvent::Positive(1, 1, 7, 10).into()]).unwrap();
+    c.apply([TestEvent::Positive(1, 5, 7, 20).into()]).unwrap();
 
     let snap = query_one(&c, 6, 1);
     assert_eq!(snap.sum, 10);
