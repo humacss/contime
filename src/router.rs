@@ -7,14 +7,15 @@ use std::sync::{Arc, Mutex, RwLock};
 use ahash::RandomState;
 use crossbeam_channel::{bounded, unbounded, Sender};
 
+use crate::api::merge_event_rejections;
 use crate::worker::WorkerInput;
 use crate::{
-    ApplyOutcome, ApplyWrapper, ContimeKey, ContimeTime, Input, InputJournalEntry, InputLanes, InputRejection, InputRejectionReason,
-    SnapshotLanes, Worker, WorkerInbound,
+    ApplyWrapper, ContimeKey, ContimeTime, EventRejection, EventRejectionReason, Input, InputJournalEntry, InputLanes, SnapshotLanes,
+    Worker, WorkerInbound,
 };
 
 type RoutedWorkerInputs<IL> = Vec<Vec<WorkerInput<IL>>>;
-type RoutedInputsResult<IL, T> = Result<(RoutedWorkerInputs<IL>, ApplyOutcome<T>), RouterError<T>>;
+type RoutedInputsResult<IL, T> = Result<(RoutedWorkerInputs<IL>, Vec<EventRejection>), RouterError<T>>;
 
 struct CanonicalInputIndex<T> {
     retained_ids: HashSet<u128>,
@@ -183,11 +184,11 @@ where
         Arc::clone(&self.global_context)
     }
 
-    pub fn apply<I>(&self, inputs: I) -> Result<ApplyOutcome<SL::Time>, RouterError<SL::Time>>
+    pub fn apply<I>(&self, inputs: I) -> Result<Vec<EventRejection>, RouterError<SL::Time>>
     where
         I: IntoIterator<Item = IL>,
     {
-        let (worker_inputs, outcome) = self.route_inputs(inputs)?;
+        let (worker_inputs, rejections) = self.route_inputs(inputs)?;
         let mut replies = Vec::new();
 
         for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
@@ -205,14 +206,16 @@ where
         for reply in replies {
             reply.recv().map_err(|_| RouterError::Error)?;
         }
-        Ok(outcome)
+        let mut merged = Vec::new();
+        merge_event_rejections(&mut merged, rejections);
+        Ok(merged)
     }
 
-    pub fn send<I>(&self, inputs: I) -> Result<ApplyOutcome<SL::Time>, RouterError<SL::Time>>
+    pub fn send<I>(&self, inputs: I) -> Result<(), RouterError<SL::Time>>
     where
         I: IntoIterator<Item = IL>,
     {
-        let (worker_inputs, outcome) = self.route_inputs(inputs)?;
+        let (worker_inputs, _rejections) = self.route_inputs(inputs)?;
         for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
             if inputs.is_empty() {
                 continue;
@@ -223,7 +226,7 @@ where
                 .send(WorkerInbound::Inputs { inputs, reply: tx })
                 .map_err(|_| RouterError::Error)?;
         }
-        Ok(outcome)
+        Ok(())
     }
 
     fn route_inputs<I>(&self, inputs: I) -> RoutedInputsResult<IL, SL::Time>
@@ -238,14 +241,13 @@ where
         let mut canonical_inputs = self.canonical_inputs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut accepted_ids = HashSet::new();
         let mut accepted_inputs = Vec::new();
-        let mut outcome = ApplyOutcome::default();
+        let mut rejections = Vec::new();
         let mut input_size = 0u64;
         let mut journal_size = 0u64;
 
         for input in inputs {
             let input_id = Input::id(&input);
             if canonical_inputs.contains(input_id) || accepted_ids.contains(&input_id) {
-                outcome.accepted_input_ids.push(input_id);
                 continue;
             }
             let snapshot_ids = input.snapshot_ids();
@@ -254,15 +256,10 @@ where
             }
             let input_time = Input::time(&input);
             if input_time < earliest_time {
-                outcome.rejected_inputs.push(InputRejection {
-                    input_id,
-                    input_time,
-                    reason: InputRejectionReason::BeforeHistoryHorizon { earliest_time: earliest_time.clone() },
-                });
+                rejections.push(EventRejection::new(input_id, EventRejectionReason::BeforeHistoryHorizon));
                 continue;
             }
             accepted_ids.insert(input_id);
-            outcome.accepted_input_ids.push(input_id);
             accepted_inputs.push((input_id, input_time));
             let lane_size = Input::conservative_size(&input);
             input_size = input_size.saturating_add(lane_size);
@@ -291,7 +288,7 @@ where
         self.memory_usage
             .fetch_add((accepted_ids.len() as u64).saturating_mul(canonical_input_index_entry_size::<SL::Time>()), Ordering::Relaxed);
 
-        Ok((worker_inputs, outcome))
+        Ok((worker_inputs, rejections))
     }
 
     pub fn inspect_inputs<R>(&self, range: R) -> Result<Vec<InputJournalEntry<IL>>, RouterError<SL::Time>>

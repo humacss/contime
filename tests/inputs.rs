@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use contime::{
-    ApplyInner, ApplyWrapper, Contime, Input, InputBatch, InputRejection, InputRejectionReason, InputRoute, Marker, TestEvent, TestSnapshot,
+    ApplyInner, ApplyWrapper, Contime, EventRejection, EventRejectionReason, Input, InputBatch, InputRoute, Marker, TestEvent, TestSnapshot,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -279,15 +279,11 @@ fn stale_inputs_are_reported_while_valid_batch_inputs_apply() {
     let contime = DefaultInputContime::with_history_horizon(1, 100_000, 50);
     contime.advance_to(70).unwrap();
 
-    let outcome = contime
+    let rejections = contime
         .apply([TestEvent::Positive(1, 19, 200, 5).into(), TestEvent::Positive(1, 25, 300, 7).into()])
         .expect("a stale input should not reject valid inputs in the same batch");
 
-    assert_eq!(outcome.accepted_input_ids, vec![300]);
-    assert_eq!(
-        outcome.rejected_inputs,
-        vec![InputRejection { input_id: 200, input_time: 19, reason: InputRejectionReason::BeforeHistoryHorizon { earliest_time: 20 } }]
-    );
+    assert_eq!(rejections, vec![EventRejection::new(200, EventRejectionReason::BeforeHistoryHorizon)]);
     let snapshot: TestSnapshot =
         contime.query_at(70, &[1]).unwrap().pop().flatten().expect("the valid input should materialize the snapshot").into();
     assert_eq!(snapshot.sum, 7);
