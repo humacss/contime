@@ -53,6 +53,24 @@ When an `Event` is applied to a `Snapshot`, the event modifies the `Snapshot` st
 
 The system keeps a list of `Checkpoint`s internally to retain previous state, and can generate the state at time `T` by grabbing the closest `Checkpoint` and applying all inputs in order through time `T`. Each checkpoint also retains the cumulative raw history input count through that checkpoint, so replay resumes with both the snapshot state and its deterministic input frontier.
 
+### History storage
+
+Each snapshot history stores canonically ordered arrivals in an array-backed
+append deque. Inputs that arrive before the append tail are kept in a separate
+B-tree. Replay merges the two already-ordered sources by `(time, input ID)`, so
+late events preserve deterministic history without making normal ordered
+admission pay for a tree insertion.
+
+Input identity is global and independent of timestamps while an input is
+retained. Reusing a retained ID is therefore an idempotent no-op even if the new
+input carries another time or payload. The retained-ID set is pruned with the
+history horizon, after which the forgotten ID may be admitted again.
+
+`LocalSnapshotHistory::inputs` is a representation-neutral `HistoryInputs`
+value. Direct history users should use its ordered iteration, storage-count,
+latest-key, insertion, and pruning methods rather than relying on `BTreeMap`
+methods or either internal store.
+
 When the retained history horizon advances, ConTime first folds pruned inputs into
 the replay-anchor checkpoint and then calls `Snapshot::compact_before` on every
 retained checkpoint. The default implementation is a no-op. Snapshots that keep
@@ -287,7 +305,80 @@ The crate is currently a work in progress. The API is not stable yet and there a
 - More examples and deeper documentation for multi-snapshot setups
 - Clones snapshots for checkpoints. This is fine for small snapshots <1KB. For supporting larger snapshots we need deltas.
 
-The current benchmarks are not up-to-date and accurate with the code changes over the last few weeks. 
+## Performance snapshot
+
+These Criterion measurements were collected on 2026-08-26 on an Apple M3 Pro,
+macOS 26.3.1 (25D771280a), with rustc 1.90.0 and the optimized benchmark
+profile. Every interval is Criterion's exact `[low estimate high]` result from
+20 samples. The “before” run used the same benchmark harness immediately before
+the hybrid history implementation; the “after” run used this implementation.
+
+| Boundary | Inputs | Before | After |
+| --- | ---: | ---: | ---: |
+| Snapshot callback, same snapshot | 1 | `[38.058 ns 38.940 ns 40.238 ns]` | `[40.840 ns 40.933 ns 41.017 ns]` |
+| Snapshot callback, same snapshot | 100 | `[115.35 ns 116.21 ns 117.57 ns]` | `[115.53 ns 117.46 ns 120.68 ns]` |
+| Snapshot callback, same snapshot | 1,000 | `[2.4934 µs 3.4223 µs 4.3563 µs]` | `[1.2837 µs 1.2869 µs 1.2922 µs]` |
+| Direct snapshot history, same snapshot | 1 | `[223.34 ns 246.78 ns 278.95 ns]` | `[176.37 ns 177.35 ns 178.02 ns]` |
+| Direct snapshot history, same snapshot | 100 | `[3.9931 µs 4.0529 µs 4.1687 µs]` | `[4.0462 µs 4.0919 µs 4.1213 µs]` |
+| Direct snapshot history, same snapshot | 1,000 | `[47.938 µs 49.951 µs 53.512 µs]` | `[46.908 µs 47.320 µs 47.651 µs]` |
+| Persistent `send`, same snapshot | 1 | `[730.96 ns 828.89 ns 956.92 ns]` | `[657.51 ns 676.39 ns 694.33 ns]` |
+| Persistent `send`, same snapshot | 100 | `[18.343 µs 18.468 µs 18.614 µs]` | `[16.146 µs 16.234 µs 16.378 µs]` |
+| Persistent `send`, same snapshot | 1,000 | `[180.49 µs 181.02 µs 181.77 µs]` | `[142.32 µs 142.62 µs 142.94 µs]` |
+| Persistent `send`, separate snapshots | 1 | `[766.91 ns 938.61 ns 1.0867 µs]` | `[619.53 ns 624.41 ns 632.50 ns]` |
+| Persistent `send`, separate snapshots | 100 | `[19.947 µs 21.736 µs 23.592 µs]` | `[16.205 µs 16.428 µs 16.829 µs]` |
+| Persistent `send`, separate snapshots | 1,000 | `[182.01 µs 193.87 µs 207.18 µs]` | `[141.73 µs 142.13 µs 142.55 µs]` |
+| Persistent synchronous `apply`, same snapshot | 1 | `[2.9311 µs 3.8221 µs 4.8290 µs]` | `[2.7049 µs 2.7469 µs 2.7975 µs]` |
+| Persistent synchronous `apply`, same snapshot | 100 | `[43.474 µs 49.559 µs 56.384 µs]` | `[37.688 µs 37.795 µs 37.936 µs]` |
+| Persistent synchronous `apply`, same snapshot | 1,000 | `[317.77 µs 348.64 µs 402.39 µs]` | `[249.55 µs 249.86 µs 250.19 µs]` |
+| Persistent synchronous `apply`, separate snapshots | 1 | `[3.6545 µs 3.9664 µs 4.2639 µs]` | `[2.7662 µs 2.9599 µs 3.1615 µs]` |
+| Persistent synchronous `apply`, separate snapshots | 100 | `[58.911 µs 61.139 µs 62.896 µs]` | `[55.813 µs 56.236 µs 56.904 µs]` |
+| Persistent synchronous `apply`, separate snapshots | 1,000 | `[451.22 µs 457.48 µs 469.68 µs]` | `[428.98 µs 429.62 µs 430.72 µs]` |
+
+The callback control contains no history storage and its implementation did not
+change. Its 1,000-input difference reflects run-to-run variance in that very
+small control, not work removed by the hybrid store. The 100-input direct
+history intervals overlap, so they do not demonstrate a change. The other rows
+remain raw boundary measurements rather than claims that every difference is
+caused by history storage.
+
+### Hybrid-history workloads
+
+Each late-rate case applies 1,000 new inputs after an established ordered tail.
+Merged replay reconstructs 1,000 inputs after that tail from the two sorted
+stores. Horizon pruning advances to a drop boundary of `500`; ordered and mixed
+fixtures remove 500 inputs, while the late-only fixture removes 500 late-tree
+inputs and retains its one ordered tail sentinel.
+
+| Workload | Shape | Time |
+| --- | --- | ---: |
+| Insert and reconcile 1,000 inputs | 0% late | `[43.243 µs 43.345 µs 43.408 µs]` |
+| Insert and reconcile 1,000 inputs | 1% late | `[57.002 µs 57.115 µs 57.203 µs]` |
+| Insert and reconcile 1,000 inputs | 10% late | `[73.544 µs 73.833 µs 74.089 µs]` |
+| Insert and reconcile 1,000 inputs | 50% late | `[80.871 µs 82.473 µs 85.870 µs]` |
+| Replay 1,000 merged inputs | 0% late-tree density | `[6.0963 µs 6.1214 µs 6.1449 µs]` |
+| Replay 1,000 merged inputs | 10% late-tree density | `[5.9662 µs 5.9956 µs 6.0129 µs]` |
+| Replay 1,000 merged inputs | 50% late-tree density | `[3.8389 µs 3.9031 µs 3.9426 µs]` |
+| Advance horizon and prune | ordered only | `[4.6183 µs 4.6750 µs 4.7083 µs]` |
+| Advance horizon and prune | late only | `[12.625 µs 12.791 µs 12.882 µs]` |
+| Advance horizon and prune | mixed | `[4.5880 µs 4.6614 µs 4.7208 µs]` |
+
+Reproduce the focused matrix with:
+
+```bash
+cargo bench --bench apply --no-run
+cargo bench --bench apply -- snapshot_callback_same_snapshot --sample-size 20
+cargo bench --bench apply -- snapshot_history_same_snapshot --sample-size 20
+cargo bench --bench apply -- history_late_rate --sample-size 20
+cargo bench --bench apply -- history_merged_replay --sample-size 20
+cargo bench --bench apply -- history_horizon_prune --sample-size 20
+cargo bench --bench apply -- send_persistent_matrix --sample-size 20
+cargo bench --bench apply -- sync_apply_persistent_matrix --sample-size 20
+```
+
+Snapshot callback cost, history admission/replay, routing, worker wake-up, and
+outer Timeless Runtime orchestration are separate boundaries. These results
+measure the first four only where their named benchmark includes them; they do
+not measure or make a claim about Timeless Runtime orchestration.
 
 ## TODO / Future Improvements
 
