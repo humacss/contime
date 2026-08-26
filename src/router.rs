@@ -14,6 +14,7 @@ use crate::{
 };
 
 type RoutedWorkerInputs<IL> = Vec<Vec<WorkerInput<IL>>>;
+type RoutedInputsResult<IL, T> = Result<(RoutedWorkerInputs<IL>, ApplyOutcome<T>), RouterError<T>>;
 
 struct CanonicalInputIndex<T> {
     retained_ids: HashSet<u128>,
@@ -225,7 +226,7 @@ where
         Ok(outcome)
     }
 
-    fn route_inputs<I>(&self, inputs: I) -> Result<(RoutedWorkerInputs<IL>, ApplyOutcome<SL::Time>), RouterError<SL::Time>>
+    fn route_inputs<I>(&self, inputs: I) -> RoutedInputsResult<IL, SL::Time>
     where
         I: IntoIterator<Item = IL>,
     {
