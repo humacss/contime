@@ -4,38 +4,8 @@ use std::sync::{Arc, RwLock};
 
 use crossbeam_channel::{unbounded, Receiver};
 
-use crate::{ApplyWrapper, ContimeKey, ContimeTime, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
-
-/// One input that ConTime could not admit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EventRejection {
-    pub event_id: u128,
-    pub reason: EventRejectionReason,
-}
-
-impl EventRejection {
-    pub const fn new(event_id: u128, reason: EventRejectionReason) -> Self {
-        Self { event_id, reason }
-    }
-}
-
-/// Reason one input was rejected while the rest of its batch continued.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum EventRejectionReason {
-    /// The input predates the earliest retained history time.
-    BeforeHistoryHorizon,
-    /// Retaining the input would exceed the configured memory budget.
-    MemoryFull,
-}
-
-pub(crate) fn merge_event_rejections(target: &mut Vec<EventRejection>, incoming: Vec<EventRejection>) {
-    if incoming.is_empty() {
-        return;
-    }
-    target.extend(incoming);
-    target.sort_unstable();
-    target.dedup();
-}
+use crate::rejection::merge_event_rejections;
+use crate::{ApplyWrapper, ContimeKey, ContimeTime, EventRejection, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
 
 fn collect_event_rejections(response_rx: &Receiver<Vec<EventRejection>>, expected: usize) -> Result<Vec<EventRejection>, ContimeError> {
     let mut rejections = Vec::new();
@@ -338,7 +308,8 @@ fn merge_snapshot_ids(existing: &mut Vec<u128>, incoming: Vec<u128>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_event_rejections, EventRejection, EventRejectionReason};
+    use crate::rejection::merge_event_rejections;
+    use crate::{EventRejection, EventRejectionReason};
 
     #[test]
     fn rejection_merge_deduplicates_only_identical_event_and_reason_pairs() {

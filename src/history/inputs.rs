@@ -2,7 +2,11 @@ use std::collections::{btree_map, vec_deque, BTreeMap, VecDeque};
 use std::iter::Peekable;
 use std::ops::Bound;
 
+use ahash::AHashSet;
+
 use crate::{ContimeKey, ContimeTime, Input};
+
+pub(crate) const RETAINED_ID_BYTES: u64 = (size_of::<u128>() * 2) as u64;
 
 #[derive(Debug, Clone)]
 pub struct HistoryInputs<T, I>
@@ -12,6 +16,7 @@ where
 {
     ordered: VecDeque<(ContimeKey<T>, I)>,
     late: BTreeMap<ContimeKey<T>, I>,
+    retained_ids: AHashSet<u128>,
 }
 
 impl<T, I> Default for HistoryInputs<T, I>
@@ -30,7 +35,7 @@ where
     I: Input<Time = T>,
 {
     pub fn new() -> Self {
-        Self { ordered: VecDeque::new(), late: BTreeMap::new() }
+        Self { ordered: VecDeque::new(), late: BTreeMap::new(), retained_ids: AHashSet::new() }
     }
 
     pub fn len(&self) -> usize {
@@ -66,8 +71,24 @@ where
     where
         F: FnMut(&I),
     {
+        self.insert_batch_filter_with(inputs, |_| true, &mut on_insert)
+    }
+
+    pub(crate) fn insert_batch_filter_with<A, F>(&mut self, inputs: Vec<I>, mut accept: A, mut on_insert: F) -> HistoryInsert<T>
+    where
+        A: FnMut(&I) -> bool,
+        F: FnMut(&I),
+    {
         let latest_key_before = self.latest_key();
-        let mut keyed_inputs = inputs.into_iter().map(|input| (ContimeKey::from_input(&input), input)).collect::<Vec<_>>();
+        let mut keyed_inputs = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let input_id = input.id();
+            if self.retained_ids.contains(&input_id) || !accept(&input) {
+                continue;
+            }
+            assert!(self.retained_ids.insert(input_id), "history input ID was inserted twice");
+            keyed_inputs.push((ContimeKey::from_input(&input), input));
+        }
         let fast_path = keyed_inputs
             .first()
             .is_none_or(|(first_key, _input)| latest_key_before.as_ref().is_none_or(|latest_key| first_key > latest_key))
@@ -79,12 +100,8 @@ where
 
         let mut inserted = HistoryInsert::new(latest_key_before.clone());
         for (key, input) in keyed_inputs {
-            if self.contains_key(&key) {
-                continue;
-            }
-
             on_insert(&input);
-            inserted.record(&key, input.conservative_size());
+            inserted.record(&key, input.conservative_size().saturating_add(RETAINED_ID_BYTES));
             if latest_key_before.as_ref().is_some_and(|latest_key| key < *latest_key) {
                 let previous = self.late.insert(key, input);
                 debug_assert!(previous.is_none(), "a late history key was inserted twice");
@@ -137,22 +154,17 @@ where
         let mut pruned = PrunedInputs::default();
         while self.ordered.front().is_some_and(|(key, _input)| key < boundary) {
             let (_key, input) = self.ordered.pop_front().expect("the ordered history front was just inspected");
-            pruned.record(&input);
+            pruned.record(&input, &mut self.retained_ids);
         }
 
         let retained = self.late.split_off(boundary);
         let removed = std::mem::replace(&mut self.late, retained);
         for input in removed.into_values() {
-            pruned.record(&input);
+            pruned.record(&input, &mut self.retained_ids);
         }
 
         self.assert_invariants();
         pruned
-    }
-
-    fn contains_key(&self, target: &ContimeKey<T>) -> bool {
-        let index = self.ordered.partition_point(|(key, _input)| key < target);
-        self.ordered.get(index).is_some_and(|(key, _input)| key == target) || self.late.contains_key(target)
     }
 
     #[cfg(debug_assertions)]
@@ -162,6 +174,7 @@ where
             assert!(self.late.keys().all(|late_key| late_key < ordered_tail));
         }
         assert_eq!(self.len(), self.iter().count());
+        assert_eq!(self.len(), self.retained_ids.len());
     }
 
     #[cfg(not(debug_assertions))]
@@ -266,9 +279,10 @@ impl PrunedInputs {
         self.bytes
     }
 
-    fn record<I: Input>(&mut self, input: &I) {
+    fn record<I: Input>(&mut self, input: &I, retained_ids: &mut AHashSet<u128>) {
+        assert!(retained_ids.remove(&input.id()), "pruned history input ID was not retained");
         self.count += 1;
-        self.bytes = self.bytes.saturating_add(input.conservative_size());
+        self.bytes = self.bytes.saturating_add(input.conservative_size()).saturating_add(RETAINED_ID_BYTES);
     }
 }
 
@@ -403,7 +417,7 @@ mod tests {
         let pruned = inputs.prune_before(&ContimeKey { time: 25, id: u128::MIN });
 
         assert_eq!(pruned.count(), 2);
-        assert_eq!(pruned.bytes(), 64);
+        assert_eq!(pruned.bytes(), 128);
         assert_eq!(drops.load(Ordering::Relaxed), 2);
         assert_eq!(keys(&inputs), vec![(30, 3)]);
     }

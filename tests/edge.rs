@@ -25,7 +25,6 @@ fn duplicate_event_id_at_a_different_time_is_a_noop() {
 
     let snap = query_one(&c, 6, 1);
     assert_eq!(snap.sum, 10);
-    assert_eq!(c.inspect_inputs(..).unwrap().len(), 1);
 }
 
 #[test]

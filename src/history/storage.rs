@@ -130,6 +130,11 @@ where
         bytes_delta
     }
 
+    #[allow(dead_code)] // Used by routed history admission in the next pipeline task.
+    pub(crate) fn earliest_retained_time(&self) -> S::Time {
+        self.current_time.clone().saturating_sub(self.lower_time_horizon_delta.clone())
+    }
+
     /// Reconstructs the snapshot state at `time`.
     ///
     /// Events at exactly `time` are included in the returned snapshot.
@@ -164,7 +169,9 @@ mod tests {
 
     use super::*;
 
-    use crate::{ApplyBatch, Event, Input, InputBatch, InputLanes, SnapshotEvent, TestEvent, TestSnapshot};
+    use crate::{
+        ApplyBatch, Event, EventRejection, EventRejectionReason, Input, InputBatch, InputLanes, SnapshotEvent, TestEvent, TestSnapshot,
+    };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ContextEvent {
@@ -293,6 +300,46 @@ mod tests {
         S::Input: InputLanes<S>,
     {
         history.apply_input_batch(vec![event], &mut ());
+    }
+
+    #[test]
+    fn duplicate_id_at_a_different_time_is_local_to_one_history() {
+        let snapshot = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut first, _) = SnapshotHistory::new(snapshot.clone(), 0, 50);
+        let (mut second, _) = SnapshotHistory::new(snapshot, 0, 50);
+
+        first.apply_input_batch(vec![TestEvent::Positive(1, 10, 7, 10)], &mut ());
+        first.apply_input_batch(vec![TestEvent::Positive(1, 20, 7, 99)], &mut ());
+        second.apply_input_batch(vec![TestEvent::Positive(1, 20, 7, 99)], &mut ());
+
+        assert_eq!(first.snapshot_only_at(20).sum, 10);
+        assert_eq!(second.snapshot_only_at(20).sum, 99);
+    }
+
+    #[test]
+    fn pruning_forgets_identity_in_that_history() {
+        let snapshot = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 50);
+        history.apply_input_batch(vec![TestEvent::Positive(1, 10, 7, 10)], &mut ());
+        history.apply_input_batch(vec![TestEvent::Positive(1, 15, 7, 99)], &mut ());
+        assert_eq!(history.snapshot_only_at(15).sum, 10);
+
+        history.advance(70);
+        history.apply_input_batch(vec![TestEvent::Positive(1, 30, 7, 20)], &mut ());
+
+        assert_eq!(history.snapshot_only_at(70).sum, 30);
+    }
+
+    #[test]
+    fn routed_apply_rejects_input_before_this_history_horizon() {
+        let snapshot = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 50);
+        history.advance(100);
+
+        let result = history.apply_routed_input_batch(vec![TestEvent::Positive(1, 49, 7, 10)], &mut ());
+
+        assert_eq!(result.bytes_delta, 0);
+        assert_eq!(result.rejections, vec![EventRejection::new(7, EventRejectionReason::BeforeHistoryHorizon)]);
     }
 
     #[test]
