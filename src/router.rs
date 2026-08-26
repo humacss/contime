@@ -244,14 +244,16 @@ where
         let mut rejections = Vec::new();
         let mut input_size = 0u64;
         let mut journal_size = 0u64;
+        let mut routed_snapshots = Vec::<(u128, usize)>::new();
 
         for input in inputs {
             let input_id = Input::id(&input);
             if canonical_inputs.contains(input_id) || accepted_ids.contains(&input_id) {
                 continue;
             }
-            let snapshot_ids = input.snapshot_ids();
-            if snapshot_ids.is_empty() {
+            routed_snapshots.clear();
+            input.visit_snapshot_ids(&mut |snapshot_id| routed_snapshots.push((snapshot_id, self.worker_index(snapshot_id))));
+            if routed_snapshots.is_empty() {
                 continue;
             }
             let input_time = Input::time(&input);
@@ -265,8 +267,7 @@ where
             input_size = input_size.saturating_add(lane_size);
             journal_size = journal_size.saturating_add(canonical_input_index_entry_size::<SL::Time>());
             let mut routed_worker_indexes = Vec::new();
-            for snapshot_id in snapshot_ids {
-                let index = self.worker_index(snapshot_id);
+            for &(snapshot_id, index) in &routed_snapshots {
                 if !routed_worker_indexes.contains(&index) {
                     routed_worker_indexes.push(index);
                     journal_size = journal_size.saturating_add(lane_size);

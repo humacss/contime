@@ -278,14 +278,12 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
             let targets = route.targets.iter().map(|target| {
                 let target_ty = &target.path;
                 quote! {
-                    <#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(e)
+                    visit(<#event_ty as ::contime::SnapshotEvent<#target_ty>>::snapshot_id(e));
                 }
             });
             quote! {
                 Self::#key(e) => {
-                    vec![
-                        #( #targets, )*
-                    ]
+                    #( #targets )*
                 }
             }
         })
@@ -297,7 +295,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
             let variant = &marker.variant;
             let ty = &marker.path;
             quote! {
-                Self::#variant(marker) => <#ty as ::contime::InputRoute>::snapshot_ids(marker),
+                Self::#variant(marker) => <#ty as ::contime::InputRoute>::visit_snapshot_ids(marker, visit),
             }
         })
         .collect::<Vec<_>>();
@@ -532,7 +530,10 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                 #( #apply_bounds, )*
                 #( #marker_route_bounds, )*
             {
-                fn snapshot_ids(&self) -> Vec<u128> {
+                fn visit_snapshot_ids<F>(&self, visit: &mut F)
+                where
+                    F: FnMut(u128),
+                {
                     match self {
                         #( #event_snapshot_ids_arms )*
                         #( #marker_snapshot_ids_arms )*
