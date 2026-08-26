@@ -1,4 +1,4 @@
-use crate::{ContimeKey, InputBatch, InputLanes, Snapshot, SnapshotLanes};
+use crate::{ContimeKey, EventRejection, EventRejectionReason, Input, InputBatch, InputLanes, Snapshot, SnapshotLanes};
 
 use super::checkpoints::{
     apply_events_to_checkpoint, commit_applied_checkpoint, get_checkpoint_for_apply, AppliedCheckpoint, CheckpointForApply,
@@ -102,6 +102,32 @@ where
         C: ApplyWrapper<S>,
     {
         let applied_batch = self.insert_input_batch(inputs);
+        self.apply_inserted_input_batch(applied_batch, context)
+    }
+
+    #[allow(dead_code)] // Wired into the worker in the snapshot-batched pipeline task.
+    pub(crate) fn apply_routed_input_batch<C>(&mut self, inputs: Vec<S::Input>, context: &mut C) -> HistoryApplyResult
+    where
+        C: ApplyWrapper<S>,
+    {
+        let earliest_retained_time = self.earliest_retained_time();
+        let mut rejections = Vec::new();
+        let applied_batch = self.insert_input_batch_filter(inputs, |input| {
+            if input.time() < earliest_retained_time {
+                rejections.push(EventRejection::new(input.id(), EventRejectionReason::BeforeHistoryHorizon));
+                false
+            } else {
+                true
+            }
+        });
+        let bytes_delta = self.apply_inserted_input_batch(applied_batch, context);
+        HistoryApplyResult { bytes_delta, rejections }
+    }
+
+    fn apply_inserted_input_batch<C>(&mut self, applied_batch: InsertedInputBatch<S::Time>, context: &mut C) -> i64
+    where
+        C: ApplyWrapper<S>,
+    {
         if !applied_batch.changed {
             return 0;
         }
@@ -145,9 +171,16 @@ where
     }
 
     fn insert_input_batch(&mut self, inputs: Vec<S::Input>) -> InsertedInputBatch<S::Time> {
+        self.insert_input_batch_filter(inputs, |_| true)
+    }
+
+    fn insert_input_batch_filter<A>(&mut self, inputs: Vec<S::Input>, accept: A) -> InsertedInputBatch<S::Time>
+    where
+        A: FnMut(&S::Input) -> bool,
+    {
         let snapshot_id = self.snapshot_id;
         let snapshot_lane_index = &mut self.snapshot_lane_index;
-        let inserted = self.inputs.insert_batch_with(inputs, |input| {
+        let inserted = self.inputs.insert_batch_filter_with(inputs, accept, |input| {
             if input.is_event() {
                 let input_lane_index = S::input_lane_index(snapshot_id, input)
                     .unwrap_or_else(|| panic!("snapshot id {snapshot_id} received an event that cannot materialize its snapshot lane"));
@@ -174,6 +207,12 @@ where
     pub(super) fn latest_input_key(&self) -> Option<ContimeKey<S::Time>> {
         self.inputs.latest_key()
     }
+}
+
+#[allow(dead_code)] // Wired into the worker in the snapshot-batched pipeline task.
+pub(crate) struct HistoryApplyResult {
+    pub(crate) bytes_delta: i64,
+    pub(crate) rejections: Vec<EventRejection>,
 }
 
 struct InsertedInputBatch<T: crate::ContimeTime> {

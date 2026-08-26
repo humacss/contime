@@ -50,6 +50,7 @@ mod api;
 mod history;
 mod journal;
 mod key;
+mod rejection;
 mod router;
 mod time;
 mod traits;
@@ -63,7 +64,7 @@ use worker::{Worker, WorkerInbound};
 
 #[doc(hidden)]
 pub use api::CompletionBenchmark;
-pub use api::{Contime, ContimeError, EventRejection, EventRejectionReason};
+pub use api::{Contime, ContimeError};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
@@ -71,6 +72,7 @@ pub use history::{ApplyInner, ApplyWrapper, SnapshotHistory};
 #[doc(hidden)]
 pub use history::{HistoryInputs, HistoryInsert};
 pub use journal::InputJournalEntry;
+pub use rejection::{EventRejection, EventRejectionReason};
 #[doc(hidden)]
 pub use router::RoutePartitionBenchmark;
 #[doc(hidden)]
