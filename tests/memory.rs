@@ -1,4 +1,39 @@
-use contime::{ContimeError, EventRejection, EventRejectionReason, TestEvent, TestSnapshot, TestSnapshotContime};
+use contime::{
+    ContimeError, ContimeEvent, ContimeSnapshot, EventRejection, EventRejectionReason, TestEvent, TestSnapshot, TestSnapshotContime,
+};
+
+#[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
+#[contime_event(id = self.event_id, time = self.time, bytes = 32)]
+pub struct InlineEvent {
+    event_id: u128,
+    snapshot_id: u128,
+    time: i64,
+    value: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, ContimeSnapshot)]
+#[contime_snapshot(
+    events = [InlineEvent],
+    id = [snapshot_id],
+    bytes = 32,
+    apply = {
+        for event in batch.events {
+            let InlineSnapshotEvent::InlineEvent(event) = event;
+            self.value += event.value;
+        }
+    }
+)]
+struct InlineSnapshot {
+    snapshot_id: u128,
+    time: i64,
+    value: i64,
+}
+
+contime::lanes! {
+    mod inline_lanes;
+    snapshots [InlineSnapshot];
+    routes [InlineEvent => [InlineSnapshot]];
+}
 
 fn query_one(contime: &TestSnapshotContime, time: i64, snapshot_id: u128) -> TestSnapshot {
     contime.query_at(time, &[snapshot_id]).unwrap().pop().flatten().unwrap().into()
@@ -32,6 +67,18 @@ fn one_batch_reserves_cumulative_checkpoint_growth() {
 
     assert!(rejections.is_empty());
     assert_eq!(query_one(&contime, 1_000, 1).items.len(), 1_000);
+}
+
+#[test]
+fn zero_allocation_events_reserve_every_complete_checkpoint() {
+    let contime = inline_lanes::Contime::new(1, 1_000_000);
+    let events = (1..=1_000_u128).map(|event_id| InlineEvent { event_id, snapshot_id: 1, time: event_id as i64, value: 1 }.into());
+
+    let rejections = contime.apply(events).expect("checkpoint bases must not disconnect the worker");
+
+    assert!(rejections.is_empty());
+    let snapshot: InlineSnapshot = contime.query_at(1_000, &[1]).unwrap().pop().flatten().unwrap().into();
+    assert_eq!(snapshot.value, 1_000);
 }
 
 #[test]

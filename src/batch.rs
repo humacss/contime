@@ -11,7 +11,7 @@ pub struct SnapshotInputBatch<IL> {
     pub(crate) conservative_bytes: u64,
     pub(crate) apply_allocation_bytes: u64,
     event_count: usize,
-    snapshot_materialization_accounted: bool,
+    snapshot_checkpoint_bytes: Option<u64>,
 }
 
 impl<IL> SnapshotInputBatch<IL>
@@ -67,8 +67,9 @@ where
 
     for batch in &mut batches {
         let possible_checkpoint_count = batch.event_count.div_ceil(CHECKPOINT_INTERVAL) as u64;
+        let complete_checkpoint_bytes = batch.snapshot_checkpoint_bytes.unwrap_or(0).saturating_add(batch.apply_allocation_bytes);
         batch.conservative_bytes =
-            batch.conservative_bytes.saturating_add(batch.apply_allocation_bytes.saturating_mul(possible_checkpoint_count));
+            batch.conservative_bytes.saturating_add(complete_checkpoint_bytes.saturating_mul(possible_checkpoint_count));
     }
 
     batches
@@ -115,15 +116,14 @@ fn push_routed_input<SL, IL>(
             conservative_bytes: 0,
             apply_allocation_bytes: 0,
             event_count: 0,
-            snapshot_materialization_accounted: false,
+            snapshot_checkpoint_bytes: None,
         });
         batch_index
     });
     let batch = &mut batches[batch_index];
-    if !batch.snapshot_materialization_accounted {
+    if batch.snapshot_checkpoint_bytes.is_none() {
         if let Some(snapshot) = SL::materialize(snapshot_id, &input) {
-            batch.conservative_bytes = batch.conservative_bytes.saturating_add(checkpoint_conservative_size(&snapshot));
-            batch.snapshot_materialization_accounted = true;
+            batch.snapshot_checkpoint_bytes = Some(checkpoint_conservative_size(&snapshot));
         }
     }
     batch.inputs.push(input);
