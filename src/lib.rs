@@ -61,7 +61,7 @@ use key::ContimeKey;
 use router::{Router, RouterError};
 use worker::{Worker, WorkerInbound};
 
-pub use api::{ApplyOutcome, Contime, ContimeError, InputRejection, InputRejectionReason};
+pub use api::{Contime, ContimeError, EventRejection, EventRejectionReason};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};

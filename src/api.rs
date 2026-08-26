@@ -4,28 +4,35 @@ use std::sync::Arc;
 
 use crate::{ApplyWrapper, ContimeTime, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
 
-/// Result of admitting one input batch into ConTime.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ApplyOutcome<T: ContimeTime> {
-    /// Input IDs accepted for application, including idempotent duplicates.
-    pub accepted_input_ids: Vec<u128>,
-    /// Inputs rejected individually without preventing accepted inputs from applying.
-    pub rejected_inputs: Vec<InputRejection<T>>,
+/// One input that ConTime could not admit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EventRejection {
+    pub event_id: u128,
+    pub reason: EventRejectionReason,
 }
 
-/// One input that ConTime could not admit.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InputRejection<T: ContimeTime> {
-    pub input_id: u128,
-    pub input_time: T,
-    pub reason: InputRejectionReason<T>,
+impl EventRejection {
+    pub const fn new(event_id: u128, reason: EventRejectionReason) -> Self {
+        Self { event_id, reason }
+    }
 }
 
 /// Reason one input was rejected while the rest of its batch continued.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InputRejectionReason<T: ContimeTime> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EventRejectionReason {
     /// The input predates the earliest retained history time.
-    BeforeHistoryHorizon { earliest_time: T },
+    BeforeHistoryHorizon,
+    /// Retaining the input would exceed the configured memory budget.
+    MemoryFull,
+}
+
+pub(crate) fn merge_event_rejections(target: &mut Vec<EventRejection>, incoming: Vec<EventRejection>) {
+    if incoming.is_empty() {
+        return;
+    }
+    target.extend(incoming);
+    target.sort_unstable();
+    target.dedup();
 }
 
 /// Errors returned by [`Contime`] operations.
@@ -191,7 +198,7 @@ where
     }
 
     /// Applies temporal inputs synchronously and waits for all affected workers.
-    pub fn apply<I>(&self, inputs: I) -> Result<ApplyOutcome<SL::Time>, ContimeError<SL::Time>>
+    pub fn apply<I>(&self, inputs: I) -> Result<Vec<EventRejection>, ContimeError<SL::Time>>
     where
         I: IntoIterator<Item = IL>,
     {
@@ -199,7 +206,7 @@ where
     }
 
     /// Enqueues temporal inputs without waiting for replay to finish.
-    pub fn send<I>(&self, inputs: I) -> Result<ApplyOutcome<SL::Time>, ContimeError<SL::Time>>
+    pub fn send<I>(&self, inputs: I) -> Result<(), ContimeError<SL::Time>>
     where
         I: IntoIterator<Item = IL>,
     {
@@ -216,5 +223,39 @@ where
 
     pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, ContimeError<SL::Time>> {
         Ok(self.router.query_at(time, snapshot_ids)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{merge_event_rejections, EventRejection, EventRejectionReason};
+
+    #[test]
+    fn rejection_merge_deduplicates_only_identical_event_and_reason_pairs() {
+        let mut merged = vec![
+            EventRejection::new(7, EventRejectionReason::MemoryFull),
+            EventRejection::new(7, EventRejectionReason::BeforeHistoryHorizon),
+        ];
+        merge_event_rejections(
+            &mut merged,
+            vec![EventRejection::new(7, EventRejectionReason::MemoryFull), EventRejection::new(9, EventRejectionReason::MemoryFull)],
+        );
+
+        assert_eq!(
+            merged,
+            vec![
+                EventRejection::new(7, EventRejectionReason::BeforeHistoryHorizon),
+                EventRejection::new(7, EventRejectionReason::MemoryFull),
+                EventRejection::new(9, EventRejectionReason::MemoryFull),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_rejection_vector_is_the_success_value() {
+        let mut merged = Vec::new();
+        merge_event_rejections(&mut merged, Vec::new());
+        assert!(merged.is_empty());
+        assert_eq!(merged.capacity(), 0);
     }
 }
