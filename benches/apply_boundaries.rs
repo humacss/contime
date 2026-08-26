@@ -39,10 +39,11 @@ fn benchmark_apply_boundaries(runner: &mut Criterion) {
             || {
                 let router = RouterApplyBenchmark::<BenchSnapshotLanes, BenchInputLanes>::new(1, MEMORY_BUDGET_BYTES, HISTORY_HORIZON);
                 router.warm_up(CURRENT_TIME);
-                (router, inputs())
+                let batches = router.prepare_snapshot_batches(inputs());
+                (router, Some(batches))
             },
-            |(router, inputs)| {
-                black_box(router.apply(std::mem::take(inputs)));
+            |(router, batches)| {
+                black_box(router.apply_snapshot_batches(batches.take().expect("Criterion calls each prepared router batch once")));
             },
             BatchSize::SmallInput,
         );
@@ -53,11 +54,11 @@ fn benchmark_apply_boundaries(runner: &mut Criterion) {
             || {
                 let worker = WorkerApplyBenchmark::<BenchSnapshotLanes, BenchInputLanes>::new(MEMORY_BUDGET_BYTES, HISTORY_HORIZON);
                 worker.warm_up(CURRENT_TIME);
-                let batch = worker.prepare_batch(SNAPSHOT_ID, inputs());
-                (worker, Some(batch))
+                let batch = worker.prepare_snapshot_batch(SNAPSHOT_ID, inputs());
+                (worker, Some(vec![batch]))
             },
             |(worker, batch)| {
-                black_box(worker.apply(batch.take().expect("Criterion calls each prepared worker batch once")));
+                black_box(worker.apply_snapshot_batches(batch.take().expect("Criterion calls each prepared worker batch once")));
             },
             BatchSize::SmallInput,
         );

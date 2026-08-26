@@ -17,6 +17,11 @@
 //! Markers are global temporal records routed into replay batches for custom
 //! [`ApplyWrapper`] interpretation; they never apply to snapshots directly.
 //!
+//! The apply pipeline is `API inputs -> snapshot batches -> worker messages ->
+//! snapshot histories`. [`Input::conservative_size`] accounts for retained
+//! input bytes, while [`Event::conservative_allocation_size`] separately
+//! accounts for snapshot-state allocation caused by applying an event.
+//!
 //! # Where To Start
 //!
 //! For a runnable custom-type setup, see `examples/ordered_values.rs` and run

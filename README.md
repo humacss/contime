@@ -49,7 +49,15 @@ A `Snapshot` is a discrete state at a particular point in time, for example the 
 ### Events
 An `Event` is an `Input` that should be applied to one or more `Snapshot`s. `snapshot_id`s can be extracted from the `Event`, and this is then used to apply the event to one particular `Snapshot` and `snapshot_id`.
 
-When an `Event` is applied to a `Snapshot`, the event modifies the `Snapshot` state. 
+When an `Event` is applied to a `Snapshot`, the event modifies the `Snapshot` state.
+
+Memory declarations keep retained data and apply-time allocation separate.
+`Input::conservative_size` describes the retained event payload.
+`Event::conservative_allocation_size` describes additional snapshot-state
+memory that applying that event may allocate; it defaults to zero for events
+that only mutate inline fields. `Snapshot::conservative_size` describes the
+checkpoint itself. `ContimeEvent` accepts `allocation_bytes = ...` when a
+derived event allocates during application. Markers have no apply allocation.
 
 The system keeps a list of `Checkpoint`s internally to retain previous state, and can generate the state at time `T` by grabbing the closest `Checkpoint` and applying all inputs in order through time `T`. Each checkpoint also retains the cumulative raw history input count through that checkpoint, so replay resumes with both the snapshot state and its deterministic input frontier.
 
@@ -62,10 +70,10 @@ late events preserve deterministic history without making normal ordered
 admission pay for a tree insertion.
 
 Input identity is independent of timestamps while an input is retained.
-Each affected worker owns identity and horizon admission for its histories;
-reusing a retained ID is therefore an idempotent no-op even if the new input
-carries another time or payload. Worker identity sets are pruned with the
-history horizon, after which the forgotten ID may be admitted again.
+Each snapshot history owns retained identity and horizon admission. Reusing a
+retained ID in that history is therefore an idempotent no-op even if the new
+input carries another time or payload. The history's identity index is pruned
+with the history horizon, after which the forgotten ID may be admitted again.
 
 `LocalSnapshotHistory::inputs` is a representation-neutral `HistoryInputs`
 value. Direct history users should use its ordered iteration, storage-count,
@@ -81,26 +89,33 @@ boundary while preserving their accumulated state.
 
 A checkpoint at time `T` represents the state after the complete input bucket at `T`.
 Histories can exist without checkpoints when they contain only markers. Such histories are
-pending: their inputs remain inspectable and replayable, but snapshot queries return `None`
+pending: their inputs remain retained and replayable, but snapshot queries return `None`
 until an event supplies the snapshot identity. Concrete snapshots implement `Default`, and
 `SnapshotEvent::set_snapshot_identity` initializes only the identity fields on that clean
 default before normal replay begins.
 
 ### Flow
 
-When an `Input` arrives, the `Router` visits its `snapshot_id` routes, hashes
-each ID, partitions one request-level batch per affected worker, and dispatches
-those batches. Route extraction uses a visitor and creates no snapshot-ID
-vector per input. The router does not admit inputs, inspect history, merge
-results, receive worker messages, or wait.
+The apply path has four explicit boundaries:
+
+```text
+API inputs -> snapshot batches -> worker messages -> snapshot histories
+```
+
+The API visits each input's `snapshot_id` routes once and groups inputs by
+snapshot while preserving first-snapshot and per-snapshot input order. The
+`Router` hashes each prepared snapshot ID, partitions complete snapshot batches
+into one message per affected worker, and dispatches those messages. It does
+not reopen inputs or regroup them.
 
 Each `Worker` maintains a unique set of `snapshot_id`s and works in a dedicated thread running lockless code.
 
-Workers own retained input identity, history-horizon checks, and memory
-admission. A worker responds once after processing the complete batch for a
-synchronous request. `Contime` owns request-scoped response channels and merges
-worker results directly; concurrent synchronous calls therefore cannot consume
-one another's responses.
+Each worker reserves memory once for its complete message and then passes every
+prepared snapshot batch directly to the matching snapshot history. The history
+owns duplicate-ID and horizon decisions. A worker responds once after
+processing its complete message for a synchronous request. `Contime` owns
+request-scoped response channels and merges worker results directly; concurrent
+synchronous calls therefore cannot consume one another's responses.
 
 A worker history remains pending while it contains only markers. Its first applicable event
 materializes the statically generated snapshot-lane variant inside the history. A snapshot id
@@ -108,7 +123,8 @@ must map to exactly one snapshot-lane variant for the lifetime of a `Contime` in
 an event for a different variant under an already materialized id is an invariant violation and
 panics.
 
-The `Worker` applies the input to the continuous time state for that `snapshot_id` and serves historical queries for that lane.
+The `Worker` applies each snapshot batch to the continuous-time state for its
+`snapshot_id` and serves historical queries for that lane.
 
 This design lets `contime` scale across multiple threads and processors with zero lock contention.
 
@@ -288,13 +304,35 @@ It maintains queryable historical state from applied events.
 ## Current Constraints
 
 - `contime` is in-memory only. Persistence, replay from disk, and recovery belong in surrounding systems.
-- Memory usage is bounded by the configured budget and the amount of retained history.
+- Memory usage is bounded by the configured budget and conservative consumer declarations.
 - History pruning is driven by `advance_to` together with the configured history horizon.
 - Snapshot queries include events with `event.time() <= query_time`.
 - Checkpoints currently clone full snapshots, so the crate is best suited to relatively small snapshot payloads today.
-- Known deferred issues:
-  - memory-budget admission is still approximate and does not reserve replay/checkpoint growth up front
-  - concurrent event application and horizon advancement are not transactionally ordered across workers; an event routed to multiple workers may be applied to only a subset if advancement interleaves with dispatch, so callers requiring all-or-nothing behavior must serialize application and advancement
+- Concurrent event application and horizon advancement are not transactionally
+  ordered across workers. Callers requiring all-or-nothing behavior must
+  serialize application and advancement.
+
+### Provisional memory consistency
+
+Memory admission is intentionally conservative and not yet transactional:
+
+- The API estimates retained events, declared apply allocations, identity
+  bookkeeping, clean snapshot materialization, and checkpoint storage before
+  dispatch. This check is advisory; concurrent requests can both pass it.
+- Each worker atomically reserves its complete message before mutating any of
+  that message's snapshot histories. Existing replay-checkpoint space is added
+  to the worker reservation.
+- Separate workers reserve independently. One worker can therefore apply an
+  event while another rejects its message, and a multi-snapshot request can be
+  partially applied when its snapshots route to different workers.
+- Synchronous `apply` reports the IDs and reason codes rejected by affected
+  workers. Asynchronous `send` is best effort after enqueue and has no later
+  rejection result.
+- Conservative estimates may reject work that would have fit. Understating
+  `conservative_size`, `conservative_allocation_size`, or a derived event's
+  `allocation_bytes` violates the memory-accounting contract.
+
+Cross-worker transactional reservation and rollback are deferred.
 
 ## Current Status
 
@@ -313,31 +351,33 @@ profile. Every interval is Criterion's exact `[low estimate high]` result.
 
 ### Apply pipeline, outside in
 
-Every row applies the same already-built batch of 1,000 unique events to one
-new snapshot. Fixture construction, worker startup and warm-up where applicable,
-and input construction happen outside the timed region. Each row removes
-exactly one outer subsystem:
+Every row applies the same 1,000 unique events to one new snapshot. Fixture
+construction and worker startup/warm-up happen outside the timed region. The
+API row begins with already-built inputs because API grouping is part of that
+boundary; the lower rows begin with their already-prepared boundary input.
+Each row removes exactly one outer subsystem:
 
 - API is the complete synchronous `Contime::apply` round trip.
-- Router calls production routing directly, waits for the affected worker, and
-  omits only the public API wrapper.
-- Worker sends one already-routed batch directly to the production worker and
-  waits for its reply.
-- Snapshot history applies the batch directly without a worker, journal,
-  admission, channel, router, or API.
+- Router receives prepared snapshot batches, partitions and dispatches them,
+  and waits for the affected worker.
+- Worker receives one already-partitioned snapshot message, reserves it once,
+  applies its snapshot batch, and replies.
+- Snapshot history applies the per-snapshot input batch directly without a
+  worker, channel, router, or API.
 
 | Measured entry point | Total time | Time per event | Approximate cost added over the next row |
 | --- | ---: | ---: | ---: |
-| Public API | `[227.97 µs 228.39 µs 228.86 µs]` | `228.39 ns` | no separable cost at this resolution |
-| Router | `[228.84 µs 230.12 µs 232.38 µs]` | `230.12 ns` | `~6.65 µs` routing and enqueue |
-| Worker | `[223.08 µs 223.47 µs 223.81 µs]` | `223.47 ns` | `~171.14 µs` admission, journal, grouping, and worker bookkeeping |
-| Snapshot history | `[51.939 µs 52.326 µs 52.727 µs]` | `52.33 ns` | direct history baseline |
+| Public API | `[64.233 µs 64.581 µs 65.098 µs]` | `64.581 ns` | `~8.772 µs` grouping, API completion, and result merge |
+| Router | `[55.633 µs 55.809 µs 55.961 µs]` | `55.809 ns` | not separable from worker at this resolution |
+| Worker | `[55.296 µs 55.503 µs 55.687 µs]` | `55.503 ns` | `~13.667 µs` worker message, reservation, lookup, and dispatch |
+| Snapshot history | `[41.712 µs 41.836 µs 41.915 µs]` | `41.836 ns` | direct history baseline |
 
 The approximate costs subtract Criterion point estimates. They are diagnostic,
-not independent measurements. The API point estimate is slightly below the
-router estimate and their confidence intervals overlap, so this run cannot
-separate API-wrapper cost from scheduling noise. The dominant measured residual
-is inside the worker boundary, not the router or API.
+not independent measurements. Router and worker confidence intervals overlap,
+so their `306 ns` point-estimate difference is not separable from scheduling
+noise. The largest remaining outer-layer residual is the `~13.667 µs` between
+worker entry and direct history entry; the history itself remains the dominant
+part of the full `64.581 µs` API round trip.
 
 Reproduce the 30-sample stack with:
 
