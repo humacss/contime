@@ -1,13 +1,13 @@
 use ahash::RandomState;
 use crossbeam_channel::unbounded;
 
-use super::Router;
+use super::{RoutePartitioner, Router};
 use crate::{TestEvent, TestInputLanes, TestSnapshotLanes};
 
 #[test]
 fn dispatch_inputs_reports_only_affected_workers() {
     let mut router = Router::<TestSnapshotLanes, TestInputLanes>::new(8, 1_000_000);
-    router.hasher = RandomState::with_seeds(1, 2, 3, 4);
+    router.partitioner = RoutePartitioner::with_hasher(8, RandomState::with_seeds(1, 2, 3, 4));
     let first_snapshot_id = 1;
     let first_worker = router.worker_index(first_snapshot_id);
     let second_snapshot_id = (2..).find(|snapshot_id| router.worker_index(*snapshot_id) != first_worker).unwrap();

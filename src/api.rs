@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::ops::{Bound, RangeBounds};
 use std::sync::{Arc, RwLock};
 
-use crossbeam_channel::unbounded;
+use crossbeam_channel::{unbounded, Receiver};
 
 use crate::{ApplyWrapper, ContimeKey, ContimeTime, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
 
@@ -35,6 +35,30 @@ pub(crate) fn merge_event_rejections(target: &mut Vec<EventRejection>, incoming:
     target.extend(incoming);
     target.sort_unstable();
     target.dedup();
+}
+
+fn collect_event_rejections(response_rx: &Receiver<Vec<EventRejection>>, expected: usize) -> Result<Vec<EventRejection>, ContimeError> {
+    let mut rejections = Vec::new();
+    for _ in 0..expected {
+        let worker_rejections = response_rx.recv().map_err(|_| ContimeError::ResponseDisconnected)?;
+        merge_event_rejections(&mut rejections, worker_rejections);
+    }
+    Ok(rejections)
+}
+
+/// Benchmark-only access to request-channel completion aggregation.
+#[doc(hidden)]
+pub struct CompletionBenchmark;
+
+impl CompletionBenchmark {
+    pub fn run(worker_count: usize) -> usize {
+        let (response_tx, response_rx) = unbounded();
+        for _ in 0..worker_count {
+            response_tx.send(Vec::new()).expect("benchmark response receiver remains connected");
+        }
+        drop(response_tx);
+        collect_event_rejections(&response_rx, worker_count).expect("benchmark response count is exact").len()
+    }
 }
 
 /// Errors returned by [`Contime`] operations.
@@ -239,12 +263,7 @@ where
         let expected = self.router.dispatch_inputs(inputs, Some(&response_tx))?;
         drop(response_tx);
 
-        let mut rejections = Vec::new();
-        for _ in 0..expected {
-            let worker_rejections = response_rx.recv().map_err(|_| ContimeError::ResponseDisconnected)?;
-            merge_event_rejections(&mut rejections, worker_rejections);
-        }
-        Ok(rejections)
+        collect_event_rejections(&response_rx, expected)
     }
 
     /// Enqueues temporal inputs without waiting for replay to finish.

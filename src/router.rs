@@ -6,7 +6,12 @@ use std::sync::Arc;
 use ahash::RandomState;
 use crossbeam_channel::{unbounded, Sender};
 
-use crate::worker::{Completion, WorkerInput};
+mod partition;
+
+pub use partition::RoutePartitionBenchmark;
+use partition::RoutePartitioner;
+
+use crate::worker::Completion;
 use crate::{ApplyWrapper, EventRejection, InputJournalEntry, InputLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
@@ -20,7 +25,7 @@ where
     IL: InputLanes<SL>,
     C: ApplyWrapper<SL>,
 {
-    hasher: RandomState,
+    partitioner: RoutePartitioner,
     workers: Vec<Worker<SL, IL, C>>,
     global_context: Arc<G>,
     _context: PhantomData<C>,
@@ -89,6 +94,7 @@ where
         assert!(worker_count > 0, "worker_count must be greater than zero");
 
         let hasher = RandomState::new();
+        let partitioner = RoutePartitioner::with_hasher(worker_count, hasher.clone());
         let global_context = Arc::new(global_context);
         let memory_budget = Arc::new(AtomicU64::new(memory_budget_bytes));
         let memory_usage = Arc::new(AtomicU64::new(0));
@@ -116,7 +122,7 @@ where
             ));
         }
 
-        Self { hasher, workers, global_context, _context: PhantomData }
+        Self { partitioner, workers, global_context, _context: PhantomData }
     }
 
     pub fn global_context(&self) -> Arc<G> {
@@ -127,27 +133,7 @@ where
     where
         I: IntoIterator<Item = IL>,
     {
-        let mut worker_inputs = Vec::with_capacity(self.workers.len());
-        worker_inputs.resize_with(self.workers.len(), Vec::new);
-        let mut routed_snapshots = Vec::<(u128, usize)>::new();
-
-        for input in inputs {
-            routed_snapshots.clear();
-            input.visit_snapshot_ids(&mut |snapshot_id| routed_snapshots.push((snapshot_id, self.worker_index(snapshot_id))));
-            if routed_snapshots.is_empty() {
-                continue;
-            }
-            let route_count = routed_snapshots.len();
-            let mut input = Some(input);
-            for (route_position, &(snapshot_id, worker_index)) in routed_snapshots.iter().enumerate() {
-                let routed_input = if route_position + 1 == route_count {
-                    input.take().expect("the final route owns the input")
-                } else {
-                    input.as_ref().expect("earlier routes retain the input").clone()
-                };
-                worker_inputs[worker_index].push(WorkerInput { snapshot_id, input: routed_input });
-            }
-        }
+        let worker_inputs = self.partitioner.partition::<SL, IL, I>(inputs);
 
         let mut affected_workers = 0;
         for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
@@ -216,7 +202,7 @@ where
     }
 
     fn worker_index(&self, snapshot_id: u128) -> usize {
-        self.hasher.hash_one(snapshot_id) as usize % self.workers.len()
+        self.partitioner.worker_index(snapshot_id)
     }
 }
 
