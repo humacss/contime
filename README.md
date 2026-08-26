@@ -328,90 +328,42 @@ The crate is currently a work in progress. The API is not stable yet and there a
 
 These Criterion measurements were collected on 2026-08-26 on an Apple M3 Pro,
 macOS 26.3.1 (25D771280a), with rustc 1.90.0 and the optimized benchmark
-profile. Every interval is Criterion's exact `[low estimate high]` result from
-20 samples. The “before” run used the same benchmark harness immediately before
-the hybrid history implementation; the “after” run used this implementation.
+profile. Every interval is Criterion's exact `[low estimate high]` result.
 
-### Router and API boundary
+### Apply pipeline, outside in
 
-These isolated measurements were collected on 2026-08-26 on an Apple M3 Pro,
-macOS 26.3.1 (25D771280a), with rustc 1.90.0 and the optimized benchmark
-profile. Every interval below is Criterion's exact `[low estimate high]` result
-from 30 samples.
+Every row applies the same already-built batch of 1,000 unique events to one
+new snapshot. Fixture construction, worker startup and warm-up where applicable,
+and input construction happen outside the timed region. Each row removes
+exactly one outer subsystem:
 
-The partition cases construct inputs outside the timed region and run the exact
-partitioner used by production dispatch. The multi-target fixture routes every
-input to three snapshot IDs. The enqueue cases time one already-built vector
-being sent through the same crossbeam channel primitive used by workers; vector
-construction, partitioning, worker replay, and consumer-side destruction are
-excluded. API completion creates one request channel, supplies the named count
-of empty worker rejection vectors, receives them, and performs the production
-aggregation path. It excludes routing, worker scheduling, admission, history,
-and replay.
+- API is the complete synchronous `Contime::apply` round trip.
+- Router calls production routing directly, waits for the affected worker, and
+  omits only the public API wrapper.
+- Worker sends one already-routed batch directly to the production worker and
+  waits for its reply.
+- Snapshot history applies the batch directly without a worker, journal,
+  admission, channel, router, or API.
 
-| Boundary | Shape | Count | Time |
-| --- | --- | ---: | ---: |
-| Partition | Single target, one worker | 1 | `[103.35 ns 103.67 ns 104.03 ns]` |
-| Partition | Single target, one worker | 100 | `[680.37 ns 681.59 ns 682.67 ns]` |
-| Partition | Single target, one worker | 1,000 | `[6.8081 µs 6.8701 µs 6.9583 µs]` |
-| Partition | Single target, eight workers | 1 | `[293.70 ns 294.71 ns 295.60 ns]` |
-| Partition | Single target, eight workers | 100 | `[1.2563 µs 1.2616 µs 1.2653 µs]` |
-| Partition | Single target, eight workers | 1,000 | `[7.8877 µs 7.9062 µs 7.9229 µs]` |
-| Partition | Three targets, eight workers | 1 | `[307.23 ns 308.01 ns 308.60 ns]` |
-| Partition | Three targets, eight workers | 100 | `[3.3050 µs 3.3095 µs 3.3136 µs]` |
-| Partition | Three targets, eight workers | 1,000 | `[32.076 µs 32.149 µs 32.215 µs]` |
-| Enqueue | One worker message | 1 | `[9.5300 ns 9.6141 ns 9.6736 ns]` |
-| Enqueue | One worker message | 100 | `[10.142 ns 10.834 ns 11.705 ns]` |
-| Enqueue | One worker message | 1,000 | `[9.3010 ns 9.5532 ns 9.8233 ns]` |
-| API completion | Empty rejection vectors | 1 worker | `[149.61 ns 150.07 ns 150.61 ns]` |
-| API completion | Empty rejection vectors | 2 workers | `[159.98 ns 160.75 ns 161.34 ns]` |
-| API completion | Empty rejection vectors | 8 workers | `[241.07 ns 241.64 ns 242.24 ns]` |
+| Measured entry point | Total time | Time per event | Approximate cost added over the next row |
+| --- | ---: | ---: | ---: |
+| Public API | `[227.97 µs 228.39 µs 228.86 µs]` | `228.39 ns` | no separable cost at this resolution |
+| Router | `[228.84 µs 230.12 µs 232.38 µs]` | `230.12 ns` | `~6.65 µs` routing and enqueue |
+| Worker | `[223.08 µs 223.47 µs 223.81 µs]` | `223.47 ns` | `~171.14 µs` admission, journal, grouping, and worker bookkeeping |
+| Snapshot history | `[51.939 µs 52.326 µs 52.727 µs]` | `52.33 ns` | direct history baseline |
 
-The counting-allocator regression reports exactly 3 allocations for a
-1,000-event, one-worker partition: request-level worker buckets and one reused
-route scratch buffer. It detects a return to per-input snapshot-ID or
-worker-index vectors.
+The approximate costs subtract Criterion point estimates. They are diagnostic,
+not independent measurements. The API point estimate is slightly below the
+router estimate and their confidence intervals overlap, so this run cannot
+separate API-wrapper cost from scheduling noise. The dominant measured residual
+is inside the worker boundary, not the router or API.
 
-Reproduce these boundaries with:
+Reproduce the 30-sample stack with:
 
 ```bash
-cargo test --test router_allocations -- --nocapture --test-threads=1
-cargo bench --bench router -- router_partition --sample-size 30
-cargo bench --bench router -- router_enqueue --sample-size 30
-cargo bench --bench router -- api_completion --sample-size 30
+cargo test --test apply_boundary_benchmarks
+cargo bench --bench apply_boundaries -- apply_1000_events_one_snapshot --sample-size 30
 ```
-
-The historical measurements below use 20 samples and cover different
-boundaries. They should not be compared directly with the isolated router
-numbers as though they measured the same work.
-
-| Boundary | Inputs | Before | After |
-| --- | ---: | ---: | ---: |
-| Snapshot callback, same snapshot | 1 | `[38.058 ns 38.940 ns 40.238 ns]` | `[40.840 ns 40.933 ns 41.017 ns]` |
-| Snapshot callback, same snapshot | 100 | `[115.35 ns 116.21 ns 117.57 ns]` | `[115.53 ns 117.46 ns 120.68 ns]` |
-| Snapshot callback, same snapshot | 1,000 | `[2.4934 µs 3.4223 µs 4.3563 µs]` | `[1.2837 µs 1.2869 µs 1.2922 µs]` |
-| Direct snapshot history, same snapshot | 1 | `[223.34 ns 246.78 ns 278.95 ns]` | `[176.37 ns 177.35 ns 178.02 ns]` |
-| Direct snapshot history, same snapshot | 100 | `[3.9931 µs 4.0529 µs 4.1687 µs]` | `[4.0462 µs 4.0919 µs 4.1213 µs]` |
-| Direct snapshot history, same snapshot | 1,000 | `[47.938 µs 49.951 µs 53.512 µs]` | `[46.908 µs 47.320 µs 47.651 µs]` |
-| Persistent `send`, same snapshot | 1 | `[730.96 ns 828.89 ns 956.92 ns]` | `[657.51 ns 676.39 ns 694.33 ns]` |
-| Persistent `send`, same snapshot | 100 | `[18.343 µs 18.468 µs 18.614 µs]` | `[16.146 µs 16.234 µs 16.378 µs]` |
-| Persistent `send`, same snapshot | 1,000 | `[180.49 µs 181.02 µs 181.77 µs]` | `[142.32 µs 142.62 µs 142.94 µs]` |
-| Persistent `send`, separate snapshots | 1 | `[766.91 ns 938.61 ns 1.0867 µs]` | `[619.53 ns 624.41 ns 632.50 ns]` |
-| Persistent `send`, separate snapshots | 100 | `[19.947 µs 21.736 µs 23.592 µs]` | `[16.205 µs 16.428 µs 16.829 µs]` |
-| Persistent `send`, separate snapshots | 1,000 | `[182.01 µs 193.87 µs 207.18 µs]` | `[141.73 µs 142.13 µs 142.55 µs]` |
-| Persistent synchronous `apply`, same snapshot | 1 | `[2.9311 µs 3.8221 µs 4.8290 µs]` | `[2.7049 µs 2.7469 µs 2.7975 µs]` |
-| Persistent synchronous `apply`, same snapshot | 100 | `[43.474 µs 49.559 µs 56.384 µs]` | `[37.688 µs 37.795 µs 37.936 µs]` |
-| Persistent synchronous `apply`, same snapshot | 1,000 | `[317.77 µs 348.64 µs 402.39 µs]` | `[249.55 µs 249.86 µs 250.19 µs]` |
-| Persistent synchronous `apply`, separate snapshots | 1 | `[3.6545 µs 3.9664 µs 4.2639 µs]` | `[2.7662 µs 2.9599 µs 3.1615 µs]` |
-| Persistent synchronous `apply`, separate snapshots | 100 | `[58.911 µs 61.139 µs 62.896 µs]` | `[55.813 µs 56.236 µs 56.904 µs]` |
-| Persistent synchronous `apply`, separate snapshots | 1,000 | `[451.22 µs 457.48 µs 469.68 µs]` | `[428.98 µs 429.62 µs 430.72 µs]` |
-
-The callback control contains no history storage and its implementation did not
-change. Its 1,000-input difference reflects run-to-run variance in that very
-small control, not work removed by the hybrid store. The 100-input direct
-history intervals overlap, so they do not demonstrate a change. The other rows
-remain raw boundary measurements rather than claims that every difference is
-caused by history storage.
 
 ### Hybrid-history workloads
 
@@ -427,6 +379,7 @@ inputs and retains its one ordered tail sentinel.
 | Insert and reconcile 1,000 inputs | 1% late | `[57.002 µs 57.115 µs 57.203 µs]` |
 | Insert and reconcile 1,000 inputs | 10% late | `[73.544 µs 73.833 µs 74.089 µs]` |
 | Insert and reconcile 1,000 inputs | 50% late | `[80.871 µs 82.473 µs 85.870 µs]` |
+| Insert and reconcile 1,000 inputs | fully late, reverse-ordered batch | `[85.356 µs 86.633 µs 88.151 µs]` |
 | Replay 1,000 merged inputs | 0% late-tree density | `[6.0963 µs 6.1214 µs 6.1449 µs]` |
 | Replay 1,000 merged inputs | 10% late-tree density | `[5.9662 µs 5.9956 µs 6.0129 µs]` |
 | Replay 1,000 merged inputs | 50% late-tree density | `[3.8389 µs 3.9031 µs 3.9426 µs]` |
@@ -438,19 +391,13 @@ Reproduce the focused matrix with:
 
 ```bash
 cargo bench --bench apply --no-run
-cargo bench --bench apply -- snapshot_callback_same_snapshot --sample-size 20
-cargo bench --bench apply -- snapshot_history_same_snapshot --sample-size 20
 cargo bench --bench apply -- history_late_rate --sample-size 20
+cargo bench --bench apply -- history_reverse_batch --sample-size 20
 cargo bench --bench apply -- history_merged_replay --sample-size 20
 cargo bench --bench apply -- history_horizon_prune --sample-size 20
-cargo bench --bench apply -- send_persistent_matrix --sample-size 20
-cargo bench --bench apply -- sync_apply_persistent_matrix --sample-size 20
 ```
 
-Snapshot callback cost, history admission/replay, routing, worker wake-up, and
-outer Timeless Runtime orchestration are separate boundaries. These results
-measure the first four only where their named benchmark includes them; they do
-not measure or make a claim about Timeless Runtime orchestration.
+These measurements do not include outer Timeless Runtime orchestration.
 
 ## TODO / Future Improvements
 

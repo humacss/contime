@@ -22,6 +22,21 @@ pub struct WorkerInput<IL> {
     pub input: IL,
 }
 
+/// An already-routed worker input batch used by the boundary benchmarks.
+#[doc(hidden)]
+pub struct WorkerApplyBatch<IL>(Vec<WorkerInput<IL>>);
+
+/// Benchmark-only access to one production worker without the router.
+#[doc(hidden)]
+pub struct WorkerApplyBenchmark<SL, IL, C = ()>
+where
+    SL: SnapshotLanes<Input = IL>,
+    IL: InputLanes<SL>,
+    C: ApplyWrapper<SL>,
+{
+    worker: Worker<SL, IL, C>,
+}
+
 pub enum Completion<T> {
     None,
     Respond(Sender<T>),
@@ -91,6 +106,75 @@ where
         });
 
         Self { worker_inbound_tx, threads: vec![thread], is_running, _context: PhantomData }
+    }
+}
+
+impl<SL, IL> WorkerApplyBenchmark<SL, IL>
+where
+    SL: SnapshotLanes<Input = IL> + 'static,
+    IL: InputLanes<SL> + Send + 'static,
+{
+    pub fn new(memory_budget_bytes: u64, lower_time_horizon_delta: SL::Time) -> Self {
+        let (worker_inbound_tx, worker_inbound_rx) = crossbeam_channel::unbounded();
+        let worker_txs = Arc::new(vec![worker_inbound_tx.clone()]);
+        let worker = Worker::with_parts(
+            worker_inbound_tx,
+            worker_inbound_rx,
+            0,
+            worker_txs,
+            RandomState::new(),
+            Arc::new(AtomicU64::new(memory_budget_bytes)),
+            Arc::new(AtomicU64::new(0)),
+            lower_time_horizon_delta,
+            (),
+        );
+        Self { worker }
+    }
+}
+
+impl<SL, IL, C> WorkerApplyBenchmark<SL, IL, C>
+where
+    SL: SnapshotLanes<Input = IL> + 'static,
+    IL: InputLanes<SL> + Send + 'static,
+    C: ApplyWrapper<SL> + Send + 'static,
+{
+    pub fn prepare_batch<I>(&self, snapshot_id: u128, inputs: I) -> WorkerApplyBatch<IL>
+    where
+        I: IntoIterator<Item = IL>,
+    {
+        WorkerApplyBatch(inputs.into_iter().map(|input| WorkerInput { snapshot_id, input }).collect())
+    }
+
+    pub fn apply(&self, batch: WorkerApplyBatch<IL>) -> Vec<EventRejection> {
+        let (response_tx, response_rx) = crossbeam_channel::unbounded();
+        self.worker
+            .worker_inbound_tx
+            .send(WorkerInbound::Inputs { inputs: batch.0, completion: Completion::Respond(response_tx) })
+            .expect("benchmark worker remains connected");
+        response_rx.recv().expect("benchmark worker returns one completion")
+    }
+
+    pub fn warm_up(&self, time: SL::Time) {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.worker
+            .worker_inbound_tx
+            .send(WorkerInbound::AdvanceTime { time, reply: response_tx })
+            .expect("benchmark worker remains connected");
+        response_rx.recv().expect("benchmark worker completes warm-up");
+    }
+
+    pub fn snapshot_at(&self, snapshot_id: u128, time: SL::Time) -> Option<SL> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        self.worker
+            .worker_inbound_tx
+            .send(WorkerInbound::SnapshotsAt { snapshot_requests: vec![(0, snapshot_id)], time, reply: response_tx })
+            .expect("benchmark worker remains connected");
+        response_rx
+            .recv()
+            .expect("benchmark worker returns one query response")
+            .into_iter()
+            .next()
+            .and_then(|(_position, snapshot)| snapshot)
     }
 }
 

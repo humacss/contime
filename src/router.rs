@@ -31,6 +31,61 @@ where
     _context: PhantomData<C>,
 }
 
+/// Benchmark-only access to production routing plus worker completion.
+#[doc(hidden)]
+pub struct RouterApplyBenchmark<SL, IL>
+where
+    SL: SnapshotLanes<Input = IL>,
+    IL: InputLanes<SL>,
+{
+    router: Router<SL, IL>,
+}
+
+impl<SL, IL> RouterApplyBenchmark<SL, IL>
+where
+    SL: SnapshotLanes<Input = IL> + 'static,
+    IL: InputLanes<SL> + Send + 'static,
+{
+    pub fn new(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: SL::Time) -> Self {
+        Self { router: Router::with_history_horizon(worker_count, memory_budget_bytes, lower_time_horizon_delta) }
+    }
+
+    pub fn apply<I>(&self, inputs: I) -> Vec<EventRejection>
+    where
+        I: IntoIterator<Item = IL>,
+    {
+        let (response_tx, response_rx) = crossbeam_channel::unbounded();
+        let expected = self.router.dispatch_inputs(inputs, Some(&response_tx)).expect("benchmark router workers remain connected");
+        drop(response_tx);
+        let mut rejections = Vec::new();
+        for _ in 0..expected {
+            rejections.extend(response_rx.recv().expect("each benchmark worker completes its batch"));
+        }
+        rejections.sort_unstable();
+        rejections.dedup();
+        rejections
+    }
+
+    pub fn warm_up(&self, time: SL::Time) {
+        let (response_tx, response_rx) = crossbeam_channel::unbounded();
+        let expected = self.router.dispatch_advance(time, &response_tx).expect("benchmark router workers remain connected");
+        drop(response_tx);
+        for _ in 0..expected {
+            response_rx.recv().expect("each benchmark worker completes warm-up");
+        }
+    }
+
+    pub fn snapshot_at(&self, snapshot_id: u128, time: SL::Time) -> Option<SL> {
+        let (response_tx, response_rx) = crossbeam_channel::bounded(1);
+        let expected =
+            self.router.dispatch_query(time, &[(0, snapshot_id)], &response_tx).expect("benchmark router workers remain connected");
+        drop(response_tx);
+        (0..expected)
+            .flat_map(|_| response_rx.recv().expect("affected benchmark worker returns its query response"))
+            .find_map(|(_position, snapshot)| snapshot)
+    }
+}
+
 impl<SL, IL> Router<SL, IL, (), ()>
 where
     SL: SnapshotLanes<Input = IL> + 'static,

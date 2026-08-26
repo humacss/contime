@@ -73,10 +73,14 @@ pub use history::{HistoryInputs, HistoryInsert};
 pub use journal::InputJournalEntry;
 #[doc(hidden)]
 pub use router::RoutePartitionBenchmark;
+#[doc(hidden)]
+pub use router::RouterApplyBenchmark;
 pub use time::ContimeTime;
 pub use traits::{
     ApplyBatch, ApplyEvents, Event, Input, InputBatch, InputLanes, InputRoute, Marker, Snapshot, SnapshotEvent, SnapshotLanes,
 };
+#[doc(hidden)]
+pub use worker::{WorkerApplyBatch, WorkerApplyBenchmark};
 
 mod test;
 pub use test::*;
