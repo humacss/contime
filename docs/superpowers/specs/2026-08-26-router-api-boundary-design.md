@@ -1,6 +1,6 @@
 # ConTime Router and API Boundary Design
 
-Date: 2026-08-26  
+Date: 2026-08-26
 Status: Approved in conversation; pending written-spec review
 
 ## Purpose
