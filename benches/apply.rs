@@ -193,9 +193,9 @@ fn benchmark_send_persistent_matrix(runner: &mut Criterion) {
                         next_time += 1;
                         let batch = persistent_batch(size, one_snapshot, time);
                         let started = Instant::now();
-                        let outcome = contime.send(batch.into_iter().map(Into::into)).expect("persistent send should succeed");
+                        contime.send(batch.into_iter().map(Into::into)).expect("persistent send should succeed");
                         elapsed += started.elapsed();
-                        black_box(outcome);
+                        black_box(());
                     }
                     let _ = contime.inspect_inputs(..).expect("inspection should synchronize the final send");
                     elapsed
