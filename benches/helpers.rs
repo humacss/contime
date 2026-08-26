@@ -114,3 +114,7 @@ contime::lanes! {
 
 #[allow(dead_code)]
 pub type BenchContime = bench_lanes::Contime;
+#[allow(dead_code)]
+pub type BenchInputLanes = bench_lanes::InputLanes;
+#[allow(dead_code)]
+pub type BenchSnapshotLanes = bench_lanes::SnapshotLanes;

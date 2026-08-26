@@ -43,3 +43,7 @@ harness = false
 [[bench]]
 name = "router"
 harness = false
+
+[[bench]]
+name = "apply_boundaries"
+harness = false

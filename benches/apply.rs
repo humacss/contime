@@ -96,6 +96,27 @@ fn benchmark_history_late_rate(runner: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_history_reverse_batch(runner: &mut Criterion) {
+    let mut group = runner.benchmark_group("history_reverse_batch");
+    group.bench_function("1000_inputs", |bencher| {
+        bencher.iter_batched_ref(
+            || {
+                let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10_000).0;
+                history.apply_input_batch(vec![new_event(1, 1_000)], &mut ());
+                let batch = (0..1_000).rev().map(|time| new_event(2 + time as u128, time)).collect::<Vec<_>>();
+                (history, batch)
+            },
+            |(history, batch)| {
+                history.apply_input_batch(std::mem::take(batch), &mut ());
+                debug_assert_eq!(history.inputs.storage_counts(), (1, 1_000));
+                black_box(history.inputs.storage_counts());
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
 fn history_for_merged_replay(late_percent: u32) -> SnapshotHistory<BenchSnapshot> {
     let (mut history, batch, expected_counts) = history_and_batch_for_late_rate(late_percent);
     history.inputs.insert_batch(batch);
@@ -537,6 +558,7 @@ criterion_group! {
         benchmark_snapshot_callback_same_snapshot,
         benchmark_snapshot_history_same_snapshot,
         benchmark_history_late_rate,
+        benchmark_history_reverse_batch,
         benchmark_history_merged_replay,
         benchmark_history_horizon_prune,
         benchmark_send_persistent_matrix,
