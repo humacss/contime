@@ -47,6 +47,7 @@
 //! assert_eq!(inputs[1].input.time(), 5);
 //! ```
 mod api;
+mod batch;
 mod history;
 mod journal;
 mod key;
@@ -65,6 +66,8 @@ use worker::{Worker, WorkerInbound};
 #[doc(hidden)]
 pub use api::CompletionBenchmark;
 pub use api::{Contime, ContimeError};
+#[doc(hidden)]
+pub use batch::SnapshotBatchBenchmark;
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
