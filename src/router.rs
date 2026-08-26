@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::marker::PhantomData;
 use std::ops::{Bound, RangeBounds};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,13 +16,13 @@ use crate::{
 type RoutedWorkerInputs<IL> = Vec<Vec<WorkerInput<IL>>>;
 
 struct CanonicalInputIndex<T> {
-    times_by_id: HashMap<u128, T>,
-    ids_by_time: BTreeMap<T, BTreeSet<u128>>,
+    retained_ids: HashSet<u128>,
+    ids_by_retention_time: BTreeMap<T, Vec<u128>>,
 }
 
 impl<T> Default for CanonicalInputIndex<T> {
     fn default() -> Self {
-        Self { times_by_id: HashMap::new(), ids_by_time: BTreeMap::new() }
+        Self { retained_ids: HashSet::new(), ids_by_retention_time: BTreeMap::new() }
     }
 }
 
@@ -31,29 +31,24 @@ where
     T: ContimeTime,
 {
     fn contains(&self, input_id: u128) -> bool {
-        self.times_by_id.contains_key(&input_id)
+        self.retained_ids.contains(&input_id)
     }
 
     fn insert(&mut self, input_id: u128, time: T) {
-        self.times_by_id.insert(input_id, time.clone());
-        self.ids_by_time.entry(time).or_default().insert(input_id);
+        assert!(self.retained_ids.insert(input_id), "canonical input ID was inserted twice");
+        self.ids_by_retention_time.entry(time).or_default().push(input_id);
     }
 
     fn prune_before(&mut self, earliest_time: T) -> usize {
-        let retained = self.ids_by_time.split_off(&earliest_time);
-        let removed = std::mem::replace(&mut self.ids_by_time, retained);
-        let removed_ids = removed
-            .into_values()
-            .flatten()
-            .inspect(|input_id| {
-                self.times_by_id.remove(input_id);
-            })
-            .count();
-        removed_ids
+        let retained = self.ids_by_retention_time.split_off(&earliest_time);
+        let removed = std::mem::replace(&mut self.ids_by_retention_time, retained);
+        removed.into_values().flatten().filter(|input_id| self.retained_ids.remove(input_id)).count()
     }
 }
 
 const fn canonical_input_index_entry_size<T>() -> u64 {
+    // One ID in the identity set, one ID in its retention bucket, and a
+    // conservative repeated time charge even when IDs share a bucket.
     (size_of::<u128>() * 2 + size_of::<T>()) as u64
 }
 

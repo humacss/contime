@@ -47,14 +47,16 @@ fn journal_prunes_events_before_the_history_horizon() {
 }
 
 #[test]
-fn pruned_inputs_leave_the_retained_id_index() {
+fn horizon_forgets_identity_and_allows_the_id_at_a_new_retained_time() {
     let contime = TestSnapshotContime::with_history_horizon(1, 100_000, 50);
     contime.apply([TestEvent::Positive(1, 10, 7, 10).into()]).unwrap();
+    contime.apply([TestEvent::Positive(1, 11, 7, 99).into()]).unwrap();
+    assert_eq!(contime.inspect_inputs(..).unwrap().len(), 1);
 
     contime.advance_to(70).unwrap();
     contime.apply([TestEvent::Positive(1, 30, 7, 20).into()]).unwrap();
 
     let retained = contime.inspect_inputs(20..).unwrap();
     assert_eq!(retained.len(), 1);
-    assert_eq!(retained[0].input.id(), 7);
+    assert_eq!((retained[0].input.time(), retained[0].input.id()), (30, 7));
 }
