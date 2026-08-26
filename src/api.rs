@@ -1,10 +1,10 @@
 use std::marker::PhantomData;
-use std::ops::RangeBounds;
-use std::sync::Arc;
+use std::ops::{Bound, RangeBounds};
+use std::sync::{Arc, RwLock};
 
 use crossbeam_channel::unbounded;
 
-use crate::{ApplyWrapper, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
+use crate::{ApplyWrapper, ContimeKey, ContimeTime, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
 
 /// One input that ConTime could not admit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -64,6 +64,7 @@ where
     C: ApplyWrapper<SL>,
 {
     router: Router<SL, IL, C, G>,
+    current_time: RwLock<SL::Time>,
     apply_context: Option<C>,
     global_context: Arc<G>,
     _context: PhantomData<C>,
@@ -76,12 +77,24 @@ where
 {
     pub fn new(worker_count: usize, memory_budget_bytes: u64) -> Self {
         let router = Router::<SL, IL>::new(worker_count, memory_budget_bytes);
-        Self { router, apply_context: Some(()), global_context: Arc::new(()), _context: PhantomData }
+        Self {
+            router,
+            current_time: RwLock::new(SL::Time::default()),
+            apply_context: Some(()),
+            global_context: Arc::new(()),
+            _context: PhantomData,
+        }
     }
 
     pub fn with_history_horizon(worker_count: usize, memory_budget_bytes: u64, lower_time_horizon_delta: SL::Time) -> Self {
         let router = Router::<SL, IL>::with_history_horizon(worker_count, memory_budget_bytes, lower_time_horizon_delta);
-        Self { router, apply_context: Some(()), global_context: Arc::new(()), _context: PhantomData }
+        Self {
+            router,
+            current_time: RwLock::new(SL::Time::default()),
+            apply_context: Some(()),
+            global_context: Arc::new(()),
+            _context: PhantomData,
+        }
     }
 }
 
@@ -93,7 +106,13 @@ where
 {
     pub fn new_with_apply_context(worker_count: usize, memory_budget_bytes: u64, apply_context: C) -> Self {
         let router = Router::<SL, IL, C>::new_with_apply_context(worker_count, memory_budget_bytes, apply_context.clone());
-        Self { router, apply_context: Some(apply_context), global_context: Arc::new(()), _context: PhantomData }
+        Self {
+            router,
+            current_time: RwLock::new(SL::Time::default()),
+            apply_context: Some(apply_context),
+            global_context: Arc::new(()),
+            _context: PhantomData,
+        }
     }
 
     pub fn with_history_horizon_and_apply_context(
@@ -108,7 +127,13 @@ where
             lower_time_horizon_delta,
             apply_context.clone(),
         );
-        Self { router, apply_context: Some(apply_context), global_context: Arc::new(()), _context: PhantomData }
+        Self {
+            router,
+            current_time: RwLock::new(SL::Time::default()),
+            apply_context: Some(apply_context),
+            global_context: Arc::new(()),
+            _context: PhantomData,
+        }
     }
 
     pub fn apply_context(&self) -> C {
@@ -176,7 +201,7 @@ where
             make_apply_context,
         );
         let global_context = router.global_context();
-        Self { router, apply_context: None, global_context, _context: PhantomData }
+        Self { router, current_time: RwLock::new(SL::Time::default()), apply_context: None, global_context, _context: PhantomData }
     }
 
     pub fn global_context(&self) -> Arc<G> {
@@ -184,11 +209,25 @@ where
     }
 
     pub fn advance_to(&self, time: SL::Time) -> Result<(), ContimeError> {
-        Ok(self.router.advance_to(time)?)
+        {
+            let mut current = self.current_time.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if time <= *current {
+                return Ok(());
+            }
+            *current = time.clone();
+        }
+
+        let (response_tx, response_rx) = unbounded();
+        let expected = self.router.dispatch_advance(time, &response_tx)?;
+        drop(response_tx);
+        for _ in 0..expected {
+            response_rx.recv().map_err(|_| ContimeError::ResponseDisconnected)?;
+        }
+        Ok(())
     }
 
     pub fn current_time(&self) -> SL::Time {
-        self.router.current_time()
+        self.current_time.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     /// Applies temporal inputs synchronously and waits for all affected workers.
@@ -222,11 +261,59 @@ where
     where
         R: RangeBounds<SL::Time>,
     {
-        Ok(self.router.inspect_inputs(range)?)
+        let start = owned_bound(range.start_bound());
+        let end = owned_bound(range.end_bound());
+        let (response_tx, response_rx) = unbounded();
+        let expected = self.router.dispatch_inspection(start, end, &response_tx)?;
+        drop(response_tx);
+
+        let mut merged = Vec::<InputJournalEntry<IL>>::new();
+        for _ in 0..expected {
+            for entry in response_rx.recv().map_err(|_| ContimeError::ResponseDisconnected)? {
+                let key = ContimeKey::from_input(&entry.input);
+                match merged.binary_search_by_key(&key, |entry| ContimeKey::from_input(&entry.input)) {
+                    Ok(index) => merge_snapshot_ids(&mut merged[index].routed_snapshot_ids, entry.routed_snapshot_ids),
+                    Err(index) => merged.insert(index, entry),
+                }
+            }
+        }
+        Ok(merged)
     }
 
     pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, ContimeError> {
-        Ok(self.router.query_at(time, snapshot_ids)?)
+        if snapshot_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let positioned_snapshot_ids = snapshot_ids.iter().copied().enumerate().collect::<Vec<_>>();
+        let (response_tx, response_rx) = unbounded();
+        let expected = self.router.dispatch_query(time, &positioned_snapshot_ids, &response_tx)?;
+        drop(response_tx);
+
+        let mut results = Vec::with_capacity(snapshot_ids.len());
+        results.resize_with(snapshot_ids.len(), || None);
+        for _ in 0..expected {
+            for (position, snapshot_lane) in response_rx.recv().map_err(|_| ContimeError::ResponseDisconnected)? {
+                results[position] = snapshot_lane;
+            }
+        }
+        Ok(results)
+    }
+}
+
+fn owned_bound<T: ContimeTime>(bound: Bound<&T>) -> Bound<T> {
+    match bound {
+        Bound::Included(value) => Bound::Included(value.clone()),
+        Bound::Excluded(value) => Bound::Excluded(value.clone()),
+        Bound::Unbounded => Bound::Unbounded,
+    }
+}
+
+fn merge_snapshot_ids(existing: &mut Vec<u128>, incoming: Vec<u128>) {
+    for snapshot_id in incoming {
+        if let Err(index) = existing.binary_search(&snapshot_id) {
+            existing.insert(index, snapshot_id);
+        }
     }
 }
 
