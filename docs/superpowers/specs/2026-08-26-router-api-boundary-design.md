@@ -22,10 +22,10 @@ history, journal, and replay internals is a separate follow-up.
 ## Public API contracts
 
 ```rust
-pub fn send<I>(&self, inputs: I) -> Result<(), ContimeError<Time>>;
+pub fn send<I>(&self, inputs: I) -> Result<(), ContimeError>;
 
 pub fn apply<I>(&self, inputs: I)
-    -> Result<Vec<EventRejection>, ContimeError<Time>>;
+    -> Result<Vec<EventRejection>, ContimeError>;
 ```
 
 `send` is completely asynchronous at the API level. It returns after the router
@@ -36,9 +36,10 @@ worker response is produced.
 its complete portion of the batch and sent one response. An empty rejection
 vector means the batch completed without normal admission rejections.
 
-`ContimeError` is reserved for infrastructure failures such as failure to
-enqueue a worker message or disconnection of a request response channel. Normal
-history and memory decisions are values, not infrastructure errors.
+`ContimeError` is non-generic and reserved for infrastructure failures such as
+failure to enqueue a worker message or disconnection of a request response
+channel. Normal history and memory decisions are values, not infrastructure
+errors.
 
 The same ownership rule applies to the other synchronous operations:
 
