@@ -3,7 +3,9 @@
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use contime::{ApplyInner, ApplyWrapper, Contime, ContimeError, Input, InputBatch, InputRoute, Marker, TestEvent, TestSnapshot};
+use contime::{
+    ApplyInner, ApplyWrapper, Contime, Input, InputBatch, InputRejection, InputRejectionReason, InputRoute, Marker, TestEvent, TestSnapshot,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuppressInput {
@@ -52,36 +54,16 @@ struct SuppressClaimedEvents {
     applied_batches: Arc<AtomicUsize>,
 }
 
-#[derive(Clone, Default)]
-struct CountPlainMarkers;
-
 #[derive(Clone)]
 struct RecordSnapshotTime {
     observed_time: Arc<AtomicI64>,
 }
 
-impl ApplyWrapper<input_lanes::SnapshotLanes> for CountPlainMarkers {
-    fn apply_input_batch_wrapper(
-        &mut self,
-        snapshot: &mut input_lanes::SnapshotLanes,
-        batch: InputBatch<'_, input_lanes::InputLanes>,
-        apply_inner: ApplyInner<input_lanes::SnapshotLanes>,
-    ) {
-        let marker_count = batch.inputs.iter().filter(|input| matches!(input, input_lanes::InputLanes::SuppressInput(_))).count();
-        apply_inner.apply_input_batch(snapshot, batch);
-
-        let mut concrete: TestSnapshot = snapshot.clone().into();
-        concrete.sum += marker_count as i32;
-        *snapshot = concrete.into();
-    }
-}
-
 impl ApplyWrapper<input_lanes::SnapshotLanes> for SuppressClaimedEvents {
     fn apply_input_batch_wrapper(
         &mut self,
-        snapshot: &mut input_lanes::SnapshotLanes,
         batch: InputBatch<'_, input_lanes::InputLanes>,
-        apply_inner: ApplyInner<input_lanes::SnapshotLanes>,
+        apply_inner: &mut ApplyInner<'_, input_lanes::SnapshotLanes>,
     ) {
         self.applied_batches.fetch_add(1, Ordering::Relaxed);
         let suppressed_ids = batch
@@ -99,19 +81,18 @@ impl ApplyWrapper<input_lanes::SnapshotLanes> for SuppressClaimedEvents {
             .filter(|input| !matches!(input, input_lanes::InputLanes::TestEvent(event) if suppressed_ids.contains(&event.id())))
             .collect::<Vec<_>>();
 
-        apply_inner.apply_input_batch(snapshot, InputBatch { snapshot_id: batch.snapshot_id, time: batch.time, inputs: &inputs });
+        apply_inner.apply_input_batch(InputBatch { snapshot_id: batch.snapshot_id, time: batch.time, inputs: &inputs });
     }
 }
 
 impl ApplyWrapper<input_lanes::SnapshotLanes> for RecordSnapshotTime {
     fn apply_input_batch_wrapper(
         &mut self,
-        snapshot: &mut input_lanes::SnapshotLanes,
         batch: InputBatch<'_, input_lanes::InputLanes>,
-        apply_inner: ApplyInner<input_lanes::SnapshotLanes>,
+        apply_inner: &mut ApplyInner<'_, input_lanes::SnapshotLanes>,
     ) {
-        apply_inner.apply_input_batch(snapshot, batch);
-        let concrete: TestSnapshot = snapshot.clone().into();
+        apply_inner.apply_input_batch(batch);
+        let concrete: TestSnapshot = apply_inner.snapshot().clone().into();
         self.observed_time.store(concrete.time, Ordering::Relaxed);
     }
 }
@@ -129,10 +110,24 @@ fn one_apply_call_batches_events_and_markers_through_the_same_input_lane() {
         ])
         .unwrap();
 
-    let snapshot: TestSnapshot = contime.query_at(10, &[1]).unwrap().pop().flatten().unwrap().into();
-    assert_eq!(snapshot.sum, 0, "the marker did not resolve the event submitted in the same input batch");
     assert_eq!(applied_batches.load(Ordering::Relaxed), 1, "one same-time input batch invoked the wrapper more than once");
+    let snapshot: TestSnapshot = contime.query_at(10, &[1]).unwrap().pop().flatten().unwrap().into();
+    assert_eq!(snapshot.sum, 0, "the marker did not suppress the event submitted in the same input batch");
     assert_eq!(contime.inspect_inputs(..).unwrap().len(), 2, "unified inspection did not retain both temporal inputs");
+}
+
+#[test]
+fn marker_added_after_an_event_replays_from_before_the_shared_timestamp() {
+    let applied_batches = Arc::new(AtomicUsize::new(0));
+    let contime =
+        input_lanes::Contime::new_with_apply_context(1, 100_000, SuppressClaimedEvents { applied_batches: Arc::clone(&applied_batches) });
+    contime.apply([TestEvent::Positive(1, 10, 100, 5).into()]).unwrap();
+
+    contime.apply([SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: vec![1] }.into()]).unwrap();
+
+    let snapshot: TestSnapshot = contime.query_at(10, &[1]).unwrap().pop().flatten().unwrap().into();
+    assert_eq!(snapshot.sum, 0, "a marker added after its target event reused a checkpoint containing the suppressed event");
+    assert!(applied_batches.load(Ordering::Relaxed) >= 2, "the late marker did not replay its target timestamp");
 }
 
 #[test]
@@ -154,7 +149,7 @@ fn duplicate_input_does_not_replay_the_history_again() {
 }
 
 #[test]
-fn changed_input_with_the_same_identity_replays_and_replaces_the_inspected_value() {
+fn changed_payload_with_the_same_identity_is_a_noop() {
     let contime =
         input_lanes::Contime::new_with_apply_context(1, 100_000, SuppressClaimedEvents { applied_batches: Arc::new(AtomicUsize::new(0)) });
     contime.apply([TestEvent::Positive(1, 10, 100, 5).into(), TestEvent::Positive(1, 10, 200, 7).into()]).unwrap();
@@ -163,7 +158,7 @@ fn changed_input_with_the_same_identity_replays_and_replaces_the_inspected_value
     contime.apply([SuppressInput { id: 1_000, time: 10, event_id: 200, snapshot_ids: vec![1] }.into()]).unwrap();
 
     let snapshot: TestSnapshot = contime.query_at(10, &[1]).unwrap().pop().flatten().unwrap().into();
-    assert_eq!(snapshot.sum, 5, "replacing a marker input did not replay the batch with its changed value");
+    assert_eq!(snapshot.sum, 7, "a duplicate identity replaced the first canonical marker payload");
     let inputs = contime.inspect_inputs(..).unwrap();
     let inspected_marker = inputs
         .iter()
@@ -172,24 +167,24 @@ fn changed_input_with_the_same_identity_replays_and_replaces_the_inspected_value
             input_lanes::InputLanes::TestEvent(_) => None,
         })
         .expect("the retained marker input should remain inspectable");
-    assert_eq!(inspected_marker.event_id, 200, "inspection retained the marker value that history replaced");
+    assert_eq!(inspected_marker.event_id, 100, "inspection replaced the first canonical marker payload");
 }
 
 #[test]
-fn event_and_marker_with_the_same_identity_replace_each_other() {
+fn event_and_marker_with_the_same_identity_keep_the_first_input() {
     type DefaultInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes>;
     let contime = DefaultInputContime::new(1, 100_000);
     contime.apply([TestEvent::Positive(1, 10, 100, 5).into()]).unwrap();
 
     contime.apply([SuppressInput { id: 100, time: 10, event_id: 100, snapshot_ids: vec![1] }.into()]).unwrap();
 
-    let snapshot = contime.query_at(10, &[1]).unwrap().pop().flatten();
-    assert!(snapshot.is_none(), "replacing the only event with a marker left its snapshot materialized");
+    let snapshot: TestSnapshot = contime.query_at(10, &[1]).unwrap().pop().flatten().unwrap().into();
+    assert_eq!(snapshot.sum, 5, "a marker with an occupied identity replaced the canonical event");
     let inputs = contime.inspect_inputs(..).unwrap();
     assert_eq!(inputs.len(), 1, "an event and marker with one canonical identity were retained as separate inputs");
     assert!(
-        matches!(inputs[0].input, input_lanes::InputLanes::SuppressInput(_)),
-        "the replacement marker was not retained under the shared input identity"
+        matches!(inputs[0].input, input_lanes::InputLanes::TestEvent(_)),
+        "the first canonical input was not retained under the shared identity"
     );
 }
 
@@ -206,7 +201,7 @@ fn plain_marker_creates_pending_history_without_materializing_a_snapshot() {
 }
 
 #[test]
-fn later_event_materializes_a_pending_history_and_replays_its_markers() {
+fn later_suppressed_event_materializes_identity_without_applying_event_state() {
     let contime =
         input_lanes::Contime::new_with_apply_context(1, 100_000, SuppressClaimedEvents { applied_batches: Arc::new(AtomicUsize::new(0)) });
     contime.apply([SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: vec![7] }.into()]).unwrap();
@@ -214,7 +209,7 @@ fn later_event_materializes_a_pending_history_and_replays_its_markers() {
     contime.apply([TestEvent::Positive(7, 10, 100, 5).into()]).unwrap();
 
     let snapshot: TestSnapshot = contime.query_at(10, &[7]).unwrap().pop().flatten().unwrap().into();
-    assert_eq!(snapshot.sum, 0, "materialization did not replay the marker retained by the pending history");
+    assert_eq!(snapshot.sum, 0, "a suppressed event applied state while materializing the pending history identity");
 }
 
 #[test]
@@ -230,6 +225,23 @@ fn marker_only_batch_does_not_invoke_a_snapshot_apply_wrapper() {
         observed_time.load(Ordering::Relaxed),
         i64::MIN,
         "a marker-only pending history invoked an apply wrapper without a snapshot"
+    );
+}
+
+#[test]
+fn forwarded_marker_reaches_lane_application_after_snapshot_materialization() {
+    type RecordingInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes, RecordSnapshotTime>;
+    let observed_time = Arc::new(AtomicI64::new(i64::MIN));
+    let contime =
+        RecordingInputContime::new_with_apply_context(1, 100_000, RecordSnapshotTime { observed_time: Arc::clone(&observed_time) });
+    contime.apply([TestEvent::Positive(7, 5, 100, 3).into()]).unwrap();
+
+    contime.apply([SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: vec![7] }.into()]).unwrap();
+
+    assert_eq!(
+        observed_time.load(Ordering::Relaxed),
+        10,
+        "a forwarded marker batch did not reach lane application for a materialized snapshot",
     );
 }
 
@@ -262,25 +274,62 @@ fn input_inspection_returns_one_global_input_with_every_route() {
 }
 
 #[test]
-fn all_inputs_use_the_same_history_horizon() {
+fn stale_inputs_are_reported_while_valid_batch_inputs_apply() {
     type DefaultInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes>;
     let contime = DefaultInputContime::with_history_horizon(1, 100_000, 50);
-    contime.apply([SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: vec![1] }.into()]).unwrap();
-
     contime.advance_to(70).unwrap();
 
-    assert!(contime.inspect_inputs(..).unwrap().is_empty(), "advancing the history horizon did not prune an old marker input");
-    let error = contime.apply([SuppressInput { id: 2_000, time: 19, event_id: 200, snapshot_ids: vec![1] }.into()]).unwrap_err();
-    assert!(
-        matches!(error, ContimeError::InputBeforeHistoryHorizon { input_time: 19, earliest_time: 20 }),
-        "an input before the retained history horizon returned the wrong error: {error:?}"
+    let outcome = contime
+        .apply([TestEvent::Positive(1, 19, 200, 5).into(), TestEvent::Positive(1, 25, 300, 7).into()])
+        .expect("a stale input should not reject valid inputs in the same batch");
+
+    assert_eq!(outcome.accepted_input_ids, vec![300]);
+    assert_eq!(
+        outcome.rejected_inputs,
+        vec![InputRejection { input_id: 200, input_time: 19, reason: InputRejectionReason::BeforeHistoryHorizon { earliest_time: 20 } }]
     );
+    let snapshot: TestSnapshot =
+        contime.query_at(70, &[1]).unwrap().pop().flatten().expect("the valid input should materialize the snapshot").into();
+    assert_eq!(snapshot.sum, 7);
+    let inputs = contime.inspect_inputs(..).unwrap();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].input.id(), 300);
+}
+
+#[test]
+fn unrouted_inputs_do_not_consume_the_memory_budget_or_enter_history() {
+    type DefaultInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes>;
+    let contime = DefaultInputContime::new(1, 1);
+
+    contime
+        .apply([SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: Vec::new() }.into()])
+        .expect("an unrouted input should be discarded before memory accounting");
+
+    assert!(contime.inspect_inputs(..).unwrap().is_empty(), "an unrouted input entered worker history");
+}
+
+#[test]
+fn unrouted_inputs_are_discarded_before_history_horizon_validation() {
+    type DefaultInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes>;
+    let contime = DefaultInputContime::with_history_horizon(1, 100_000, 50);
+    contime.advance_to(100).unwrap();
+
+    contime
+        .apply([SuppressInput { id: 1_000, time: 49, event_id: 100, snapshot_ids: Vec::new() }.into()])
+        .expect("an unrouted input should be discarded before horizon validation");
+
+    assert!(contime.inspect_inputs(..).unwrap().is_empty(), "an unrouted historical input entered worker history");
 }
 
 #[test]
 fn pruning_a_marker_only_history_keeps_it_pending() {
-    type CountingInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes, CountPlainMarkers>;
-    let contime = CountingInputContime::with_history_horizon_and_apply_context(1, 100_000, 50, CountPlainMarkers);
+    type SuppressingInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes, SuppressClaimedEvents>;
+    let contime = SuppressingInputContime::with_history_horizon_and_apply_context(
+        1,
+        100_000,
+        50,
+        SuppressClaimedEvents { applied_batches: Arc::new(AtomicUsize::new(0)) },
+    );
     contime.apply([SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: vec![1] }.into()]).unwrap();
 
     contime.advance_to(70).unwrap();
@@ -291,17 +340,23 @@ fn pruning_a_marker_only_history_keeps_it_pending() {
 
 #[test]
 fn pruning_a_materialized_history_retains_a_complete_replay_anchor() {
-    type CountingInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes, CountPlainMarkers>;
-    let contime = CountingInputContime::with_history_horizon_and_apply_context(1, 100_000, 50, CountPlainMarkers);
+    type SuppressingInputContime = Contime<input_lanes::SnapshotLanes, input_lanes::InputLanes, SuppressClaimedEvents>;
+    let contime = SuppressingInputContime::with_history_horizon_and_apply_context(
+        1,
+        100_000,
+        50,
+        SuppressClaimedEvents { applied_batches: Arc::new(AtomicUsize::new(0)) },
+    );
     contime
         .apply([
             TestEvent::Positive(1, 10, 100, 5).into(),
-            SuppressInput { id: 1_000, time: 10, event_id: 100, snapshot_ids: vec![1] }.into(),
+            TestEvent::Positive(1, 10, 200, 7).into(),
+            SuppressInput { id: 1_000, time: 10, event_id: 200, snapshot_ids: vec![1] }.into(),
         ])
         .unwrap();
 
     contime.advance_to(70).unwrap();
 
     let snapshot: TestSnapshot = contime.query_at(70, &[1]).unwrap().pop().flatten().unwrap().into();
-    assert_eq!(snapshot.sum, 6, "pruning discarded event or marker effects from the retained replay anchor");
+    assert_eq!(snapshot.sum, 5, "pruning discarded effective-event filtering from the retained replay anchor");
 }

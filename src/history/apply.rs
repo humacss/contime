@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::collections::btree_map::Entry;
 
 use crate::{ContimeKey, Input, InputBatch, InputLanes, Snapshot, SnapshotLanes};
 
@@ -7,55 +7,54 @@ use super::checkpoints::{
 };
 use super::LocalSnapshotHistory;
 
-/// The public primitive for applying the event subset of one same-time input batch.
-pub struct ApplyInner<S>
+/// The public primitive for applying effective event batches within one raw history bucket.
+pub struct ApplyInner<'a, S>
 where
     S: Snapshot,
     S::Input: InputLanes<S>,
 {
-    _snapshot: PhantomData<S>,
+    snapshot: &'a mut S,
+    history_input_count: u64,
+    apply_count: usize,
 }
 
-impl<S> Copy for ApplyInner<S>
+impl<'a, S> ApplyInner<'a, S>
 where
     S: Snapshot,
     S::Input: InputLanes<S>,
 {
-}
-
-impl<S> Clone for ApplyInner<S>
-where
-    S: Snapshot,
-    S::Input: InputLanes<S>,
-{
-    fn clone(&self) -> Self {
-        *self
+    /// Creates an isolated apply operation over one mutable snapshot.
+    pub fn new(snapshot: &'a mut S, history_input_count: u64) -> Self {
+        Self { snapshot, history_input_count, apply_count: 0 }
     }
-}
 
-impl<S> Default for ApplyInner<S>
-where
-    S: Snapshot,
-    S::Input: InputLanes<S>,
-{
-    fn default() -> Self {
-        Self { _snapshot: PhantomData }
+    /// Returns the cumulative raw input count represented by this history bucket.
+    pub const fn history_input_count(&self) -> u64 {
+        self.history_input_count
     }
-}
 
-impl<S> ApplyInner<S>
-where
-    S: Snapshot,
-    S::Input: InputLanes<S>,
-{
-    pub fn apply_input_batch(&self, snapshot: &mut S, batch: InputBatch<'_, S::Input>) {
-        if !batch.inputs.iter().any(|input| input.is_event()) {
-            return;
+    /// Applies one effective event batch and returns its raw history input count.
+    ///
+    /// Every effective partition of one raw history bucket receives the same
+    /// cumulative count. An empty effective batch does not mutate the snapshot.
+    pub fn apply_input_batch(&mut self, batch: InputBatch<'_, S::Input>) -> u64 {
+        if !batch.inputs.is_empty() {
+            let time = batch.time.clone();
+            <S::Input as InputLanes<S>>::apply_events(self.snapshot, batch, self.history_input_count);
+            self.snapshot.set_time(time);
         }
 
-        let time = batch.time.clone();
-        <S::Input as InputLanes<S>>::apply_events(snapshot, batch);
-        snapshot.set_time(time);
+        self.apply_count += 1;
+        self.history_input_count
+    }
+
+    /// Returns the snapshot after all inner applies completed so far.
+    pub fn snapshot(&self) -> &S {
+        self.snapshot
+    }
+
+    pub(crate) const fn has_applied(&self) -> bool {
+        self.apply_count != 0
     }
 }
 
@@ -63,13 +62,27 @@ where
 ///
 /// A panic indicates a broken invariant, and the caller must not assume the affected
 /// `contime` instance remains usable afterward.
+///
+/// Implementations must call `apply_inner` at least once. They may filter or
+/// repartition events and inspect the resulting snapshot through
+/// [`ApplyInner::snapshot`]. Mutable snapshot access remains encapsulated so
+/// every available mutation is represented by an applied event batch.
 pub trait ApplyWrapper<S>
 where
     S: Snapshot,
     S::Input: InputLanes<S>,
 {
-    fn apply_input_batch_wrapper(&mut self, snapshot: &mut S, batch: InputBatch<'_, S::Input>, apply_inner: ApplyInner<S>) {
-        apply_inner.apply_input_batch(snapshot, batch);
+    fn apply_input_batch_wrapper(&mut self, batch: InputBatch<'_, S::Input>, apply_inner: &mut ApplyInner<'_, S>) {
+        apply_inner.apply_input_batch(batch);
+    }
+
+    /// Applies one canonical-history batch during input reconciliation.
+    ///
+    /// The default preserves ordinary application semantics. Integrations may
+    /// override this method to observe authoritative history changes without
+    /// repeating those effects during queries or retention reconstruction.
+    fn reconcile_input_batch_wrapper(&mut self, batch: InputBatch<'_, S::Input>, apply_inner: &mut ApplyInner<'_, S>) {
+        self.apply_input_batch_wrapper(batch, apply_inner);
     }
 }
 
@@ -101,7 +114,11 @@ where
             applied_batch.single_changed_input_key,
             applied_batch.changed_event_count,
         ) else {
-            let checkpoint_bytes = self.checkpoints.drain(..).map(|(_key, checkpoint)| checkpoint.conservative_size() as i64).sum::<i64>();
+            let checkpoint_bytes = self
+                .checkpoints
+                .drain(..)
+                .map(|(_key, checkpoint, _history_input_count)| checkpoint.conservative_size() as i64 + size_of::<u64>() as i64)
+                .sum::<i64>();
             return applied_batch.bytes_delta - checkpoint_bytes;
         };
         let applied_checkpoint = self.apply_inputs_to_checkpoint(checkpoint, context);
@@ -143,9 +160,7 @@ where
                 None => input_time,
             });
 
-            if self.inputs.get(&input_key).is_some_and(|existing| existing == &input) {
-                continue;
-            }
+            let Entry::Vacant(entry) = self.inputs.entry(input_key.clone()) else { continue };
 
             if input.is_event() {
                 let input_lane_index = S::input_lane_index(self.snapshot_id, &input).unwrap_or_else(|| {
@@ -160,11 +175,8 @@ where
                 }
             }
 
-            if let Some(existing) = self.inputs.insert(input_key.clone(), input) {
-                bytes_delta -= existing.conservative_size() as i64;
-            }
-
-            bytes_delta += self.inputs.get(&input_key).map(|input| input.conservative_size() as i64).unwrap_or_default();
+            bytes_delta += input.conservative_size() as i64;
+            entry.insert(input);
             changed_event_count += 1;
             single_changed_event_key = (changed_event_count == 1).then_some(input_key);
         }

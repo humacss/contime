@@ -51,7 +51,14 @@ An `Event` is an `Input` that should be applied to one or more `Snapshot`s. `sna
 
 When an `Event` is applied to a `Snapshot`, the event modifies the `Snapshot` state. 
 
-The system keeps a list of `Checkpoint`s internally to retain previous state, and can generate the state at time `T` by grabbing the closest `Checkpoint` and applying all inputs in order through time `T`.
+The system keeps a list of `Checkpoint`s internally to retain previous state, and can generate the state at time `T` by grabbing the closest `Checkpoint` and applying all inputs in order through time `T`. Each checkpoint also retains the cumulative raw history input count through that checkpoint, so replay resumes with both the snapshot state and its deterministic input frontier.
+
+When the retained history horizon advances, ConTime first folds pruned inputs into
+the replay-anchor checkpoint and then calls `Snapshot::compact_before` on every
+retained checkpoint. The default implementation is a no-op. Snapshots that keep
+input IDs or other replay-only references can override the hook, or use the
+`compact = { ... }` derive option, to discard references older than the supplied
+boundary while preserving their accumulated state.
 
 A checkpoint at time `T` represents the state after the complete input bucket at `T`.
 Histories can exist without checkpoints when they contain only markers. Such histories are
@@ -90,9 +97,9 @@ The public API is small. In practice you do five things:
 
 Advanced integrations may also add marker variants to the generated
 `InputLanes`. Markers are opaque temporal records routed into the same replay
-batches as events. They never apply to snapshots directly; an `ApplyWrapper`
-may interpret the complete input batch before passing its event subset to
-snapshot application.
+batches as events. An `ApplyWrapper` may interpret the complete input batch and
+choose whether markers are forwarded to lane application. Generated default
+lanes ignore marker variants.
 
 ### Time Types
 
@@ -133,7 +140,9 @@ contime::lanes! {
 }
 ```
 
-Inputs are ordered by `(time, input_id)`. A composite time therefore creates a
+Inputs are identified by `input_id` and ordered by `(time, input_id)`. A
+retained input ID is an idempotent no-op even if it is submitted with another
+time. A composite time therefore creates a
 separate apply batch for each distinct complete value while retaining normal
 out-of-order replay behavior. Horizon advancement subtracts the configured
 horizon value using the concrete time type's `ContimeTime::saturating_sub`
@@ -162,19 +171,56 @@ The snapshot logic in the example only appends values during replay. The ordered
 Advanced callers can provide an `ApplyWrapper` and implement
 `apply_input_batch_wrapper` to control how that batch affects the working
 snapshot. The default wrapper filters out plain markers and applies the event
-subset once. Custom wrappers may call the inner apply zero, one, or many times
-with temporary same-time input batches. Wrappers are infallible and every
-remaining input batch is replayed after the wrapper returns.
+subset once. Custom wrappers may call the inner apply one or many times with
+temporary input batches. Every wrapper invocation must call the inner apply at
+least once; use an empty effective batch when every event is filtered out.
+Each inner apply exposes the cumulative raw history input count represented by
+the outer replay bucket. If a wrapper partitions one raw bucket into multiple
+effective applies, every partition receives the same count.
+
+`reconcile_input_batch_wrapper` is the authoritative-history counterpart. It
+is called while accepted inputs reconcile canonical history and delegates to
+`apply_input_batch_wrapper` by default. Integrations may override it to publish
+effects caused by authoritative history changes. Queries and retention
+reconstruction use only `apply_input_batch_wrapper`, so they reconstruct the
+same snapshot state without republishing those effects.
+
+`ApplyInner` owns the mutable snapshot reference while the wrapper runs.
+Wrappers may inspect the resulting snapshot through its immutable `snapshot`
+accessor, but they cannot mutate snapshot state directly. Wrappers are
+infallible and every remaining input batch is replayed after the wrapper
+returns.
+
+### History Input Counts
+
+A history input count is the cumulative number of unique raw inputs represented
+by one snapshot history through the end of a complete-time bucket. It includes
+events and markers before an `ApplyWrapper` filters or partitions the bucket,
+including inputs compacted into a retained horizon checkpoint.
+
+```text
+next_count = checkpoint_count + raw_bucket_input_count
+```
+
+Occupied retained input IDs are idempotent no-ops and do not increase the
+count. Marker-only corrections increase it even when the effective event set
+is empty. Late inputs replay the affected suffix and increase every later
+frontier deterministically. The resulting count is available as
+`ApplyInner::history_input_count` and, when concrete snapshot application runs,
+as `ApplyBatch::history_input_count`. Checkpoints store the same count with the
+snapshot and restore both before replaying a later suffix.
 
 ### Markers
 
-A marker has a canonical id and complete ordered time, like an event, but it
-does not mutate snapshot state. One marker is globally identified across the
+A marker has a canonical id and complete ordered time, like an event, but has
+no default snapshot behavior. One marker is globally identified across the
 ConTime instance even when its routing makes it visible to several snapshot
-histories.
+histories. An apply wrapper may forward markers to custom lane application;
+generated default lanes ignore them.
 
-Applying a new or changed marker replays each affected history from the
-marker's time. Applying an identical marker again is a deduplicated no-op. The
+Applying a marker with a new `(time, id)` replays each affected history from
+the marker's time. Applying an occupied identity again is an idempotent no-op;
+ConTime does not compare or replace input payloads. The
 default apply wrapper ignores markers, while custom wrappers receive events and
 markers together in an `InputBatch` and define all marker semantics.
 

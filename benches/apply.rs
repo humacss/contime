@@ -291,12 +291,12 @@ impl contime::ApplyEvents<CallbackEvent> for CallbackSnapshot {
 impl contime::ApplyWrapper<CallbackSnapshot> for CallbackContext {
     fn apply_input_batch_wrapper(
         &mut self,
-        snapshot: &mut CallbackSnapshot,
         batch: contime::InputBatch<'_, CallbackEvent>,
-        apply_inner: contime::ApplyInner<CallbackSnapshot>,
+        apply_inner: &mut contime::ApplyInner<'_, CallbackSnapshot>,
     ) {
         let event_ids = batch.inputs.iter().map(|event| event.event_id).collect::<Vec<_>>();
-        apply_inner.apply_input_batch(snapshot, batch);
+        apply_inner.apply_input_batch(batch);
+        let snapshot = apply_inner.snapshot();
         for event_id in event_ids {
             self.sink = self.sink.wrapping_add(event_id).wrapping_add(snapshot.sum as u128);
         }

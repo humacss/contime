@@ -12,7 +12,7 @@ fn test_memory_full() {
     let mut hit_memory_full = false;
     for i in 0..1000u128 {
         match c.apply([TestEvent::Positive(1, i as i64, i, 1)].map(Into::into)) {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(ContimeError::MemoryFull) => {
                 hit_memory_full = true;
                 break;
@@ -33,7 +33,7 @@ fn test_memory_full_then_advance_frees() {
     let mut last_applied = 0i64;
     for i in 0..1000u128 {
         match c.apply([TestEvent::Positive(1, i as i64, i, 1)].map(Into::into)) {
-            Ok(()) => {
+            Ok(_) => {
                 last_applied = i as i64;
             }
             Err(ContimeError::MemoryFull) => break,
@@ -77,13 +77,21 @@ fn test_advance_to_prunes_and_keeps_future_apply_query_working() {
 }
 
 #[test]
-fn test_event_before_history_horizon_is_rejected() {
+fn test_event_before_history_horizon_is_reported() {
     let c = TestSnapshotContime::with_history_horizon(1, 100000, 50);
     c.advance_to(100).unwrap();
 
-    let error = c.apply([TestEvent::Positive(1, 49, 1, 10)].map(Into::into)).unwrap_err();
+    let outcome = c.apply([TestEvent::Positive(1, 49, 1, 10)].map(Into::into)).unwrap();
 
-    assert!(matches!(error, ContimeError::InputBeforeHistoryHorizon { input_time: 49, earliest_time: 50 }));
+    assert!(outcome.accepted_input_ids.is_empty());
+    assert!(matches!(
+        outcome.rejected_inputs.as_slice(),
+        [contime::InputRejection {
+            input_id: 1,
+            input_time: 49,
+            reason: contime::InputRejectionReason::BeforeHistoryHorizon { earliest_time: 50 },
+        }]
+    ));
 }
 
 #[test]

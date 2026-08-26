@@ -157,7 +157,7 @@ fn handle_worker<SL, IL, C>(
 
 fn record_worker_inputs<IL>(input_log: &mut Vec<InputJournalEntry<IL>>, inputs: &[WorkerInput<IL>]) -> i64
 where
-    IL: Input + Clone + PartialEq,
+    IL: Input + Clone,
 {
     let mut bytes_delta = 0i64;
     for routed_input in inputs {
@@ -165,12 +165,6 @@ where
         match input_log.binary_search_by_key(&key, |entry| ContimeKey::from_input(&entry.input)) {
             Ok(index) => {
                 let entry = &mut input_log[index];
-                if entry.input != routed_input.input {
-                    bytes_delta = bytes_delta.saturating_sub(Input::conservative_size(&entry.input) as i64);
-                    entry.input = routed_input.input.clone();
-                    bytes_delta = bytes_delta.saturating_add(Input::conservative_size(&entry.input) as i64);
-                }
-
                 if let Err(route_index) = entry.routed_snapshot_ids.binary_search(&routed_input.snapshot_id) {
                     entry.routed_snapshot_ids.insert(route_index, routed_input.snapshot_id);
                     bytes_delta = bytes_delta.saturating_add(size_of::<u128>() as i64);

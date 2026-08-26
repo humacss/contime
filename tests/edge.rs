@@ -17,14 +17,14 @@ fn test_negative_event_application() {
 }
 
 #[test]
-fn test_duplicate_event_ids_different_times() {
+fn duplicate_event_ids_at_different_times_keep_the_first_input() {
     let c = TestSnapshotContime::new(1, 100000);
 
-    // Same event id (0) but different times — BTreeMap keys differ by time
     c.apply([TestEvent::Positive(1, 1, 0, 10), TestEvent::Positive(1, 5, 0, 20)].map(Into::into)).unwrap();
 
     let snap = query_one(&c, 6, 1);
-    assert_eq!(snap.sum, 30); // both events applied
+    assert_eq!(snap.sum, 10);
+    assert_eq!(c.inspect_inputs(..).unwrap().len(), 1);
 }
 
 #[test]

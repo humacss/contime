@@ -20,7 +20,9 @@ where
     /// In-memory snapshot-lane variant established by the first event.
     pub(super) snapshot_lane_index: Option<usize>,
     /// Materialized checkpoints sorted by event time and id.
-    pub checkpoints: VecDeque<(ContimeKey<S::Time>, S)>,
+    pub checkpoints: VecDeque<(ContimeKey<S::Time>, S, u64)>,
+    /// Checkpoint containing the accumulated state of inputs pruned before the horizon.
+    pub(super) replay_anchor_key: Option<ContimeKey<S::Time>>,
     /// Routed temporal inputs keyed by time and id.
     pub inputs: BTreeMap<ContimeKey<S::Time>, S::Input>,
     /// Interval between generated checkpoints during replay.
@@ -41,10 +43,10 @@ where
     pub fn new(snapshot: S, current_time: S::Time, lower_time_horizon_delta: S::Time) -> (Self, i64) {
         let snapshot_id = snapshot.id();
         let snapshot_lane_index = snapshot.lane_index();
-        let snapshot_size = snapshot.conservative_size() as i64;
+        let snapshot_size = snapshot.conservative_size() as i64 + size_of::<u64>() as i64;
         let checkpoint_key = ContimeKey { time: snapshot.time(), id: u128::MAX };
         let mut checkpoints = VecDeque::new();
-        checkpoints.push_back((checkpoint_key, snapshot));
+        checkpoints.push_back((checkpoint_key, snapshot, 0));
         (
             Self {
                 current_time,
@@ -52,6 +54,7 @@ where
                 snapshot_id,
                 snapshot_lane_index: Some(snapshot_lane_index),
                 checkpoints,
+                replay_anchor_key: None,
                 inputs: BTreeMap::new(),
                 checkpoint_interval: CHECKPOINT_INTERVAL,
             },
@@ -68,6 +71,7 @@ where
                 snapshot_id,
                 snapshot_lane_index: None,
                 checkpoints: VecDeque::new(),
+                replay_anchor_key: None,
                 inputs: BTreeMap::new(),
                 checkpoint_interval: CHECKPOINT_INTERVAL,
             },
@@ -95,18 +99,26 @@ where
 
         let mut bytes_delta: i64 = 0;
 
-        let replay_anchor = get_checkpoint_before_with_context(self, drop_time, context);
+        let replay_anchor = get_checkpoint_before_with_context(self, drop_time.clone(), context);
 
-        let first_kept_checkpoint = self.checkpoints.partition_point(|(key, _checkpoint)| key < &drop_key);
-        for (_key, checkpoint) in self.checkpoints.drain(..first_kept_checkpoint) {
-            bytes_delta -= checkpoint.conservative_size() as i64;
+        let first_kept_checkpoint = self.checkpoints.partition_point(|(key, _checkpoint, _history_input_count)| key < &drop_key);
+        for (_key, checkpoint, _history_input_count) in self.checkpoints.drain(..first_kept_checkpoint) {
+            bytes_delta -= checkpoint.conservative_size() as i64 + size_of::<u64>() as i64;
         }
 
-        if let Some((key, checkpoint)) = replay_anchor {
-            if self.checkpoints.front().is_none_or(|(existing_key, _checkpoint)| existing_key > &key) {
-                bytes_delta += checkpoint.conservative_size() as i64;
-                self.checkpoints.push_front((key, checkpoint));
+        for (_key, checkpoint, _history_input_count) in &mut self.checkpoints {
+            let previous_size = checkpoint.conservative_size();
+            checkpoint.compact_before(drop_time.clone());
+            bytes_delta += checkpoint.conservative_size() as i64 - previous_size as i64;
+        }
+
+        if let Some((key, mut checkpoint, history_input_count)) = replay_anchor {
+            checkpoint.compact_before(drop_time);
+            if self.checkpoints.front().is_none_or(|(existing_key, _checkpoint, _history_input_count)| existing_key > &key) {
+                bytes_delta += checkpoint.conservative_size() as i64 + size_of::<u64>() as i64;
+                self.checkpoints.push_front((key.clone(), checkpoint, history_input_count));
             }
+            self.replay_anchor_key = Some(key);
         }
 
         let kept_inputs = self.inputs.split_off(&drop_key);
@@ -251,25 +263,28 @@ mod tests {
     impl crate::ApplyWrapper<ContextSnapshot> for Vec<i32> {
         fn apply_input_batch_wrapper(
             &mut self,
-            snapshot: &mut ContextSnapshot,
             batch: InputBatch<'_, ContextEvent>,
-            apply_inner: crate::ApplyInner<ContextSnapshot>,
+            apply_inner: &mut crate::ApplyInner<'_, ContextSnapshot>,
         ) {
-            apply_inner.apply_input_batch(snapshot, batch);
-            self.push(snapshot.sum);
+            apply_inner.apply_input_batch(batch);
+            self.push(apply_inner.snapshot().sum);
         }
     }
 
     fn checkpoint_keys<S: Snapshot>(history: &SnapshotHistory<S>) -> Vec<ContimeKey<S::Time>> {
-        history.checkpoints.iter().map(|(key, _checkpoint)| key.clone()).collect()
+        history.checkpoints.iter().map(|(key, _checkpoint, _history_input_count)| key.clone()).collect()
     }
 
     fn checkpoint<'a, S: Snapshot>(history: &'a SnapshotHistory<S>, key: &ContimeKey<S::Time>) -> Option<&'a S> {
-        history.checkpoints.iter().find(|(checkpoint_key, _checkpoint)| checkpoint_key == key).map(|(_key, checkpoint)| checkpoint)
+        history
+            .checkpoints
+            .iter()
+            .find(|(checkpoint_key, _checkpoint, _history_input_count)| checkpoint_key == key)
+            .map(|(_key, checkpoint, _history_input_count)| checkpoint)
     }
 
     fn first_checkpoint<S: Snapshot>(history: &SnapshotHistory<S>) -> Option<&S> {
-        history.checkpoints.front().map(|(_key, checkpoint)| checkpoint)
+        history.checkpoints.front().map(|(_key, checkpoint, _history_input_count)| checkpoint)
     }
 
     fn apply_one<S>(history: &mut SnapshotHistory<S>, event: S::Input)
@@ -393,12 +408,11 @@ mod tests {
     impl crate::ApplyWrapper<ContextSnapshot> for WrapperTrace {
         fn apply_input_batch_wrapper(
             &mut self,
-            snapshot: &mut ContextSnapshot,
             batch: InputBatch<'_, ContextEvent>,
-            apply_inner: crate::ApplyInner<ContextSnapshot>,
+            apply_inner: &mut crate::ApplyInner<'_, ContextSnapshot>,
         ) {
             self.batches.push((batch.time, batch.inputs.iter().copied().map(|event| event.value).collect()));
-            apply_inner.apply_input_batch(snapshot, batch);
+            apply_inner.apply_input_batch(batch);
         }
     }
 
@@ -415,6 +429,51 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct ReconciliationTrace {
+        applied_batches: Vec<i64>,
+        reconciled_batches: Vec<i64>,
+    }
+
+    impl crate::ApplyWrapper<ContextSnapshot> for ReconciliationTrace {
+        fn apply_input_batch_wrapper(
+            &mut self,
+            batch: InputBatch<'_, ContextEvent>,
+            apply_inner: &mut crate::ApplyInner<'_, ContextSnapshot>,
+        ) {
+            self.applied_batches.push(batch.time);
+            apply_inner.apply_input_batch(batch);
+        }
+
+        fn reconcile_input_batch_wrapper(
+            &mut self,
+            batch: InputBatch<'_, ContextEvent>,
+            apply_inner: &mut crate::ApplyInner<'_, ContextSnapshot>,
+        ) {
+            self.reconciled_batches.push(batch.time);
+            self.apply_input_batch_wrapper(batch, apply_inner);
+        }
+    }
+
+    #[test]
+    fn reconciliation_is_observable_without_changing_historical_reconstruction() {
+        let snapshot = ContextSnapshot { id: 1, time: 0, sum: 0 };
+        let (mut history, _) = SnapshotHistory::new(snapshot, 0, 1000);
+        let mut context = ReconciliationTrace::default();
+
+        history.apply_input_batch(vec![ContextEvent { id: 10, time: 10, snapshot_id: 1, value: 7 }], &mut context);
+        history.apply_input_batch(vec![ContextEvent { id: 20, time: 20, snapshot_id: 1, value: 11 }], &mut context);
+        context.applied_batches.clear();
+        context.reconciled_batches.clear();
+
+        let reconstructed =
+            history.snapshot_only_at_with_context(10, &mut context).expect("an event at the query time should materialize a snapshot");
+
+        assert_eq!(reconstructed.sum, 7, "historical reconstruction changed snapshot application semantics");
+        assert_eq!(context.applied_batches, vec![10], "historical reconstruction did not use the ordinary apply wrapper");
+        assert!(context.reconciled_batches.is_empty(), "historical reconstruction invoked the authoritative reconciliation callback");
+    }
+
+    #[derive(Default)]
     struct MultiApplyWrapper {
         batches: Vec<(i64, Vec<i32>)>,
     }
@@ -422,19 +481,18 @@ mod tests {
     impl crate::ApplyWrapper<ContextSnapshot> for MultiApplyWrapper {
         fn apply_input_batch_wrapper(
             &mut self,
-            snapshot: &mut ContextSnapshot,
             batch: InputBatch<'_, ContextEvent>,
-            apply_inner: crate::ApplyInner<ContextSnapshot>,
+            apply_inner: &mut crate::ApplyInner<'_, ContextSnapshot>,
         ) {
             let earlier = [ContextEvent { id: 1, time: batch.time - 10, snapshot_id: batch.snapshot_id, value: 3 }];
             let earlier_refs = [&earlier[0]];
             let earlier_batch = InputBatch { snapshot_id: batch.snapshot_id, time: batch.time - 10, inputs: &earlier_refs };
 
             self.batches.push((earlier_batch.time, earlier_batch.inputs.iter().copied().map(|event| event.value).collect()));
-            apply_inner.apply_input_batch(snapshot, earlier_batch);
+            apply_inner.apply_input_batch(earlier_batch);
 
             self.batches.push((batch.time, batch.inputs.iter().copied().map(|event| event.value).collect()));
-            apply_inner.apply_input_batch(snapshot, batch);
+            apply_inner.apply_input_batch(batch);
         }
     }
 
@@ -483,6 +541,21 @@ mod tests {
         assert_eq!(anchor.time, 35);
         assert_eq!(history.inputs.keys().map(|key| key.time).collect::<Vec<_>>(), vec![45]);
         assert_eq!(history.snapshot_only_at(45).items, vec![5, 10, 20]);
+    }
+
+    #[test]
+    fn same_time_input_after_pruning_replays_from_the_retained_anchor() {
+        let base = TestSnapshot { id: 1, time: 0, sum: 0, items: vec![] };
+        let (mut history, _) = SnapshotHistory::new(base, 0, 0);
+
+        apply_one(&mut history, TestEvent::Positive(1, 15, 15, 12));
+        history.advance(20);
+        apply_one(&mut history, TestEvent::Positive(1, 25, 25, 3));
+        assert_eq!(history.snapshot_only_at(25).sum, 15);
+
+        apply_one(&mut history, TestEvent::Positive(1, 25, 26, 0));
+
+        assert_eq!(history.snapshot_only_at(25).sum, 15);
     }
 
     #[test]

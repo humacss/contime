@@ -57,7 +57,10 @@ fn snapshot_derive_preserves_generic_target_type() {
     source.set_snapshot_identity(&mut snapshot);
     let events = [&event];
 
-    contime::ApplyEvents::apply_events(&mut snapshot, contime::ApplyBatch { snapshot_id: 7, time: 11, events: &events });
+    contime::ApplyEvents::apply_events(
+        &mut snapshot,
+        contime::ApplyBatch { snapshot_id: 7, time: 11, history_input_count: 1, events: &events },
+    );
 
     assert_eq!("account:7", snapshot.value, "generic snapshot derive did not retain the consumer target value");
 }
@@ -75,13 +78,18 @@ pub struct OnDerivedValueChanged {
 #[contime_snapshot(
     events = [OnDerivedValueChanged],
     id = [entity_id],
-    bytes = 32,
+    bytes = 64 + self.retained_input_ids.capacity() as u64 * 16,
+    compact = {
+        self.retained_input_ids.clear();
+        self.retained_input_ids.shrink_to_fit();
+    },
     apply = {
         for event in batch.events {
             match event {
                 DerivedValueAtEvent::OnDerivedValueChanged(event) => {
                     self.entity_id = event.entity_id;
                     self.value = event.value;
+                    self.retained_input_ids.push(event.event_id);
                 }
             }
         }
@@ -92,6 +100,7 @@ pub struct DerivedValueAt {
     entity_id: u128,
     time: i64,
     value: i32,
+    retained_input_ids: Vec<u128>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
@@ -165,6 +174,19 @@ fn derives_generate_event_snapshot_and_lanes() {
 
     assert_eq!(7, snapshot.id());
     assert_eq!(99, snapshot.value);
+}
+
+#[test]
+fn derived_snapshot_compaction_is_delegated_through_generated_lanes() {
+    let contime = derived_lanes::Contime::with_history_horizon(1, 2_048, 10);
+    contime.apply([OnDerivedValueChanged { event_id: 10, entity_id: 7, time: 5, value: 99 }].map(Into::into)).expect("event should apply");
+
+    contime.advance_to(20).expect("the history horizon should advance");
+
+    let snapshot: DerivedValueAt =
+        contime.query_at(20, &[7]).expect("query should succeed").pop().flatten().expect("snapshot should exist").into();
+    assert_eq!(snapshot.value, 99);
+    assert!(snapshot.retained_input_ids.is_empty());
 }
 
 #[test]

@@ -96,6 +96,15 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
         })
         .collect::<Vec<_>>();
 
+    let snapshot_compact_arms = snapshots
+        .iter()
+        .map(|snapshot| {
+            let variant = &snapshot.variant;
+            let ty = &snapshot.path;
+            quote! { Self::#variant(s) => <#ty as ::contime::Snapshot>::compact_before(s, time), }
+        })
+        .collect::<Vec<_>>();
+
     let snapshot_from_impls = snapshots
         .iter()
         .map(|snapshot| {
@@ -251,6 +260,7 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                             ::contime::ApplyBatch {
                                 snapshot_id: batch.snapshot_id,
                                 time: batch.time.clone(),
+                                history_input_count,
                                 events: &bucket,
                             },
                         );
@@ -476,6 +486,12 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                     }
                 }
 
+                fn compact_before(&mut self, time: Self::Time) {
+                    match self {
+                        #( #snapshot_compact_arms )*
+                    }
+                }
+
             }
 
             #( #snapshot_from_impls )*
@@ -530,7 +546,11 @@ fn expand_lanes(input: impl Into<LanesManifest>) -> Result<TokenStream2> {
                     }
                 }
 
-                fn apply_events(snapshot: &mut SnapshotLanes, batch: ::contime::InputBatch<'_, Self>) {
+                fn apply_events(
+                    snapshot: &mut SnapshotLanes,
+                    batch: ::contime::InputBatch<'_, Self>,
+                    history_input_count: u64,
+                ) {
                     match snapshot {
                         #( #apply_snapshot_arms )*
                     }
@@ -615,6 +635,14 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
     let time = config.time.unwrap_or_else(|| syn::parse_quote!(self.time.clone()));
     let time_type = config.time_type.unwrap_or_else(|| syn::parse_quote!(i64));
     let bytes = config.bytes.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `bytes = ...`"))?;
+    let compact = config.compact.map(|compact| {
+        quote! {
+            fn compact_before(&mut self, time: Self::Time) {
+                let time = time;
+                #compact
+            }
+        }
+    });
     let apply = config.apply.ok_or_else(|| Error::new(attr.span(), "`contime_snapshot` requires `apply = { ... }`"))?;
 
     let event_enum = Ident::new(&format!("{name}Event"), name.span());
@@ -647,6 +675,24 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
         .map(|event| {
             let variant = trailing_ident(event)?;
             Ok(quote! { Self::#variant(event) => <#event as ::contime::Input>::conservative_size(event), })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let event_snapshot_id_arms = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event)?;
+            Ok(quote! {
+                Self::#variant(event) => <#event as ::contime::SnapshotEvent<#name #type_generics>>::snapshot_id(event),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let event_set_snapshot_identity_arms = events
+        .iter()
+        .map(|event| {
+            let variant = trailing_ident(event)?;
+            Ok(quote! {
+                Self::#variant(event) => <#event as ::contime::SnapshotEvent<#name #type_generics>>::set_snapshot_identity(event, snapshot),
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     let event_from_impls = events
@@ -720,6 +766,20 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
 
         impl #impl_generics ::contime::Event for #event_enum #type_generics #where_clause {}
 
+        impl #impl_generics ::contime::SnapshotEvent<#name #type_generics> for #event_enum #type_generics #where_clause {
+            fn snapshot_id(&self) -> u128 {
+                match self {
+                    #( #event_snapshot_id_arms )*
+                }
+            }
+
+            fn set_snapshot_identity(&self, snapshot: &mut #name #type_generics) {
+                match self {
+                    #( #event_set_snapshot_identity_arms )*
+                }
+            }
+        }
+
         #( #event_from_impls )*
         #( #event_snapshot_impls )*
         impl #impl_generics ::contime::Snapshot for #name #type_generics #where_clause {
@@ -741,6 +801,8 @@ fn expand_contime_snapshot(input: DeriveInput) -> Result<TokenStream2> {
             fn conservative_size(&self) -> u64 {
                 #bytes
             }
+
+            #compact
 
         }
 
@@ -994,6 +1056,7 @@ struct SnapshotDeriveConfig {
     time: Option<Expr>,
     time_type: Option<Type>,
     bytes: Option<Expr>,
+    compact: Option<Block>,
     apply: Option<Block>,
 }
 
@@ -1178,7 +1241,7 @@ impl Parse for EventDeriveConfig {
 
 impl Parse for SnapshotDeriveConfig {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut config = Self { events: None, ids: None, time: None, time_type: None, bytes: None, apply: None };
+        let mut config = Self { events: None, ids: None, time: None, time_type: None, bytes: None, compact: None, apply: None };
         while !input.is_empty() {
             let key = input.parse::<Ident>()?;
             input.parse::<Token![=]>()?;
@@ -1196,6 +1259,7 @@ impl Parse for SnapshotDeriveConfig {
                 "time" => config.time = Some(input.parse::<Expr>()?),
                 "time_type" => config.time_type = Some(input.parse::<Type>()?),
                 "bytes" => config.bytes = Some(input.parse::<Expr>()?),
+                "compact" => config.compact = Some(input.parse::<Block>()?),
                 "apply" => config.apply = Some(input.parse::<Block>()?),
                 other => {
                     return Err(Error::new(key.span(), format!("unknown contime_snapshot option `{other}`")));

@@ -14,7 +14,7 @@ pub(super) fn last_key_at_time<T: ContimeTime>(time: T) -> ContimeKey<T> {
 }
 
 pub(super) fn checkpoint_partition_before<T: ContimeTime, S>(
-    checkpoints: &VecDeque<(ContimeKey<T>, S)>,
+    checkpoints: &VecDeque<(ContimeKey<T>, S, u64)>,
     boundary: &ContimeKey<T>,
 ) -> usize {
     let mut low = 0;
@@ -31,7 +31,7 @@ pub(super) fn checkpoint_partition_before<T: ContimeTime, S>(
 }
 
 pub(super) fn latest_checkpoint_before_index<T: ContimeTime, S>(
-    checkpoints: &VecDeque<(ContimeKey<T>, S)>,
+    checkpoints: &VecDeque<(ContimeKey<T>, S, u64)>,
     boundary: &ContimeKey<T>,
 ) -> Option<usize> {
     let index = checkpoint_partition_before(checkpoints, boundary);
@@ -39,19 +39,19 @@ pub(super) fn latest_checkpoint_before_index<T: ContimeTime, S>(
 }
 
 pub(super) fn latest_checkpoint_before<'a, T: ContimeTime, S>(
-    checkpoints: &'a VecDeque<(ContimeKey<T>, S)>,
+    checkpoints: &'a VecDeque<(ContimeKey<T>, S, u64)>,
     boundary: &ContimeKey<T>,
-) -> Option<(&'a ContimeKey<T>, &'a S)> {
+) -> Option<(&'a ContimeKey<T>, &'a S, u64)> {
     latest_checkpoint_before_index(checkpoints, boundary).map(|index| {
-        let (key, checkpoint) = &checkpoints[index];
-        (key, checkpoint)
+        let (key, checkpoint, history_input_count) = &checkpoints[index];
+        (key, checkpoint, *history_input_count)
     })
 }
 
 pub(super) fn latest_checkpoint_at_or_before<'a, T: ContimeTime, S>(
-    checkpoints: &'a VecDeque<(ContimeKey<T>, S)>,
+    checkpoints: &'a VecDeque<(ContimeKey<T>, S, u64)>,
     boundary: &ContimeKey<T>,
-) -> Option<(&'a ContimeKey<T>, &'a S)> {
+) -> Option<(&'a ContimeKey<T>, &'a S, u64)> {
     let mut low = 0;
     let mut high = checkpoints.len();
     while low < high {
@@ -64,27 +64,32 @@ pub(super) fn latest_checkpoint_at_or_before<'a, T: ContimeTime, S>(
     }
     let index = low;
     (index > 0).then(|| {
-        let (key, checkpoint) = &checkpoints[index - 1];
-        (key, checkpoint)
+        let (key, checkpoint, history_input_count) = &checkpoints[index - 1];
+        (key, checkpoint, *history_input_count)
     })
 }
 
-pub(super) fn push_checkpoint<S>(checkpoints: &mut VecDeque<(ContimeKey<S::Time>, S)>, key: ContimeKey<S::Time>, checkpoint: S) -> i64
+pub(super) fn push_checkpoint<S>(
+    checkpoints: &mut VecDeque<(ContimeKey<S::Time>, S, u64)>,
+    key: ContimeKey<S::Time>,
+    checkpoint: S,
+    history_input_count: u64,
+) -> i64
 where
     S: Snapshot,
 {
-    let bytes_delta = checkpoint.conservative_size() as i64;
-    checkpoints.push_back((key, checkpoint));
+    let bytes_delta = checkpoint.conservative_size() as i64 + size_of::<u64>() as i64;
+    checkpoints.push_back((key, checkpoint, history_input_count));
     bytes_delta
 }
 
-pub(super) fn drain_checkpoints_from<S>(checkpoints: &mut VecDeque<(ContimeKey<S::Time>, S)>, start: usize) -> i64
+pub(super) fn drain_checkpoints_from<S>(checkpoints: &mut VecDeque<(ContimeKey<S::Time>, S, u64)>, start: usize) -> i64
 where
     S: Snapshot,
 {
     let mut bytes_delta = 0;
-    for (_key, removed) in checkpoints.drain(start..) {
-        bytes_delta -= removed.conservative_size() as i64;
+    for (_key, removed, _history_input_count) in checkpoints.drain(start..) {
+        bytes_delta -= removed.conservative_size() as i64 + size_of::<u64>() as i64;
     }
     bytes_delta
 }
@@ -94,6 +99,7 @@ where
     S: Snapshot,
 {
     snapshot: S,
+    history_input_count: u64,
     start: Bound<ContimeKey<S::Time>>,
     end: Bound<ContimeKey<S::Time>>,
     stale_start: Option<usize>,
@@ -110,7 +116,8 @@ where
     bytes_delta: i64,
     final_key: Option<ContimeKey<S::Time>>,
     final_snapshot: S,
-    materialized_checkpoints: Vec<(ContimeKey<S::Time>, S)>,
+    final_history_input_count: u64,
+    materialized_checkpoints: Vec<(ContimeKey<S::Time>, S, u64)>,
 }
 
 pub(super) fn get_checkpoint_for_apply<S>(
@@ -151,13 +158,19 @@ where
         &history.inputs,
         checkpoint.start.clone(),
         checkpoint.end.clone(),
-        |bucket_last_key, bucket_len, batch| {
+        |bucket_last_key, bucket_event_count, bucket_input_count, batch| {
             let batch_time = batch.time.clone();
-            context.apply_input_batch_wrapper(&mut checkpoint.snapshot, batch, ApplyInner::default());
-            event_count += bucket_len;
+            checkpoint.history_input_count = checkpoint
+                .history_input_count
+                .checked_add(u64::try_from(bucket_input_count).expect("history input bucket length exceeded u64"))
+                .expect("history input count overflow");
+            let mut apply_inner = ApplyInner::new(&mut checkpoint.snapshot, checkpoint.history_input_count);
+            context.reconcile_input_batch_wrapper(batch, &mut apply_inner);
+            assert!(apply_inner.has_applied(), "an apply wrapper must call the inner apply at least once per input batch");
+            event_count += bucket_event_count;
 
             if !checkpoint.preserve_previous_tip && !stored_first_changed_checkpoint && batch_time >= checkpoint.first_changed_time {
-                materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone()));
+                materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone(), checkpoint.history_input_count));
                 stored_first_changed_checkpoint = true;
             }
 
@@ -166,7 +179,7 @@ where
                 && history.checkpoint_interval != 0
                 && event_count.is_multiple_of(history.checkpoint_interval)
             {
-                materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone()));
+                materialized_checkpoints.push((bucket_last_key.clone(), checkpoint.snapshot.clone(), checkpoint.history_input_count));
             }
         },
     );
@@ -176,6 +189,7 @@ where
         bytes_delta: checkpoint.bytes_delta,
         final_key: history.latest_input_key(),
         final_snapshot: checkpoint.snapshot,
+        final_history_input_count: checkpoint.history_input_count,
         materialized_checkpoints,
     }
 }
@@ -190,13 +204,18 @@ where
         bytes_delta += drain_checkpoints_from(&mut history.checkpoints, stale_start);
     }
 
-    for (key, checkpoint) in applied_checkpoint.materialized_checkpoints {
-        bytes_delta += push_checkpoint(&mut history.checkpoints, key, checkpoint);
+    for (key, checkpoint, history_input_count) in applied_checkpoint.materialized_checkpoints {
+        bytes_delta += push_checkpoint(&mut history.checkpoints, key, checkpoint, history_input_count);
     }
 
     if let Some(latest_key) = applied_checkpoint.final_key {
-        if history.checkpoints.back().map(|(key, _checkpoint)| key) != Some(&latest_key) {
-            bytes_delta += push_checkpoint(&mut history.checkpoints, latest_key, applied_checkpoint.final_snapshot);
+        if history.checkpoints.back().map(|(key, _checkpoint, _history_input_count)| key) != Some(&latest_key) {
+            bytes_delta += push_checkpoint(
+                &mut history.checkpoints,
+                latest_key,
+                applied_checkpoint.final_snapshot,
+                applied_checkpoint.final_history_input_count,
+            );
         }
     }
 
@@ -215,7 +234,7 @@ where
 {
     let mut recompute_boundary = first_key_at_time(time.clone());
     if !preserve_previous_tip {
-        if let Some((key, _checkpoint)) = latest_checkpoint_before(&history.checkpoints, &recompute_boundary) {
+        if let Some((key, _checkpoint, _history_input_count)) = latest_checkpoint_before(&history.checkpoints, &recompute_boundary) {
             if !checkpoint_key_is_cadence(history, key) {
                 recompute_boundary = key.clone();
             }
@@ -227,14 +246,15 @@ where
         && checkpoint_index.is_some_and(|index| {
             let key = &history.checkpoints[index].0;
             protected_previous_tip != Some(key)
-                && history.checkpoints.back().map(|(back_key, _checkpoint)| back_key == key).unwrap_or(false)
+                && history.replay_anchor_key.as_ref() != Some(key)
+                && history.checkpoints.back().map(|(back_key, _checkpoint, _history_input_count)| back_key == key).unwrap_or(false)
         });
-    let (snapshot, start) = match checkpoint_index {
+    let (snapshot, history_input_count, start) = match checkpoint_index {
         Some(index) => {
-            let (key, checkpoint) = &history.checkpoints[index];
-            (checkpoint.clone(), Bound::Excluded(key.clone()))
+            let (key, checkpoint, history_input_count) = &history.checkpoints[index];
+            (checkpoint.clone(), *history_input_count, Bound::Excluded(key.clone()))
         }
-        None => (materialize_snapshot(history, Bound::Unbounded)?, Bound::Unbounded),
+        None => (materialize_snapshot(history, Bound::Unbounded)?, 0, Bound::Unbounded),
     };
 
     let stale_start = if remove_recompute_checkpoint {
@@ -245,6 +265,7 @@ where
 
     Some(CheckpointForApply {
         snapshot,
+        history_input_count,
         start,
         end: Bound::Unbounded,
         stale_start,
@@ -273,7 +294,9 @@ fn checkpoint_key_is_cadence<S>(history: &LocalSnapshotHistory<S>, checkpoint_ke
 where
     S: Snapshot,
 {
-    if history.checkpoint_interval == 0 || history.checkpoints.back().map(|(key, _checkpoint)| key) != Some(checkpoint_key) {
+    if history.checkpoint_interval == 0
+        || history.checkpoints.back().map(|(key, _checkpoint, _history_input_count)| key) != Some(checkpoint_key)
+    {
         return true;
     }
 
@@ -289,7 +312,7 @@ pub(super) fn apply_input_buckets<S, F>(
 ) where
     S: SnapshotLanes + 'static,
     S::Input: InputLanes<S>,
-    F: FnMut(&ContimeKey<S::Time>, usize, InputBatch<'_, S::Input>),
+    F: FnMut(&ContimeKey<S::Time>, usize, usize, InputBatch<'_, S::Input>),
 {
     let mut input_iter = inputs.range((start, end)).peekable();
 
@@ -305,7 +328,8 @@ pub(super) fn apply_input_buckets<S, F>(
         }
 
         let event_count = input_bucket.iter().filter(|input| input.is_event()).count();
-        apply_bucket(&bucket_last_key, event_count, InputBatch { snapshot_id, time: bucket_time, inputs: &input_bucket });
+        let input_count = input_bucket.len();
+        apply_bucket(&bucket_last_key, event_count, input_count, InputBatch { snapshot_id, time: bucket_time, inputs: &input_bucket });
     }
 }
 
@@ -329,9 +353,9 @@ where
 
     let checkpoint_entry = latest_checkpoint_at_or_before(&history.checkpoints, &checkpoint_boundary);
 
-    let (mut snapshot, recompute_start) = match checkpoint_entry {
-        Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
-        None => (materialize_snapshot(history, Bound::Unbounded)?, Bound::Unbounded),
+    let (mut snapshot, mut history_input_count, recompute_start) = match checkpoint_entry {
+        Some((key, checkpoint, history_input_count)) => (checkpoint.clone(), history_input_count, Bound::Excluded(key.clone())),
+        None => (materialize_snapshot(history, Bound::Unbounded)?, 0, Bound::Unbounded),
     };
 
     let end_key = last_key_at_time(time.clone());
@@ -341,9 +365,14 @@ where
         &history.inputs,
         recompute_start,
         Bound::Included(end_key),
-        |_bucket_last_key, _bucket_len, batch| {
+        |_bucket_last_key, _bucket_event_count, bucket_input_count, batch| {
             let batch_time = batch.time.clone();
-            context.apply_input_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
+            history_input_count = history_input_count
+                .checked_add(u64::try_from(bucket_input_count).expect("history input bucket length exceeded u64"))
+                .expect("history input count overflow");
+            let mut apply_inner = ApplyInner::new(&mut snapshot, history_input_count);
+            context.apply_input_batch_wrapper(batch, &mut apply_inner);
+            assert!(apply_inner.has_applied(), "an apply wrapper must call the inner apply at least once per input batch");
             snapshot.set_time(batch_time);
         },
     );
@@ -357,7 +386,7 @@ pub(super) fn get_checkpoint_before_with_context<S, C>(
     history: &LocalSnapshotHistory<S>,
     time: S::Time,
     context: &mut C,
-) -> Option<(ContimeKey<S::Time>, S)>
+) -> Option<(ContimeKey<S::Time>, S, u64)>
 where
     S: SnapshotLanes + 'static,
     S::Input: InputLanes<S>,
@@ -366,9 +395,9 @@ where
     let boundary = first_key_at_time(time);
     let checkpoint_entry = latest_checkpoint_before(&history.checkpoints, &boundary);
 
-    let (mut snapshot, recompute_start) = match checkpoint_entry {
-        Some((key, checkpoint)) => (checkpoint.clone(), Bound::Excluded(key.clone())),
-        None => (materialize_snapshot(history, Bound::Excluded(boundary.clone()))?, Bound::Unbounded),
+    let (mut snapshot, mut history_input_count, recompute_start) = match checkpoint_entry {
+        Some((key, checkpoint, history_input_count)) => (checkpoint.clone(), history_input_count, Bound::Excluded(key.clone())),
+        None => (materialize_snapshot(history, Bound::Excluded(boundary.clone()))?, 0, Bound::Unbounded),
     };
 
     let final_key = history
@@ -376,19 +405,24 @@ where
         .range((Bound::Unbounded, Bound::Excluded(boundary.clone())))
         .next_back()
         .map(|(key, _input)| key.clone())
-        .or_else(|| checkpoint_entry.map(|(key, _checkpoint)| key.clone()))?;
+        .or_else(|| checkpoint_entry.map(|(key, _checkpoint, _history_input_count)| key.clone()))?;
 
     apply_input_buckets::<S, _>(
         history.snapshot_id,
         &history.inputs,
         recompute_start,
         Bound::Excluded(boundary),
-        |_bucket_last_key, _bucket_len, batch| {
+        |_bucket_last_key, _bucket_event_count, bucket_input_count, batch| {
             let batch_time = batch.time.clone();
-            context.apply_input_batch_wrapper(&mut snapshot, batch, ApplyInner::default());
+            history_input_count = history_input_count
+                .checked_add(u64::try_from(bucket_input_count).expect("history input bucket length exceeded u64"))
+                .expect("history input count overflow");
+            let mut apply_inner = ApplyInner::new(&mut snapshot, history_input_count);
+            context.apply_input_batch_wrapper(batch, &mut apply_inner);
+            assert!(apply_inner.has_applied(), "an apply wrapper must call the inner apply at least once per input batch");
             snapshot.set_time(batch_time);
         },
     );
 
-    Some((final_key, snapshot))
+    Some((final_key, snapshot, history_input_count))
 }
