@@ -1,13 +1,10 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use std::hint::black_box;
-use std::time::{Duration, Instant};
 
 use contime::{ApplyBatch, ApplyEvents, SnapshotHistory};
 
 mod helpers;
-use helpers::{BenchContime, BenchEvent, BenchSnapshot};
-
-const MEMORY_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+use helpers::{BenchEvent, BenchSnapshot};
 
 fn new_event(event_id: u128, time: i64) -> BenchEvent {
     let snapshot_id = 0;
@@ -186,76 +183,6 @@ fn benchmark_history_horizon_prune(runner: &mut Criterion) {
     group.finish();
 }
 
-fn persistent_batch(size: usize, one_snapshot: bool, time: i64) -> Vec<BenchEvent> {
-    (0..size)
-        .map(move |offset| {
-            let ordinal = offset as u128 + 1;
-            let input_id = ((time as u128) << 32) | ordinal;
-            let snapshot_id = if one_snapshot { 1 } else { ordinal };
-            BenchEvent::Positive(snapshot_id, time, input_id, 1)
-        })
-        .collect()
-}
-
-fn benchmark_send_persistent_matrix(runner: &mut Criterion) {
-    let mut group = runner.benchmark_group("send_persistent_matrix");
-
-    for (case, one_snapshot) in [("same_snapshot", true), ("separate_snapshots", false)] {
-        for size in [1_usize, 100, 1_000] {
-            group.bench_function(BenchmarkId::new(case, size), |bencher| {
-                let contime = BenchContime::with_history_horizon(1, MEMORY_BUDGET_BYTES, 0);
-                let mut next_time = 1_i64;
-                bencher.iter_custom(|iterations| {
-                    let mut elapsed = Duration::ZERO;
-                    for _ in 0..iterations {
-                        contime.advance_to(next_time).expect("benchmark horizon should advance");
-                        let time = next_time;
-                        next_time += 1;
-                        let batch = persistent_batch(size, one_snapshot, time);
-                        let started = Instant::now();
-                        contime.send(batch.into_iter().map(Into::into)).expect("persistent send should succeed");
-                        elapsed += started.elapsed();
-                        black_box(());
-                    }
-                    contime.advance_to(next_time).expect("benchmark horizon should synchronize the final send");
-                    elapsed
-                });
-            });
-        }
-    }
-
-    group.finish();
-}
-
-fn benchmark_sync_apply_persistent_matrix(runner: &mut Criterion) {
-    let mut group = runner.benchmark_group("sync_apply_persistent_matrix");
-
-    for (case, one_snapshot) in [("same_snapshot", true), ("separate_snapshots", false)] {
-        for size in [1_usize, 100, 1_000] {
-            group.bench_function(BenchmarkId::new(case, size), |bencher| {
-                let contime = BenchContime::with_history_horizon(1, MEMORY_BUDGET_BYTES, 0);
-                let mut next_time = 1_i64;
-                bencher.iter_custom(|iterations| {
-                    let mut elapsed = Duration::ZERO;
-                    for _ in 0..iterations {
-                        contime.advance_to(next_time).expect("benchmark horizon should advance");
-                        let time = next_time;
-                        next_time += 1;
-                        let batch = persistent_batch(size, one_snapshot, time);
-                        let started = Instant::now();
-                        let outcome = contime.apply(batch.into_iter().map(Into::into)).expect("persistent apply should succeed");
-                        elapsed += started.elapsed();
-                        black_box(outcome);
-                    }
-                    elapsed
-                });
-            });
-        }
-    }
-
-    group.finish();
-}
-
 trait BenchHistoryApply {
     fn apply_event(&mut self, event: BenchEvent) -> i64;
 }
@@ -356,26 +283,6 @@ fn benchmark_snapshot_at(runner: &mut Criterion) {
             );
         });
     }
-
-    group.finish();
-}
-
-fn benchmark_sync_apply_end_to_end(runner: &mut Criterion) {
-    let mut group = runner.benchmark_group("sync_apply_end_to_end");
-
-    group.bench_function("fresh_lane_single_event", |bencher| {
-        let contime = BenchContime::new(1, MEMORY_BUDGET_BYTES);
-        let mut next_snapshot_id = 1_u128;
-
-        bencher.iter(|| {
-            let snapshot_id = next_snapshot_id;
-            next_snapshot_id = next_snapshot_id.wrapping_add(1);
-
-            contime
-                .apply([BenchEvent::Positive(snapshot_id, 0, snapshot_id, 1)].map(Into::into))
-                .expect("single sync apply should succeed");
-        });
-    });
 
     group.finish();
 }
@@ -552,16 +459,13 @@ criterion_group! {
     targets =
         benchmark_apply_event,
         benchmark_snapshot_at,
-        benchmark_sync_apply_end_to_end,
         benchmark_apply_orchestrator_callback,
         benchmark_snapshot_callback_same_snapshot,
         benchmark_snapshot_history_same_snapshot,
         benchmark_history_late_rate,
         benchmark_history_reverse_batch,
         benchmark_history_merged_replay,
-        benchmark_history_horizon_prune,
-        benchmark_send_persistent_matrix,
-        benchmark_sync_apply_persistent_matrix
+        benchmark_history_horizon_prune
 }
 
 criterion_main!(benches);

@@ -63,8 +63,8 @@ fn router_partition(c: &mut Criterion) {
         let one_worker = RoutePartitionBenchmark::new(1);
         group.bench_with_input(BenchmarkId::new("single_target_one_worker", count), &count, |b, &count| {
             b.iter_batched(
-                || single_target_inputs(count, false),
-                |inputs| black_box(one_worker.partition::<TestSnapshotLanes, TestInputLanes, _>(inputs)),
+                || one_worker.prepare::<TestSnapshotLanes, TestInputLanes, _>(single_target_inputs(count, false)),
+                |batches| black_box(one_worker.partition(batches)),
                 BatchSize::SmallInput,
             );
         });
@@ -72,15 +72,15 @@ fn router_partition(c: &mut Criterion) {
         let eight_workers = RoutePartitionBenchmark::new(8);
         group.bench_with_input(BenchmarkId::new("single_target_eight_workers", count), &count, |b, &count| {
             b.iter_batched(
-                || single_target_inputs(count, true),
-                |inputs| black_box(eight_workers.partition::<TestSnapshotLanes, TestInputLanes, _>(inputs)),
+                || eight_workers.prepare::<TestSnapshotLanes, TestInputLanes, _>(single_target_inputs(count, true)),
+                |batches| black_box(eight_workers.partition(batches)),
                 BatchSize::SmallInput,
             );
         });
         group.bench_with_input(BenchmarkId::new("multi_target_eight_workers", count), &count, |b, &count| {
             b.iter_batched(
-                || multi_target_inputs(count),
-                |inputs| black_box(eight_workers.partition::<multi_route_lanes::SnapshotLanes, multi_route_lanes::InputLanes, _>(inputs)),
+                || eight_workers.prepare::<multi_route_lanes::SnapshotLanes, multi_route_lanes::InputLanes, _>(multi_target_inputs(count)),
+                |batches| black_box(eight_workers.partition(batches)),
                 BatchSize::SmallInput,
             );
         });
