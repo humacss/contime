@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 
 use crate::{ContimeKey, ContimeTime, InputLanes, Snapshot, SnapshotLanes};
 
-use super::checkpoints::{get_checkpoint_at, get_checkpoint_at_with_context, get_checkpoint_before_with_context};
+use super::checkpoints::{
+    checkpoint_conservative_size, get_checkpoint_at, get_checkpoint_at_with_context, get_checkpoint_before_with_context,
+};
 use super::HistoryInputs;
 
 type SnapshotId = u128;
@@ -33,7 +35,7 @@ where
     lower_time_horizon_delta: S::Time,
 }
 
-const CHECKPOINT_INTERVAL: usize = 100;
+pub(crate) const CHECKPOINT_INTERVAL: usize = 100;
 
 impl<S> LocalSnapshotHistory<S>
 where
@@ -44,7 +46,7 @@ where
     pub fn new(snapshot: S, current_time: S::Time, lower_time_horizon_delta: S::Time) -> (Self, i64) {
         let snapshot_id = snapshot.id();
         let snapshot_lane_index = snapshot.lane_index();
-        let snapshot_size = snapshot.conservative_size() as i64 + size_of::<u64>() as i64;
+        let snapshot_size = checkpoint_conservative_size(&snapshot) as i64;
         let checkpoint_key = ContimeKey { time: snapshot.time(), id: u128::MAX };
         let mut checkpoints = VecDeque::new();
         checkpoints.push_back((checkpoint_key, snapshot, 0));
@@ -104,7 +106,7 @@ where
 
         let first_kept_checkpoint = self.checkpoints.partition_point(|(key, _checkpoint, _history_input_count)| key < &drop_key);
         for (_key, checkpoint, _history_input_count) in self.checkpoints.drain(..first_kept_checkpoint) {
-            bytes_delta -= checkpoint.conservative_size() as i64 + size_of::<u64>() as i64;
+            bytes_delta -= checkpoint_conservative_size(&checkpoint) as i64;
         }
 
         for (_key, checkpoint, _history_input_count) in &mut self.checkpoints {
@@ -116,7 +118,7 @@ where
         if let Some((key, mut checkpoint, history_input_count)) = replay_anchor {
             checkpoint.compact_before(drop_time);
             if self.checkpoints.front().is_none_or(|(existing_key, _checkpoint, _history_input_count)| existing_key > &key) {
-                bytes_delta += checkpoint.conservative_size() as i64 + size_of::<u64>() as i64;
+                bytes_delta += checkpoint_conservative_size(&checkpoint) as i64;
                 self.checkpoints.push_front((key.clone(), checkpoint, history_input_count));
             }
             self.replay_anchor_key = Some(key);
@@ -134,12 +136,14 @@ where
         self.current_time.clone().saturating_sub(self.lower_time_horizon_delta.clone())
     }
 
-    pub(crate) fn conservative_replay_reservation(&self) -> u64 {
-        self.checkpoints
+    pub(crate) fn conservative_replay_reservation(&self, apply_allocation_bytes: u64) -> u64 {
+        let checkpoint_clone = self
+            .checkpoints
             .iter()
-            .map(|(_key, checkpoint, _history_input_count)| checkpoint.conservative_size().saturating_add(size_of::<u64>() as u64))
+            .map(|(_key, checkpoint, _history_input_count)| checkpoint_conservative_size(checkpoint))
             .max()
-            .unwrap_or(0)
+            .unwrap_or(0);
+        checkpoint_clone.saturating_add(apply_allocation_bytes.saturating_mul(self.checkpoints.len() as u64))
     }
 
     /// Reconstructs the snapshot state at `time`.

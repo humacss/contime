@@ -73,6 +73,6 @@ fn routed_event_accounts_retained_allocation_and_snapshot_bytes_once() {
     ]);
 
     // 42 retained event + 8 apply allocation + 32 retained identity
-    // + 28 clean snapshot + 8 checkpoint key.
-    assert_eq!(118, total);
+    // + 28 clean snapshot + 32 complete checkpoint key + 8 history count.
+    assert_eq!(150, total);
 }

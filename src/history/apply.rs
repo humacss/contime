@@ -140,7 +140,7 @@ where
             let checkpoint_bytes = self
                 .checkpoints
                 .drain(..)
-                .map(|(_key, checkpoint, _history_input_count)| checkpoint.conservative_size() as i64 + size_of::<u64>() as i64)
+                .map(|(_key, checkpoint, _history_input_count)| super::checkpoint_conservative_size(&checkpoint) as i64)
                 .sum::<i64>();
             return applied_batch.bytes_delta - checkpoint_bytes;
         };

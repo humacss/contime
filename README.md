@@ -57,7 +57,9 @@ Memory declarations keep retained data and apply-time allocation separate.
 memory that applying that event may allocate; it defaults to zero for events
 that only mutate inline fields. `Snapshot::conservative_size` describes the
 checkpoint itself. `ContimeEvent` accepts `allocation_bytes = ...` when a
-derived event allocates during application. Markers have no apply allocation.
+derived event allocates during application. ConTime conservatively carries that
+allocation through the possible retained checkpoint copies produced by replay.
+Markers have no apply allocation.
 
 The system keeps a list of `Checkpoint`s internally to retain previous state, and can generate the state at time `T` by grabbing the closest `Checkpoint` and applying all inputs in order through time `T`. Each checkpoint also retains the cumulative raw history input count through that checkpoint, so replay resumes with both the snapshot state and its deterministic input frontier.
 
@@ -316,9 +318,10 @@ It maintains queryable historical state from applied events.
 
 Memory admission is intentionally conservative and not yet transactional:
 
-- The API estimates retained events, declared apply allocations, identity
-  bookkeeping, clean snapshot materialization, and checkpoint storage before
-  dispatch. This check is advisory; concurrent requests can both pass it.
+- The API estimates retained events, declared apply allocations across possible
+  checkpoint copies, identity bookkeeping, clean snapshot materialization, and
+  complete checkpoint storage before dispatch. This check is advisory;
+  concurrent requests can both pass it.
 - Each worker atomically reserves its complete message before mutating any of
   that message's snapshot histories. Existing replay-checkpoint space is added
   to the worker reservation.
@@ -367,17 +370,17 @@ Each row removes exactly one outer subsystem:
 
 | Measured entry point | Total time | Time per event | Approximate cost added over the next row |
 | --- | ---: | ---: | ---: |
-| Public API | `[64.233 µs 64.581 µs 65.098 µs]` | `64.581 ns` | `~8.772 µs` grouping, API completion, and result merge |
-| Router | `[55.633 µs 55.809 µs 55.961 µs]` | `55.809 ns` | not separable from worker at this resolution |
-| Worker | `[55.296 µs 55.503 µs 55.687 µs]` | `55.503 ns` | `~13.667 µs` worker message, reservation, lookup, and dispatch |
-| Snapshot history | `[41.712 µs 41.836 µs 41.915 µs]` | `41.836 ns` | direct history baseline |
+| Public API | `[64.703 µs 65.048 µs 65.530 µs]` | `65.048 ns` | `~9.625 µs` grouping, API completion, and result merge |
+| Router | `[55.322 µs 55.423 µs 55.529 µs]` | `55.423 ns` | not separable from worker at this resolution |
+| Worker | `[55.087 µs 55.247 µs 55.437 µs]` | `55.247 ns` | `~13.357 µs` worker message, reservation, lookup, and dispatch |
+| Snapshot history | `[41.696 µs 41.890 µs 42.173 µs]` | `41.890 ns` | direct history baseline |
 
 The approximate costs subtract Criterion point estimates. They are diagnostic,
 not independent measurements. Router and worker confidence intervals overlap,
-so their `306 ns` point-estimate difference is not separable from scheduling
-noise. The largest remaining outer-layer residual is the `~13.667 µs` between
+so their `176 ns` point-estimate difference is not separable from scheduling
+noise. The largest remaining outer-layer residual is the `~13.357 µs` between
 worker entry and direct history entry; the history itself remains the dominant
-part of the full `64.581 µs` API round trip.
+part of the full `65.048 µs` API round trip.
 
 Reproduce the 30-sample stack with:
 

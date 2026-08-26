@@ -24,6 +24,30 @@ fn api_precheck_returns_memory_full_error_for_send() {
 }
 
 #[test]
+fn one_batch_reserves_cumulative_checkpoint_growth() {
+    let contime = TestSnapshotContime::new(1, 1_000_000);
+    let events = (1..=1_000_u128).map(|event_id| TestEvent::Positive(1, event_id as i64, event_id, 1).into());
+
+    let rejections = contime.apply(events).expect("checkpoint growth must not disconnect the worker");
+
+    assert!(rejections.is_empty());
+    assert_eq!(query_one(&contime, 1_000, 1).items.len(), 1_000);
+}
+
+#[test]
+fn late_event_reserves_growth_across_replayed_checkpoints() {
+    let contime = TestSnapshotContime::new(1, 1_000_000);
+    let events = (1..=1_000_u128).map(|event_id| TestEvent::Positive(1, event_id as i64, event_id, 1).into());
+    assert!(contime.apply(events).unwrap().is_empty());
+
+    let rejections =
+        contime.apply([TestEvent::Positive(1, 50, 2_000, 1).into()]).expect("late-event replay growth must not disconnect the worker");
+
+    assert!(rejections.is_empty());
+    assert_eq!(query_one(&contime, 1_000, 1).items.len(), 1_001);
+}
+
+#[test]
 fn test_memory_full() {
     let budget = 100u64;
     let c = TestSnapshotContime::new(1, budget);
