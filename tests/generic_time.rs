@@ -199,16 +199,17 @@ fn composite_time_horizon_uses_time_arithmetic() {
 
     contime.advance_to(CompositeTime::new(10, 7)).expect("composite time should advance");
 
-    let error = contime.apply([event(3, 4, 99, 3)].map(Into::into)).expect_err("event before the arithmetic horizon should be rejected");
+    let outcome = contime.apply([event(3, 4, 99, 3)].map(Into::into)).expect("event before the arithmetic horizon should be reported");
     assert!(
         matches!(
-            error,
-            contime::ContimeError::InputBeforeHistoryHorizon {
-                ref input_time,
-                ref earliest_time,
-            } if input_time == &CompositeTime::new(4, 99) && earliest_time == &CompositeTime::new(5, 0)
+            outcome.rejected_inputs.as_slice(),
+            [contime::InputRejection {
+                input_time,
+                reason: contime::InputRejectionReason::BeforeHistoryHorizon { earliest_time },
+                ..
+            }] if input_time == &CompositeTime::new(4, 99) && earliest_time == &CompositeTime::new(5, 0)
         ),
-        "horizon subtraction should use the concrete time implementation and reset minor components: {error:?}"
+        "horizon subtraction should use the concrete time implementation and reset minor components: {outcome:?}"
     );
 }
 

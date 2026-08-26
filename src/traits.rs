@@ -7,7 +7,7 @@ pub trait Snapshot: Send + Sync + Clone + Debug + PartialEq + Eq {
     /// Ordered time type shared by this snapshot and all of its inputs.
     type Time: ContimeTime;
     /// Unified temporal input type retained by this snapshot history.
-    type Input: Input<Time = Self::Time> + Clone + PartialEq + Eq;
+    type Input: Input<Time = Self::Time> + Clone;
 
     /// Returns the logical snapshot id.
     fn id(&self) -> u128;
@@ -17,6 +17,10 @@ pub trait Snapshot: Send + Sync + Clone + Debug + PartialEq + Eq {
     fn set_time(&mut self, time: Self::Time);
     /// Returns a conservative upper-bound estimate for memory accounting.
     fn conservative_size(&self) -> u64;
+
+    /// Drops snapshot-local bookkeeping that refers exclusively to inputs before
+    /// the retained history boundary while preserving their accumulated effect.
+    fn compact_before(&mut self, _time: Self::Time) {}
 }
 
 /// A globally identified temporal input retained and replayed by `contime`.
@@ -24,7 +28,11 @@ pub trait Input: Send + Sync + Debug {
     /// Complete ordered time used by this input.
     type Time: ContimeTime;
 
-    /// Returns the input id used for ordering and duplicate detection.
+    /// Returns the canonical input identity used for duplicate detection.
+    ///
+    /// A retained input with an occupied ID is an idempotent no-op regardless
+    /// of its supplied time. Payloads are never compared or replaced. Time and
+    /// ID together determine replay order, but time is not part of identity.
     fn id(&self) -> u128;
     /// Returns the complete ordered input time.
     fn time(&self) -> Self::Time;
@@ -81,12 +89,14 @@ impl<'a, I: Input> Clone for InputBatch<'a, I> {
 pub struct ApplyBatch<'a, E: Event> {
     pub snapshot_id: u128,
     pub time: E::Time,
+    /// Cumulative unique raw inputs represented through this complete-time bucket.
+    pub history_input_count: u64,
     pub events: &'a [&'a E],
 }
 
 impl<'a, E: Event> Clone for ApplyBatch<'a, E> {
     fn clone(&self) -> Self {
-        Self { snapshot_id: self.snapshot_id, time: self.time.clone(), events: self.events }
+        Self { snapshot_id: self.snapshot_id, time: self.time.clone(), history_input_count: self.history_input_count, events: self.events }
     }
 }
 
@@ -100,25 +110,29 @@ where
 
 /// Routes a plain marker through a generated snapshot lane universe.
 pub trait InputRoute {
+    /// Returns the snapshot ids whose histories should retain this marker.
+    /// An empty result discards the marker before horizon validation or memory accounting.
     fn snapshot_ids(&self) -> Vec<u128>;
 }
 
 /// The generated union of every temporal input accepted by one ConTime instance.
-pub trait InputLanes<SL: Snapshot<Input = Self>>: Input<Time = SL::Time> + Clone + PartialEq + Eq {
+pub trait InputLanes<SL: Snapshot<Input = Self>>: Input<Time = SL::Time> + Clone {
     /// Returns the snapshot ids whose histories should retain this input.
+    /// An empty result discards the input before horizon validation or memory accounting.
     fn snapshot_ids(&self) -> Vec<u128>;
 
     /// Returns whether this input has snapshot-application behavior.
     fn is_event(&self) -> bool;
 
-    /// Applies the concrete event variants in `batch` to `snapshot`.
-    fn apply_events(snapshot: &mut SL, batch: InputBatch<'_, Self>);
+    /// Applies the concrete event variants in `batch` to `snapshot` using the
+    /// cumulative raw history input count represented by that batch.
+    fn apply_events(snapshot: &mut SL, batch: InputBatch<'_, Self>, history_input_count: u64);
 }
 
 impl<S, E> InputLanes<S> for E
 where
     S: Snapshot<Input = E> + ApplyEvents<E> + Default,
-    E: Event<Time = S::Time> + SnapshotEvent<S> + Clone + PartialEq + Eq,
+    E: Event<Time = S::Time> + SnapshotEvent<S> + Clone,
 {
     fn snapshot_ids(&self) -> Vec<u128> {
         vec![self.snapshot_id()]
@@ -128,10 +142,10 @@ where
         true
     }
 
-    fn apply_events(snapshot: &mut S, batch: InputBatch<'_, Self>) {
+    fn apply_events(snapshot: &mut S, batch: InputBatch<'_, Self>, history_input_count: u64) {
         <S as ApplyEvents<E>>::apply_events(
             snapshot,
-            ApplyBatch { snapshot_id: batch.snapshot_id, time: batch.time, events: batch.inputs },
+            ApplyBatch { snapshot_id: batch.snapshot_id, time: batch.time, history_input_count, events: batch.inputs },
         );
     }
 }

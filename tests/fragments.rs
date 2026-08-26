@@ -289,12 +289,11 @@ struct CountAppliedBatches(usize);
 impl ApplyWrapper<distinct_fragment_lanes::SnapshotLanes> for CountAppliedBatches {
     fn apply_input_batch_wrapper(
         &mut self,
-        snapshot: &mut distinct_fragment_lanes::SnapshotLanes,
         batch: InputBatch<'_, distinct_fragment_lanes::InputLanes>,
-        apply_inner: ApplyInner<distinct_fragment_lanes::SnapshotLanes>,
+        apply_inner: &mut ApplyInner<'_, distinct_fragment_lanes::SnapshotLanes>,
     ) {
         self.0 += 1;
-        apply_inner.apply_input_batch(snapshot, batch);
+        apply_inner.apply_input_batch(batch);
     }
 }
 

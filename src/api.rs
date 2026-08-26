@@ -4,6 +4,30 @@ use std::sync::Arc;
 
 use crate::{ApplyWrapper, ContimeTime, InputJournalEntry, InputLanes, Router, RouterError, SnapshotLanes};
 
+/// Result of admitting one input batch into ConTime.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ApplyOutcome<T: ContimeTime> {
+    /// Input IDs accepted for application, including idempotent duplicates.
+    pub accepted_input_ids: Vec<u128>,
+    /// Inputs rejected individually without preventing accepted inputs from applying.
+    pub rejected_inputs: Vec<InputRejection<T>>,
+}
+
+/// One input that ConTime could not admit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputRejection<T: ContimeTime> {
+    pub input_id: u128,
+    pub input_time: T,
+    pub reason: InputRejectionReason<T>,
+}
+
+/// Reason one input was rejected while the rest of its batch continued.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InputRejectionReason<T: ContimeTime> {
+    /// The input predates the earliest retained history time.
+    BeforeHistoryHorizon { earliest_time: T },
+}
+
 /// Errors returned by [`Contime`] operations.
 #[derive(Debug)]
 pub enum ContimeError<T: ContimeTime> {
@@ -167,7 +191,7 @@ where
     }
 
     /// Applies temporal inputs synchronously and waits for all affected workers.
-    pub fn apply<I>(&self, inputs: I) -> Result<(), ContimeError<SL::Time>>
+    pub fn apply<I>(&self, inputs: I) -> Result<ApplyOutcome<SL::Time>, ContimeError<SL::Time>>
     where
         I: IntoIterator<Item = IL>,
     {
@@ -175,7 +199,7 @@ where
     }
 
     /// Enqueues temporal inputs without waiting for replay to finish.
-    pub fn send<I>(&self, inputs: I) -> Result<(), ContimeError<SL::Time>>
+    pub fn send<I>(&self, inputs: I) -> Result<ApplyOutcome<SL::Time>, ContimeError<SL::Time>>
     where
         I: IntoIterator<Item = IL>,
     {

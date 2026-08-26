@@ -45,3 +45,16 @@ fn journal_prunes_events_before_the_history_horizon() {
 
     assert_eq!(journal_keys(&contime), vec![(20, 200), (30, 300)]);
 }
+
+#[test]
+fn pruned_inputs_leave_the_retained_id_index() {
+    let contime = TestSnapshotContime::with_history_horizon(1, 100_000, 50);
+    contime.apply([TestEvent::Positive(1, 10, 7, 10).into()]).unwrap();
+
+    contime.advance_to(70).unwrap();
+    contime.apply([TestEvent::Positive(1, 30, 7, 20).into()]).unwrap();
+
+    let retained = contime.inspect_inputs(20..).unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].input.id(), 7);
+}
