@@ -1,5 +1,4 @@
 use std::collections::hash_map::Entry;
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::ops::Bound;
 use std::sync::atomic::AtomicU64;
@@ -10,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use ahash::{AHashMap, RandomState};
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::{ApplyWrapper, ContimeKey, ContimeTime, Input, InputJournalEntry, InputLanes, SnapshotHistory, SnapshotLanes};
+use crate::{ApplyWrapper, ContimeKey, ContimeTime, EventRejection, Input, InputJournalEntry, InputLanes, SnapshotHistory, SnapshotLanes};
 
 pub type SnapshotId = u128;
 
@@ -19,8 +18,13 @@ pub struct WorkerInput<IL> {
     pub input: IL,
 }
 
+pub enum Completion<T> {
+    None,
+    Respond(Sender<T>),
+}
+
 pub enum WorkerInbound<SL: SnapshotLanes, IL> {
-    Inputs { inputs: Vec<WorkerInput<IL>>, reply: Sender<()> },
+    Inputs { inputs: Vec<WorkerInput<IL>>, completion: Completion<Vec<EventRejection>> },
     InputsInRange { start: Bound<SL::Time>, end: Bound<SL::Time>, reply: Sender<Vec<InputJournalEntry<IL>>> },
     SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: SL::Time, reply: Sender<Vec<(usize, Option<SL>)>> },
     AdvanceTime { time: SL::Time, reply: Sender<()> },
@@ -108,13 +112,9 @@ fn handle_worker<SL, IL, C>(
 {
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
     let mut input_log = Vec::<InputJournalEntry<IL>>::new();
-    let mut pending_inbound = VecDeque::new();
 
     while is_running.load(Ordering::Relaxed) {
-        let inbound = match pending_inbound.pop_front() {
-            Some(inbound) => Ok(inbound),
-            None => worker_inbound_rx.recv(),
-        };
+        let inbound = worker_inbound_rx.recv();
 
         match inbound {
             Ok(WorkerInbound::AdvanceTime { time: new_time, reply }) => {
@@ -127,14 +127,11 @@ fn handle_worker<SL, IL, C>(
                 fetch_saturating_add_signed(&memory_usage, -bytes_removed, Ordering::Relaxed);
                 let _ = reply.send(());
             }
-            Ok(WorkerInbound::Inputs { inputs, reply }) => {
-                let (inputs, replies) = collect_replay_batch(inputs, reply, &worker_inbound_rx, &mut pending_inbound);
+            Ok(WorkerInbound::Inputs { inputs, completion }) => {
                 let bytes_delta = record_worker_inputs(&mut input_log, &inputs);
                 fetch_saturating_add_signed(&memory_usage, bytes_delta, Ordering::Relaxed);
                 apply_inputs_to_histories(&mut history_by_id, &memory_usage, lower_time_horizon_delta.clone(), &mut apply_context, inputs);
-                for reply in replies {
-                    let _ = reply.send(());
-                }
+                complete(completion, Vec::new());
             }
             Ok(WorkerInbound::InputsInRange { start, end, reply }) => {
                 let inputs = input_log.iter().filter(|entry| time_is_in_range(Input::time(&entry.input), &start, &end)).cloned().collect();
@@ -205,31 +202,10 @@ fn time_is_in_range<T: ContimeTime>(time: T, start: &Bound<T>, end: &Bound<T>) -
     after_start && before_end
 }
 
-fn collect_replay_batch<SL, IL>(
-    mut inputs: Vec<WorkerInput<IL>>,
-    first_reply: Sender<()>,
-    worker_inbound_rx: &Receiver<WorkerInbound<SL, IL>>,
-    pending_inbound: &mut VecDeque<WorkerInbound<SL, IL>>,
-) -> (Vec<WorkerInput<IL>>, Vec<Sender<()>>)
-where
-    SL: SnapshotLanes<Input = IL>,
-{
-    let mut replies = vec![first_reply];
-
-    while let Ok(inbound) = worker_inbound_rx.try_recv() {
-        match inbound {
-            WorkerInbound::Inputs { inputs: next_inputs, reply } => {
-                inputs.extend(next_inputs);
-                replies.push(reply);
-            }
-            other => {
-                pending_inbound.push_back(other);
-                break;
-            }
-        }
+fn complete<T>(completion: Completion<T>, value: T) {
+    if let Completion::Respond(response) = completion {
+        let _ = response.send(value);
     }
-
-    (inputs, replies)
 }
 
 fn apply_inputs_to_histories<SL, IL, C>(
@@ -260,5 +236,24 @@ fn apply_inputs_to_histories<SL, IL, C>(
         };
         let bytes_delta = history.apply_input_batch(inputs, apply_context);
         fetch_saturating_add_signed(memory_usage, bytes_delta, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossbeam_channel::{bounded, TryRecvError};
+
+    use super::{complete, Completion};
+    use crate::{EventRejection, EventRejectionReason};
+
+    #[test]
+    fn responding_completion_sends_exactly_one_batch_result() {
+        let (response_tx, response_rx) = bounded(2);
+        let expected = vec![EventRejection::new(7, EventRejectionReason::MemoryFull)];
+
+        complete(Completion::Respond(response_tx.clone()), expected.clone());
+
+        assert_eq!(response_rx.recv().unwrap(), expected);
+        assert_eq!(response_rx.try_recv(), Err(TryRecvError::Empty));
     }
 }

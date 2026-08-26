@@ -55,6 +55,11 @@ struct BlockingApplyTrace {
     applied: Arc<Mutex<Vec<u128>>>,
 }
 
+#[derive(Clone)]
+struct BatchSizeTrace {
+    tx: flume::Sender<usize>,
+}
+
 impl ContextValueAt {
     fn lane_id(entity_id: u128) -> u128 {
         entity_id
@@ -208,6 +213,13 @@ impl ApplyWrapper<SnapshotLanes> for BlockingApplyTrace {
         let snapshot_id = batch.snapshot_id;
         apply_inner.apply_input_batch(batch);
         self.applied.lock().unwrap().push(snapshot_id);
+    }
+}
+
+impl ApplyWrapper<SnapshotLanes> for BatchSizeTrace {
+    fn apply_input_batch_wrapper(&mut self, batch: InputBatch<'_, InputLanes>, apply_inner: &mut ApplyInner<'_, SnapshotLanes>) {
+        self.tx.send(batch.inputs.len()).unwrap();
+        apply_inner.apply_input_batch(batch);
     }
 }
 
@@ -416,4 +428,21 @@ fn send_event_returns_after_enqueue_without_waiting_for_apply() {
     release_tx.send(()).unwrap();
     let snapshot = contime.query_at(11, &[3]).unwrap().pop().flatten().unwrap();
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 11, value: 10 }));
+}
+
+#[test]
+fn one_worker_applies_one_complete_thousand_input_batch() {
+    let (batch_size_tx, batch_size_rx) = flume::bounded(2);
+    let contime = contime::Contime::<SnapshotLanes, InputLanes, BatchSizeTrace>::new_with_apply_context(
+        1,
+        1_000_000,
+        BatchSizeTrace { tx: batch_size_tx },
+    );
+    let inputs = (1..=1_000)
+        .map(|event_id| OnContextValueChanged { event_id, time: 10, entity_id: 3, value: event_id as i32 }.into())
+        .collect::<Vec<InputLanes>>();
+
+    assert!(contime.apply(inputs).unwrap().is_empty());
+    assert_eq!(batch_size_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(), 1_000);
+    assert!(batch_size_rx.try_recv().is_err());
 }
