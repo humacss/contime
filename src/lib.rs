@@ -66,6 +66,8 @@ pub use api::{ApplyOutcome, Contime, ContimeError, InputRejection, InputRejectio
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};
 pub use history::{ApplyInner, ApplyWrapper, SnapshotHistory};
+#[doc(hidden)]
+pub use history::{HistoryInputs, HistoryInsert};
 pub use journal::InputJournalEntry;
 pub use time::ContimeTime;
 pub use traits::{
