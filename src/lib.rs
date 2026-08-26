@@ -61,6 +61,8 @@ use key::ContimeKey;
 use router::{Router, RouterError};
 use worker::{Worker, WorkerInbound};
 
+#[doc(hidden)]
+pub use api::CompletionBenchmark;
 pub use api::{Contime, ContimeError, EventRejection, EventRejectionReason};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
@@ -69,6 +71,8 @@ pub use history::{ApplyInner, ApplyWrapper, SnapshotHistory};
 #[doc(hidden)]
 pub use history::{HistoryInputs, HistoryInsert};
 pub use journal::InputJournalEntry;
+#[doc(hidden)]
+pub use router::RoutePartitionBenchmark;
 pub use time::ContimeTime;
 pub use traits::{
     ApplyBatch, ApplyEvents, Event, Input, InputBatch, InputLanes, InputRoute, Marker, Snapshot, SnapshotEvent, SnapshotLanes,
