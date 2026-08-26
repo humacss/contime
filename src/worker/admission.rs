@@ -1,9 +1,8 @@
-use std::collections::{BTreeMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use ahash::AHashMap;
+use std::collections::{BTreeMap, HashSet};
 
 use super::WorkerInput;
+use crate::memory::MemoryTracker;
 use crate::{ContimeTime, EventRejection, EventRejectionReason, Input};
 
 pub(super) struct AdmissionResult<IL> {
@@ -28,12 +27,7 @@ where
         Self { retained_ids: HashSet::new(), ids_by_retention_time: BTreeMap::new(), current_time: T::default(), horizon_delta }
     }
 
-    pub(super) fn admit<IL>(
-        &mut self,
-        inputs: Vec<WorkerInput<IL>>,
-        memory_budget: &AtomicU64,
-        memory_usage: &AtomicU64,
-    ) -> AdmissionResult<IL>
+    pub(super) fn admit<IL>(&mut self, inputs: Vec<WorkerInput<IL>>, memory: &MemoryTracker) -> AdmissionResult<IL>
     where
         IL: Input<Time = T>,
     {
@@ -73,7 +67,7 @@ where
             let estimate = identity_size
                 .saturating_add(lane_size.saturating_mul(2))
                 .saturating_add((group.len() as u64).saturating_mul(size_of::<u128>() as u64));
-            if !try_reserve(memory_usage, memory_budget.load(Ordering::Relaxed), estimate) {
+            if !memory.try_reserve(estimate) {
                 rejections.push(EventRejection::new(input_id, EventRejectionReason::MemoryFull));
                 continue;
             }
@@ -96,10 +90,6 @@ where
         let removed_count = removed.into_values().flatten().filter(|input_id| self.retained_ids.remove(input_id)).count() as u64;
         removed_count.saturating_mul(identity_entry_size::<T>())
     }
-}
-
-fn try_reserve(memory_usage: &AtomicU64, budget: u64, bytes: u64) -> bool {
-    memory_usage.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(bytes).filter(|next| *next < budget)).is_ok()
 }
 
 const fn identity_entry_size<T>() -> u64 {

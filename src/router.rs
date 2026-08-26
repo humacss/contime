@@ -1,5 +1,4 @@
 use std::marker::PhantomData;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use ahash::RandomState;
@@ -10,6 +9,7 @@ mod partition;
 pub use partition::RoutePartitionBenchmark;
 use partition::RoutePartitioner;
 
+use crate::memory::MemoryTracker;
 use crate::worker::Completion;
 use crate::{ApplyWrapper, EventRejection, InputLanes, SnapshotLanes, Worker, WorkerInbound};
 
@@ -26,6 +26,7 @@ where
 {
     partitioner: RoutePartitioner,
     workers: Vec<Worker<SL, IL, C>>,
+    memory: MemoryTracker,
     global_context: Arc<G>,
     _context: PhantomData<C>,
 }
@@ -150,8 +151,7 @@ where
         let hasher = RandomState::new();
         let partitioner = RoutePartitioner::with_hasher(worker_count, hasher.clone());
         let global_context = Arc::new(global_context);
-        let memory_budget = Arc::new(AtomicU64::new(memory_budget_bytes));
-        let memory_usage = Arc::new(AtomicU64::new(0));
+        let memory = MemoryTracker::new(memory_budget_bytes);
         let mut worker_txs = Vec::<Sender<WorkerInbound<SL, IL>>>::with_capacity(worker_count);
         let mut worker_rxs = Vec::with_capacity(worker_count);
         for _ in 0..worker_count {
@@ -169,18 +169,21 @@ where
                 worker_index,
                 Arc::clone(&worker_txs),
                 hasher.clone(),
-                Arc::clone(&memory_budget),
-                Arc::clone(&memory_usage),
+                memory.clone(),
                 lower_time_horizon_delta.clone(),
                 make_apply_context(worker_index, Arc::clone(&global_context)),
             ));
         }
 
-        Self { partitioner, workers, global_context, _context: PhantomData }
+        Self { partitioner, workers, memory, global_context, _context: PhantomData }
     }
 
     pub fn global_context(&self) -> Arc<G> {
         Arc::clone(&self.global_context)
+    }
+
+    pub(crate) fn memory_tracker(&self) -> MemoryTracker {
+        self.memory.clone()
     }
 
     pub(crate) fn dispatch_inputs<I>(&self, inputs: I, response: Option<&Sender<Vec<EventRejection>>>) -> Result<usize, RouterError>
