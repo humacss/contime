@@ -59,6 +59,112 @@ fn benchmark_snapshot_history_same_snapshot(runner: &mut Criterion) {
     group.finish();
 }
 
+fn history_and_batch_for_late_rate(late_percent: u32) -> (SnapshotHistory<BenchSnapshot>, Vec<BenchEvent>, (usize, usize)) {
+    let late_count = usize::try_from(late_percent).expect("late percentage fits usize") * 10;
+    let ordered_count = 1_000 - late_count;
+    let mut history = SnapshotHistory::<BenchSnapshot>::new(BenchSnapshot::default(), 0, 10_000).0;
+    history.apply_input_batch(vec![new_event(1, 1_000)], &mut ());
+
+    let mut batch = Vec::with_capacity(1_000);
+    batch.extend((0..late_count).map(|offset| new_event(2 + offset as u128, offset as i64)));
+    batch.extend((0..ordered_count).map(|offset| new_event(2 + late_count as u128 + offset as u128, 1_001 + offset as i64)));
+
+    (history, batch, (ordered_count + 1, late_count))
+}
+
+fn benchmark_history_late_rate(runner: &mut Criterion) {
+    let mut group = runner.benchmark_group("history_late_rate");
+
+    for late_percent in [0_u32, 1, 10, 50] {
+        let (mut checked_history, checked_batch, expected_counts) = history_and_batch_for_late_rate(late_percent);
+        checked_history.apply_input_batch(checked_batch, &mut ());
+        assert_eq!(checked_history.inputs.storage_counts(), expected_counts);
+
+        group.bench_function(BenchmarkId::new("1000_inputs", late_percent), |bencher| {
+            bencher.iter_batched_ref(
+                || history_and_batch_for_late_rate(late_percent),
+                |(history, batch, expected)| {
+                    history.apply_input_batch(std::mem::take(batch), &mut ());
+                    debug_assert_eq!(history.inputs.storage_counts(), *expected);
+                    black_box(history.inputs.storage_counts());
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
+fn history_for_merged_replay(late_percent: u32) -> SnapshotHistory<BenchSnapshot> {
+    let (mut history, batch, expected_counts) = history_and_batch_for_late_rate(late_percent);
+    history.inputs.insert_batch(batch);
+    assert_eq!(history.inputs.storage_counts(), expected_counts);
+    history
+}
+
+fn benchmark_history_merged_replay(runner: &mut Criterion) {
+    let mut group = runner.benchmark_group("history_merged_replay");
+
+    for late_percent in [0_u32, 10, 50] {
+        group.bench_function(BenchmarkId::new("1000_inputs", late_percent), |bencher| {
+            bencher.iter_batched_ref(
+                || history_for_merged_replay(late_percent),
+                |history| {
+                    black_box(history.snapshot_at(2_000));
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
+fn history_for_horizon_prune(case: &str) -> SnapshotHistory<BenchSnapshot> {
+    let initial = BenchSnapshot { id: 0, time: -1, sum: 0 };
+    let mut history = SnapshotHistory::<BenchSnapshot>::new(initial, 0, 1_000).0;
+    let events = match case {
+        "ordered_only" => (0..1_000).map(|time| new_event(1 + time as u128, time)).collect::<Vec<_>>(),
+        "late_only" => {
+            history.inputs.insert_batch(vec![new_event(1, 1_000)]);
+            (0..1_000).map(|time| new_event(2 + time as u128, time)).collect::<Vec<_>>()
+        }
+        "mixed" => {
+            let mut events = (0..1_000).step_by(2).map(|time| new_event(1 + time as u128, time)).collect::<Vec<_>>();
+            events.extend((1..1_000).step_by(2).map(|time| new_event(1 + time as u128, time)));
+            events
+        }
+        _ => unreachable!("unknown pruning fixture"),
+    };
+    history.inputs.insert_batch(events);
+    history
+}
+
+fn benchmark_history_horizon_prune(runner: &mut Criterion) {
+    let mut group = runner.benchmark_group("history_horizon_prune");
+
+    for case in ["ordered_only", "late_only", "mixed"] {
+        let mut checked_history = history_for_horizon_prune(case);
+        checked_history.advance(1_500);
+        let expected_retained = if case == "late_only" { 501 } else { 500 };
+        assert_eq!(checked_history.inputs.len(), expected_retained);
+
+        group.bench_function(case, |bencher| {
+            bencher.iter_batched_ref(
+                || history_for_horizon_prune(case),
+                |history| {
+                    black_box(history.advance(1_500));
+                    black_box(history.inputs.storage_counts());
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    group.finish();
+}
+
 fn persistent_batch(size: usize, one_snapshot: bool, time: i64) -> Vec<BenchEvent> {
     (0..size)
         .map(move |offset| {
@@ -430,6 +536,9 @@ criterion_group! {
         benchmark_apply_orchestrator_callback,
         benchmark_snapshot_callback_same_snapshot,
         benchmark_snapshot_history_same_snapshot,
+        benchmark_history_late_rate,
+        benchmark_history_merged_replay,
+        benchmark_history_horizon_prune,
         benchmark_send_persistent_matrix,
         benchmark_sync_apply_persistent_matrix
 }
