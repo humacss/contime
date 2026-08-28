@@ -1,0 +1,18 @@
+[package]
+name = "contime-events"
+version = "0.1.0"
+edition = "2021"
+autobenches = false
+license = "MIT"
+description = "Isolated canonical event history storage for ConTime"
+publish = false
+
+[dependencies]
+ahash = "0.8"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "events"
+harness = false
