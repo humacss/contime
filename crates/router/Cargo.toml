@@ -1,0 +1,20 @@
+[package]
+name = "contime-router"
+version = "0.1.0"
+edition = "2021"
+autobenches = false
+license = "MIT"
+description = "Isolated deterministic input routing for ConTime"
+publish = false
+
+[dependencies]
+ahash = "0.8.12"
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
+
+[[bench]]
+name = "router"
+harness = false
