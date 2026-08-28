@@ -1,0 +1,15 @@
+[package]
+name = "contime-api"
+version = "0.1.0"
+edition = "2021"
+autobenches = false
+license = "MIT"
+description = "Isolated API-side request and response processing for ConTime"
+publish = false
+
+[dependencies]
+contime = { path = "../.." }
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
