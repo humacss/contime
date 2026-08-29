@@ -30,11 +30,11 @@ impl<I, RE, WE> Runtime<I, RE, WE> {
 
 #[cfg(test)]
 mod tests {
-    use std::hint::black_box;
+    use std::hint::spin_loop;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use criterion::{BatchSize, Criterion};
+    use criterion::Criterion;
     use crossbeam_channel::{Receiver, Sender};
 
     use crate::{Router, Runtime, RuntimeConfig, Worker};
@@ -132,62 +132,151 @@ mod tests {
         assert_eq!(counts.iter().map(|count| count.load(Ordering::Relaxed)).sum::<usize>(), 1_000);
     }
 
+    #[test]
+    fn warm_completion_waits_for_every_submitted_batch() {
+        let runtime = WarmRuntime::start();
+
+        runtime.submit(1_000, 1);
+        runtime.wait_for(1_000);
+
+        assert_eq!(runtime.completed(), 1_000);
+        runtime.shutdown();
+    }
+
+    #[derive(Debug)]
+    struct BenchmarkBatch {
+        worker_hint: usize,
+        logical_events: usize,
+    }
+
     struct BenchmarkRouter;
 
     impl Router for BenchmarkRouter {
-        type Input = u64;
-        type WorkerInput = u64;
+        type Input = BenchmarkBatch;
+        type WorkerInput = BenchmarkBatch;
         type Error = ();
 
         fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
-            for value in input {
-                let worker_index = value as usize % workers.len();
-                workers[worker_index].send(value).unwrap();
+            for batch in input {
+                let worker_index = batch.worker_hint % workers.len();
+                workers[worker_index].send(batch).unwrap();
             }
             Ok(())
         }
     }
 
     struct BenchmarkWorker {
-        consumed: Arc<AtomicUsize>,
+        completed_batches: Arc<AtomicUsize>,
+        completed_events: Arc<AtomicUsize>,
     }
 
     impl Worker for BenchmarkWorker {
-        type Input = u64;
+        type Input = BenchmarkBatch;
         type Error = ();
 
         fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error> {
-            let consumed = input.into_iter().count();
-            self.consumed.fetch_add(consumed, Ordering::Relaxed);
+            for batch in input {
+                self.completed_events.fetch_add(batch.logical_events, Ordering::Relaxed);
+                self.completed_batches.fetch_add(1, Ordering::Release);
+            }
             Ok(())
+        }
+    }
+
+    struct WarmRuntime {
+        runtime: Runtime<BenchmarkBatch, (), ()>,
+        completed_batches: Arc<AtomicUsize>,
+        completed_events: Arc<AtomicUsize>,
+    }
+
+    impl WarmRuntime {
+        fn start() -> Self {
+            let completed_batches = Arc::new(AtomicUsize::new(0));
+            let completed_events = Arc::new(AtomicUsize::new(0));
+            let batches_for_workers = Arc::clone(&completed_batches);
+            let events_for_workers = Arc::clone(&completed_events);
+            let runtime = Runtime::start(
+                RuntimeConfig { router_count: 2, worker_count: 4 },
+                |_| BenchmarkRouter,
+                move |_| BenchmarkWorker {
+                    completed_batches: Arc::clone(&batches_for_workers),
+                    completed_events: Arc::clone(&events_for_workers),
+                },
+            )
+            .unwrap();
+            Self { runtime, completed_batches, completed_events }
+        }
+
+        fn submit(&self, batch_count: usize, logical_events: usize) {
+            for worker_hint in 0..batch_count {
+                self.runtime.send(BenchmarkBatch { worker_hint, logical_events }).unwrap();
+            }
+        }
+
+        fn submit_direct(&self, batch_count: usize, logical_events: usize) {
+            for worker_hint in 0..batch_count {
+                self.runtime.input().send(BenchmarkBatch { worker_hint, logical_events }).unwrap();
+            }
+        }
+
+        fn wait_for(&self, target: usize) {
+            while self.completed_batches.load(Ordering::Acquire) < target {
+                spin_loop();
+            }
+        }
+
+        fn completed(&self) -> usize {
+            self.completed_batches.load(Ordering::Acquire)
+        }
+
+        fn completed_events(&self) -> usize {
+            self.completed_events.load(Ordering::Relaxed)
+        }
+
+        fn shutdown(self) {
+            let report = self.runtime.shutdown();
+            assert_eq!(report.routers, vec![crate::ThreadOutcome::Completed, crate::ThreadOutcome::Completed]);
+            assert_eq!(
+                report.workers,
+                vec![
+                    crate::ThreadOutcome::Completed,
+                    crate::ThreadOutcome::Completed,
+                    crate::ThreadOutcome::Completed,
+                    crate::ThreadOutcome::Completed,
+                ]
+            );
         }
     }
 
     #[test]
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_runtime() {
+        const BATCHES_PER_ITERATION: usize = 1_000;
+        const LOGICAL_EVENTS_PER_BATCH: usize = 1_000;
+
         let mut criterion = Criterion::default();
-        criterion.bench_function("runtime/apply/1000_inputs/2_routers/4_workers", |bencher| {
-            bencher.iter_batched(
-                || ((0..1_000).collect::<Vec<u64>>(), Arc::new(AtomicUsize::new(0))),
-                |(inputs, consumed)| {
-                    let consumed_for_workers = Arc::clone(&consumed);
-                    let runtime = Runtime::start(
-                        RuntimeConfig { router_count: 2, worker_count: 4 },
-                        |_| BenchmarkRouter,
-                        move |_| BenchmarkWorker { consumed: Arc::clone(&consumed_for_workers) },
-                    )
-                    .unwrap();
-                    for input in inputs {
-                        runtime.send(input).unwrap();
-                    }
-                    let report = runtime.shutdown();
-                    assert_eq!(consumed.load(Ordering::Relaxed), 1_000);
-                    black_box(report)
-                },
-                BatchSize::SmallInput,
-            );
+        let runtime = WarmRuntime::start();
+
+        let mut runtime_target = runtime.completed();
+        criterion.bench_function("runtime/throughput/runtime_send/1000_batches_1000_events_each", |bencher| {
+            bencher.iter(|| {
+                runtime_target += BATCHES_PER_ITERATION;
+                runtime.submit(BATCHES_PER_ITERATION, LOGICAL_EVENTS_PER_BATCH);
+                runtime.wait_for(runtime_target);
+            });
         });
+
+        let mut direct_target = runtime.completed();
+        criterion.bench_function("runtime/throughput/direct_sender/1000_batches_1000_events_each", |bencher| {
+            bencher.iter(|| {
+                direct_target += BATCHES_PER_ITERATION;
+                runtime.submit_direct(BATCHES_PER_ITERATION, LOGICAL_EVENTS_PER_BATCH);
+                runtime.wait_for(direct_target);
+            });
+        });
+
+        assert_eq!(runtime.completed_events(), runtime.completed() * LOGICAL_EVENTS_PER_BATCH);
+        runtime.shutdown();
         criterion.final_summary();
     }
 }
