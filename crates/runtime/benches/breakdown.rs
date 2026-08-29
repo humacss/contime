@@ -3,7 +3,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use contime_runtime::{Router, Runtime, RuntimeConfig, ThreadOutcome, Worker};
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
 
@@ -76,6 +76,25 @@ fn events(input_count: usize) -> Vec<Event> {
     (0..input_count).map(|value| Event { router_index: 0, worker_index: 0, value }).collect()
 }
 
+struct Prepared<T> {
+    inputs: Vec<T>,
+    completed: Receiver<()>,
+}
+
+fn prepare_router_inputs(events: &[Event]) -> Prepared<RouterInput> {
+    let (completion, completed) = unbounded();
+    let inputs = events.iter().map(|event| RouterInput::Event(PendingEvent { event: *event, completion: completion.clone() })).collect();
+    drop(completion);
+    Prepared { inputs, completed }
+}
+
+fn prepare_worker_inputs(events: &[Event]) -> Prepared<WorkerInput> {
+    let (completion, completed) = unbounded();
+    let inputs = events.iter().map(|event| WorkerInput::Event(PendingEvent { event: *event, completion: completion.clone() })).collect();
+    drop(completion);
+    Prepared { inputs, completed }
+}
+
 struct LocalChannelHarness {
     input: Sender<RouterInput>,
     output: Receiver<RouterInput>,
@@ -88,13 +107,10 @@ impl LocalChannelHarness {
         Self { input, output, events: events(input_count) }
     }
 
-    fn run(&self) {
-        let (completion, completed) = unbounded();
-        for event in &self.events {
-            let pending = PendingEvent { event: *event, completion: completion.clone() };
-            self.input.send(RouterInput::Event(pending)).unwrap();
+    fn run(&self, prepared: Prepared<RouterInput>) {
+        for input in prepared.inputs {
+            self.input.send(input).unwrap();
         }
-        drop(completion);
         for _ in &self.events {
             match self.output.recv().unwrap() {
                 RouterInput::Event(pending) => {
@@ -103,7 +119,7 @@ impl LocalChannelHarness {
                 }
             }
         }
-        assert!(completed.recv().is_err());
+        assert!(prepared.completed.recv().is_err());
     }
 }
 
@@ -129,14 +145,11 @@ impl OneHopHarness {
         Self { input, worker, events: events(input_count) }
     }
 
-    fn run(&self) {
-        let (completion, completed) = unbounded();
-        for event in &self.events {
-            let pending = PendingEvent { event: *event, completion: completion.clone() };
-            self.input.send(WorkerInput::Event(pending)).unwrap();
+    fn run(&self, prepared: Prepared<WorkerInput>) {
+        for input in prepared.inputs {
+            self.input.send(input).unwrap();
         }
-        drop(completion);
-        assert!(completed.recv().is_err());
+        assert!(prepared.completed.recv().is_err());
     }
 
     fn shutdown(self) {
@@ -167,14 +180,11 @@ impl BoundedTwoHopHarness {
         Self { input, router, worker, events: events(input_count) }
     }
 
-    fn run(&self) {
-        let (completion, completed) = unbounded();
-        for event in &self.events {
-            let pending = PendingEvent { event: *event, completion: completion.clone() };
-            self.input.send(RouterInput::Event(pending)).unwrap();
+    fn run(&self, prepared: Prepared<RouterInput>) {
+        for input in prepared.inputs {
+            self.input.send(input).unwrap();
         }
-        drop(completion);
-        assert!(completed.recv().is_err());
+        assert!(prepared.completed.recv().is_err());
     }
 
     fn shutdown(self) {
@@ -195,14 +205,12 @@ impl TwoHopHarness {
         Self { runtime, events: events(input_count) }
     }
 
-    fn run(&self) {
-        let (completion, completed) = unbounded();
-        for event in &self.events {
-            let pending = PendingEvent { event: *event, completion: completion.clone() };
-            self.runtime.inputs()[event.router_index].send(RouterInput::Event(pending)).unwrap();
+    fn run(&self, prepared: Prepared<RouterInput>) {
+        for input in prepared.inputs {
+            let RouterInput::Event(ref pending) = input;
+            self.runtime.inputs()[pending.event.router_index].send(input).unwrap();
         }
-        drop(completion);
-        assert!(completed.recv().is_err());
+        assert!(prepared.completed.recv().is_err());
     }
 
     fn shutdown(self) {
@@ -216,32 +224,44 @@ fn bench_count(group: &mut BenchmarkGroup<'_, criterion::measurement::WallTime>,
     group.throughput(Throughput::Elements(input_count as u64));
 
     let local = LocalChannelHarness::new(input_count);
-    group.bench_with_input(BenchmarkId::new("local_send_and_recv", input_count), &input_count, |bencher, _| bencher.iter(|| local.run()));
+    group.bench_with_input(BenchmarkId::new("local_send_and_recv", input_count), &input_count, |bencher, _| {
+        bencher.iter_batched(|| prepare_router_inputs(&local.events), |prepared| local.run(prepared), BatchSize::SmallInput)
+    });
 
     let one_hop = OneHopHarness::new(input_count);
-    one_hop.run();
-    group.bench_with_input(BenchmarkId::new("one_thread_hop", input_count), &input_count, |bencher, _| bencher.iter(|| one_hop.run()));
+    one_hop.run(prepare_worker_inputs(&one_hop.events));
+    group.bench_with_input(BenchmarkId::new("one_thread_hop", input_count), &input_count, |bencher, _| {
+        bencher.iter_batched(|| prepare_worker_inputs(&one_hop.events), |prepared| one_hop.run(prepared), BatchSize::SmallInput)
+    });
     one_hop.shutdown();
 
     let two_hop = TwoHopHarness::new(input_count);
-    two_hop.run();
+    two_hop.run(prepare_router_inputs(&two_hop.events));
     group.bench_with_input(BenchmarkId::new("router_and_worker_hops", input_count), &input_count, |bencher, _| {
-        bencher.iter(|| two_hop.run())
+        bencher.iter_batched(|| prepare_router_inputs(&two_hop.events), |prepared| two_hop.run(prepared), BatchSize::SmallInput)
     });
     two_hop.shutdown();
 
     if input_count >= 1_000 {
         let bounded_one_hop = OneHopHarness::bounded(input_count);
-        bounded_one_hop.run();
+        bounded_one_hop.run(prepare_worker_inputs(&bounded_one_hop.events));
         group.bench_with_input(BenchmarkId::new("bounded_one_thread_hop", input_count), &input_count, |bencher, _| {
-            bencher.iter(|| bounded_one_hop.run())
+            bencher.iter_batched(
+                || prepare_worker_inputs(&bounded_one_hop.events),
+                |prepared| bounded_one_hop.run(prepared),
+                BatchSize::SmallInput,
+            )
         });
         bounded_one_hop.shutdown();
 
         let bounded_two_hop = BoundedTwoHopHarness::new(input_count);
-        bounded_two_hop.run();
+        bounded_two_hop.run(prepare_router_inputs(&bounded_two_hop.events));
         group.bench_with_input(BenchmarkId::new("bounded_router_and_worker_hops", input_count), &input_count, |bencher, _| {
-            bencher.iter(|| bounded_two_hop.run())
+            bencher.iter_batched(
+                || prepare_router_inputs(&bounded_two_hop.events),
+                |prepared| bounded_two_hop.run(prepared),
+                BatchSize::SmallInput,
+            )
         });
         bounded_two_hop.shutdown();
     }

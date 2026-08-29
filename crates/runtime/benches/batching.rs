@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use contime_runtime::{Router, Runtime, RuntimeConfig, ThreadOutcome, Worker};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
 
@@ -80,6 +80,11 @@ struct Harness {
     batches: Vec<EventBatch>,
 }
 
+struct PreparedRun {
+    batches: Vec<PendingBatch>,
+    completed: Receiver<()>,
+}
+
 impl Harness {
     fn new(router_count: usize, worker_count: usize, events_per_worker: usize) -> Self {
         let runtime = Runtime::start(RuntimeConfig { router_count, worker_count }, |_| BatchRouter, |_| BatchWorker).unwrap();
@@ -93,14 +98,18 @@ impl Harness {
         Self { runtime, batches }
     }
 
-    fn run(&self) {
+    fn prepare(&self) -> PreparedRun {
         let (completion, completed) = unbounded();
-        for batch in &self.batches {
-            let pending = PendingBatch { batch: batch.clone(), completion: completion.clone() };
-            self.runtime.inputs()[batch.router_index].send(RouterInput::Batch(pending)).unwrap();
-        }
+        let batches = self.batches.iter().map(|batch| PendingBatch { batch: batch.clone(), completion: completion.clone() }).collect();
         drop(completion);
-        assert!(completed.recv().is_err());
+        PreparedRun { batches, completed }
+    }
+
+    fn run(&self, prepared: PreparedRun) {
+        for pending in prepared.batches {
+            self.runtime.inputs()[pending.batch.router_index].send(RouterInput::Batch(pending)).unwrap();
+        }
+        assert!(prepared.completed.recv().is_err());
     }
 
     fn shutdown(self) {
@@ -113,7 +122,6 @@ impl Harness {
 fn process_directly(batches: &[EventBatch]) {
     let mut checksum = 0usize;
     for batch in batches {
-        let batch = batch.clone();
         for event in batch.events.iter() {
             checksum = checksum.wrapping_add(black_box(event.value));
         }
@@ -129,7 +137,7 @@ fn benchmark_batch_sizes(criterion: &mut Criterion) {
             let total_events = events_per_worker * worker_count;
             group.throughput(Throughput::Elements(total_events as u64));
             let harness = Harness::new(router_count, worker_count, events_per_worker);
-            harness.run();
+            harness.run(harness.prepare());
             if router_count == 1 {
                 group.bench_function(BenchmarkId::new("direct_no_channels", format!("{events_per_worker}_events_per_worker")), |bencher| {
                     bencher.iter(|| process_directly(&harness.batches))
@@ -140,7 +148,7 @@ fn benchmark_batch_sizes(criterion: &mut Criterion) {
                     format!("{router_count}_routers_{worker_count}_workers"),
                     format!("{events_per_worker}_events_per_worker_{total_events}_total"),
                 ),
-                |bencher| bencher.iter(|| harness.run()),
+                |bencher| bencher.iter_batched(|| harness.prepare(), |prepared| harness.run(prepared), BatchSize::SmallInput),
             );
             harness.shutdown();
         }

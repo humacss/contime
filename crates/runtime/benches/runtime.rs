@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::time::Duration;
 
 use contime_runtime::{Router, Runtime, RuntimeConfig, Worker};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
 
@@ -72,6 +72,11 @@ struct Harness {
     events: Vec<BenchmarkEvent>,
 }
 
+struct PreparedRun {
+    events: Vec<PendingEvent>,
+    completed: Receiver<()>,
+}
+
 impl Harness {
     fn new(router_count: usize, worker_count: usize) -> Self {
         let runtime = Runtime::start(RuntimeConfig { router_count, worker_count }, |_| BenchmarkRouter, |_| BenchmarkWorker).unwrap();
@@ -81,14 +86,18 @@ impl Harness {
         Self { runtime, events }
     }
 
-    fn run(&self) {
+    fn prepare(&self) -> PreparedRun {
         let (completion, completed) = unbounded();
-        for event in &self.events {
-            let pending = PendingEvent { event: *event, completion: completion.clone() };
-            self.runtime.inputs()[event.router_index].send(RouterInput::Event(pending)).unwrap();
-        }
+        let events = self.events.iter().map(|event| PendingEvent { event: *event, completion: completion.clone() }).collect();
         drop(completion);
-        assert!(completed.recv().is_err());
+        PreparedRun { events, completed }
+    }
+
+    fn run(&self, prepared: PreparedRun) {
+        for pending in prepared.events {
+            self.runtime.inputs()[pending.event.router_index].send(RouterInput::Event(pending)).unwrap();
+        }
+        assert!(prepared.completed.recv().is_err());
     }
 
     fn shutdown(self) {
@@ -104,9 +113,9 @@ fn benchmark_runtime(criterion: &mut Criterion) {
 
     for (router_count, worker_count) in [(1, 1), (2, 4)] {
         let harness = Harness::new(router_count, worker_count);
-        harness.run();
+        harness.run(harness.prepare());
         group.bench_function(BenchmarkId::new("topology", format!("{router_count}_routers_{worker_count}_workers")), |bencher| {
-            bencher.iter(|| harness.run())
+            bencher.iter_batched(|| harness.prepare(), |prepared| harness.run(prepared), BatchSize::SmallInput)
         });
         harness.shutdown();
     }
