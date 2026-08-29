@@ -140,17 +140,24 @@ its replacement.
 
 ### Worker Scaling
 
-Larger batches expose CPU scaling after fixed topology latency is amortized:
+The scaling workload limits every batch to at most 1,000 events. Larger
+per-worker totals are produced by sending more batches rather than by creating
+unrealistically large batches:
 
-| Events/worker | 1 worker events/s | 4 workers events/s | Speedup | Four-way efficiency |
-| ---: | ---: | ---: | ---: | ---: |
-| 1,000 | 57.453 million | 95.404 million | 1.66x | 41.5% |
-| 10,000 | 424.05 million | 857.04 million | 2.02x | 50.5% |
-| 100,000 | 1.843 billion | 4.873 billion | 2.64x | 66.1% |
-| 1,000,000 | 2.673 billion | 8.650 billion | 3.24x | 80.9% |
+| Batches/worker | Events/batch | Events/worker | Total events, 4 workers | 1 worker events/s | 4 workers events/s | Speedup | Four-way efficiency |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 1,000 | 10,000 | 40,000 | 417.07 million | 814.08 million | 1.95x | 48.8% |
+| 100 | 1,000 | 100,000 | 400,000 | 1.683 billion | 4.144 billion | 2.46x | 61.6% |
+| 1,000 | 1,000 | 1,000,000 | 4,000,000 | 2.381 billion | 6.651 billion | 2.79x | 69.8% |
 
-At one million events per worker, the direct single-thread iteration baseline
-is 2.775 billion events/s, giving an ideal four-thread ceiling of about 11.10
-billion events/s. The complete two-router/four-worker topology reaches 8.65
-billion events/s, or about 78% of that direct ceiling. The remaining gap is
-the roughly 40 us topology/completion latency plus scheduling and contention.
+The final row therefore sends 1,000 batches through each worker: 1,000 total
+batches in the one-worker topology and 4,000 total batches in the four-worker
+topology. No benchmark batch contains one million events.
+
+For the same 1,000-by-1,000 workload, direct single-thread iteration reaches
+2.589 billion events/s. That gives an ideal four-thread ceiling of about 10.35
+billion events/s. The complete two-router/four-worker topology reaches 6.651
+billion events/s, or about 64% of that direct ceiling. Relative to the complete
+one-worker topology, it scales by 2.79x. The remaining gap includes the cost of
+sending and receiving 4,000 batches, queue synchronization, completion
+observation, and thread scheduling and contention.
