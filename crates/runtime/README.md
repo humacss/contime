@@ -61,6 +61,13 @@ Run the warm end-to-end throughput benchmark:
 cargo bench --manifest-path crates/runtime/Cargo.toml --bench runtime
 ```
 
+Run the channel-stage and batch-size diagnostics:
+
+```bash
+cargo bench --manifest-path crates/runtime/Cargo.toml --bench breakdown
+cargo bench --manifest-path crates/runtime/Cargo.toml --bench batching
+```
+
 Generate a ten-second flamegraph for one topology:
 
 ```bash
@@ -96,3 +103,31 @@ The process-wide flamegraphs place the dominant sampled work in Crossbeam's
 send/receive, backoff, park, and unpark paths. Allocation is a minor sampled
 cost. This means the current tens-of-nanoseconds floor is channel scheduling
 and synchronization, not router-index calculation inside the runtime.
+
+## Batch Size Results
+
+The batching benchmark holds total work constant at 100,000 logical events.
+Prepared batch payloads are shared slices. Timed submission clones one shared
+batch handle, sends the batch through the selected router and worker, and the
+worker visits every event. The direct baseline performs the same batch-handle
+clone and event iteration without channels.
+
+| Topology | Events/batch | Channel messages | Total time | ns/event | Events/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Direct, no channels | 1 | 100,000 | 241.35 us | 2.414 | 414.34 million |
+| Direct, no channels | 100 | 1,000 | 38.647 us | 0.386 | 2.588 billion |
+| Direct, no channels | 1,000 | 100 | 38.646 us | 0.386 | 2.588 billion |
+| 1 router, 1 worker | 1 | 100,000 | 2.4931 ms | 24.931 | 40.111 million |
+| 1 router, 1 worker | 100 | 1,000 | 74.870 us | 0.749 | 1.336 billion |
+| 1 router, 1 worker | 1,000 | 100 | 61.702 us | 0.617 | 1.621 billion |
+| 2 routers, 4 workers | 1 | 100,000 | 2.1134 ms | 21.134 | 47.318 million |
+| 2 routers, 4 workers | 100 | 1,000 | 98.774 us | 0.988 | 1.012 billion |
+| 2 routers, 4 workers | 1,000 | 100 | 77.381 us | 0.774 | 1.292 billion |
+
+For one router and one worker, subtracting the direct baseline leaves about
+2.252 ms of channel overhead for single-event messages, 36.223 us for batches
+of 100, and 23.056 us for batches of 1,000. Batching 100 events therefore
+reduces total latency by 33.3 times and batching 1,000 reduces it by 40.4
+times. At the larger sizes, the fixed 38.65 us event-iteration baseline is the
+majority of the remaining measurement, so increasing the batch beyond 100 has
+diminishing returns for this no-op workload.
