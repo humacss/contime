@@ -643,13 +643,15 @@ git commit -m "fix(runtime): clean up partial thread startup"
 
 - [x] **Step 1: Add an external Criterion benchmark with flamegraphs**
 
-In `benches/runtime.rs`, start each runtime topology before timing. Each timed iteration must:
+In `benches/runtime.rs`, start each runtime topology before timing. Criterion's
+untimed setup creates one completion channel and clones its sender into every
+prepared input. Each timed iteration must:
 
 1. Send 1,000 benchmark events through their encoded router index.
 2. Forward each event through its encoded worker index.
-3. Drop the original completion sender and wait for its receiver to close
-   after workers drop every forwarded sender clone.
-3. Leave the runtime alive for the next iteration.
+3. Wait for the prepared receiver to close after workers drop every forwarded
+   sender clone.
+4. Leave the runtime alive for the next iteration.
 
 Register topology benchmarks for one router/one worker and two routers/four workers.
 

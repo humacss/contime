@@ -82,18 +82,18 @@ Local release-mode Criterion results recorded on 2026-08-29:
 
 | Topology | 1,000 inputs | ns/input | Inputs/s |
 | --- | ---: | ---: | ---: |
-| 1 router, 1 worker | 50.313 us | 50.313 | 19.876 million |
-| 2 routers, 4 workers | 80.664 us | 80.664 | 12.397 million |
+| 1 router, 1 worker | 49.761 us | 49.761 | 20.096 million |
+| 2 routers, 4 workers | 65.612 us | 65.612 | 15.241 million |
 
 The runtime is started once before timing and remains hot for the complete
 Criterion run. Every timed iteration sends 1,000 benchmark events through the
 router sender selected by `event.router_index`. The selected router forwards
 the event through the worker sender selected by `event.worker_index`. There is
 no hash, modulo, runtime trait lookup, or runtime message inspection in the
-timed path. Every input carries a clone of one completion sender. The
-benchmark drops its original sender and waits for the receiver to disconnect
-after workers process the inputs and drop every remaining sender clone. No
-acknowledgement messages are sent.
+timed path. Criterion's untimed setup creates the completion channel and
+clones its sender into every prepared input. The measured routine only sends
+those inputs and waits for the receiver to disconnect after workers process
+them and drop every sender clone. No acknowledgement messages are sent.
 
 Both cases include two Crossbeam channel hops, the sender-slice index accesses,
 the router and worker receive loops, and final queue-drain observation. They
@@ -110,28 +110,29 @@ and synchronization, not router-index calculation inside the runtime.
 
 The batching benchmark gives every worker one prepared shared-slice batch of
 the requested size. Total events therefore equal `events_per_worker *
-worker_count`: the four-worker cases process 4, 400, and 4,000 events. Timed
-submission clones one shared batch handle, sends it through the selected
-router and worker, and the worker visits every event. The direct baseline
-performs the same clone and event iteration without channels.
+worker_count`: the four-worker cases process 4, 400, and 4,000 events.
+Criterion's untimed setup clones the shared batch handles and completion
+senders. The measured routine sends the prepared batches through the selected
+routers and workers, visits every event, and waits for receiver closure. The
+direct baseline measures event iteration without channels.
 
 | Topology | Events/worker | Total events | Batches | Total time | ns/event | Events/s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Direct, no channels | 1 | 1 | 1 | 5.398 ns | 5.398 | 185.24 million |
 | Direct, no channels | 100 | 100 | 1 | 42.709 ns | 0.427 | 2.341 billion |
 | Direct, no channels | 1,000 | 1,000 | 1 | 412.77 ns | 0.413 | 2.423 billion |
-| 1 router, 1 worker | 1 | 1 | 1 | 14.440 us | 14,440.0 | 69.250 thousand |
-| 1 router, 1 worker | 100 | 100 | 1 | 12.949 us | 129.490 | 7.723 million |
-| 1 router, 1 worker | 1,000 | 1,000 | 1 | 18.521 us | 18.521 | 53.994 million |
-| 2 routers, 4 workers | 1 | 4 | 4 | 41.576 us | 10,394.0 | 96.209 thousand |
-| 2 routers, 4 workers | 100 | 400 | 4 | 41.711 us | 104.278 | 9.590 million |
-| 2 routers, 4 workers | 1,000 | 4,000 | 4 | 43.296 us | 10.824 | 92.388 million |
+| 1 router, 1 worker | 1 | 1 | 1 | 12.401 us | 12,401.0 | 80.639 thousand |
+| 1 router, 1 worker | 100 | 100 | 1 | 11.885 us | 118.850 | 8.414 million |
+| 1 router, 1 worker | 1,000 | 1,000 | 1 | 17.406 us | 17.406 | 57.453 million |
+| 2 routers, 4 workers | 1 | 4 | 4 | 40.757 us | 10,189.3 | 98.143 thousand |
+| 2 routers, 4 workers | 100 | 400 | 4 | 40.871 us | 102.178 | 9.787 million |
+| 2 routers, 4 workers | 1,000 | 4,000 | 4 | 41.927 us | 10.482 | 95.404 million |
 
 The nearly flat times within each topology show that these small workloads
 measure completion latency more than sustained throughput. One router and one
-worker require roughly 13-18 us to create the completion channel, cross both
-queues, process the batch, and observe receiver disconnection. Two routers and
-four workers require roughly 42-43 us for four batches to traverse the
+worker require roughly 12-17 us to cross both queues, process the batch, and
+observe receiver disconnection. Two routers and four workers require roughly
+41 us for four batches to traverse the
 topology before the last completion-sender clone is dropped. Event work begins
 to dominate only as each worker's batch grows. These measurements should be
 read alongside the sustained 1,000-input benchmark above rather than used as
