@@ -137,3 +137,20 @@ topology before the last completion-sender clone is dropped. Event work begins
 to dominate only as each worker's batch grows. These measurements should be
 read alongside the sustained 1,000-input benchmark above rather than used as
 its replacement.
+
+### Worker Scaling
+
+Larger batches expose CPU scaling after fixed topology latency is amortized:
+
+| Events/worker | 1 worker events/s | 4 workers events/s | Speedup | Four-way efficiency |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 57.453 million | 95.404 million | 1.66x | 41.5% |
+| 10,000 | 424.05 million | 857.04 million | 2.02x | 50.5% |
+| 100,000 | 1.843 billion | 4.873 billion | 2.64x | 66.1% |
+| 1,000,000 | 2.673 billion | 8.650 billion | 3.24x | 80.9% |
+
+At one million events per worker, the direct single-thread iteration baseline
+is 2.775 billion events/s, giving an ideal four-thread ceiling of about 11.10
+billion events/s. The complete two-router/four-worker topology reaches 8.65
+billion events/s, or about 78% of that direct ceiling. The remaining gap is
+the roughly 40 us topology/completion latency plus scheduling and contention.
