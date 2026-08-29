@@ -59,7 +59,13 @@ where
         return Err(StartError::NoWorkers);
     }
 
-    let (input_sender, input_receiver) = unbounded::<R::Input>();
+    let mut input_senders = Vec::with_capacity(config.router_count);
+    let mut input_receivers = Vec::with_capacity(config.router_count);
+    for _ in 0..config.router_count {
+        let (sender, receiver) = unbounded::<R::Input>();
+        input_senders.push(sender);
+        input_receivers.push(Some(receiver));
+    }
     let mut worker_senders = Vec::with_capacity(config.worker_count);
     let mut worker_receivers = Vec::with_capacity(config.worker_count);
     for _ in 0..config.worker_count {
@@ -75,8 +81,8 @@ where
         match deps.spawn(format!("contime-worker-{index}"), move || worker.run(receiver)) {
             Ok(handle) => workers.push(handle),
             Err(source) => {
-                drop(input_sender);
-                drop(input_receiver);
+                drop(input_senders);
+                drop(input_receivers);
                 drop(worker_senders);
                 drop(worker_receivers);
                 join_ignoring_outcomes(workers);
@@ -89,13 +95,13 @@ where
     let mut routers = Vec::with_capacity(config.router_count);
     for index in 0..config.router_count {
         let router = router_factory(index);
-        let router_input = input_receiver.clone();
+        let router_input = input_receivers[index].take().expect("each router receiver is consumed exactly once");
         let router_workers = worker_senders.clone();
         match deps.spawn(format!("contime-router-{index}"), move || router.run(router_input, router_workers)) {
             Ok(handle) => routers.push(handle),
             Err(source) => {
-                drop(input_sender);
-                drop(input_receiver);
+                drop(input_senders);
+                drop(input_receivers);
                 drop(worker_senders);
                 join_ignoring_outcomes(routers);
                 join_ignoring_outcomes(workers);
@@ -104,9 +110,9 @@ where
         }
     }
 
-    drop(input_receiver);
+    drop(input_receivers);
     drop(worker_senders);
-    Ok(Runtime { input: Some(input_sender), routers, workers })
+    Ok(Runtime { inputs: input_senders, routers, workers })
 }
 
 fn join_ignoring_outcomes<E>(handles: Vec<JoinHandle<Result<(), E>>>) {
@@ -203,7 +209,7 @@ mod tests {
 
         assert_eq!(runtime.routers.len(), 2);
         assert_eq!(runtime.workers.len(), 4);
-        drop(runtime.input.take());
+        runtime.inputs.clear();
         for handle in runtime.routers.drain(..) {
             assert_eq!(handle.join().unwrap(), Ok(()));
         }

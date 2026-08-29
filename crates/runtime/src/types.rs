@@ -81,7 +81,7 @@ pub struct ShutdownReport<RE, WE> {
 
 /// A running apply topology.
 pub struct Runtime<I, RE, WE> {
-    pub(crate) input: Option<Sender<I>>,
+    pub(crate) inputs: Vec<Sender<I>>,
     pub(crate) routers: Vec<JoinHandle<Result<(), RE>>>,
     pub(crate) workers: Vec<JoinHandle<Result<(), WE>>>,
 }
