@@ -28,11 +28,7 @@ impl Deps for DefaultDeps {
 
 impl Runtime<(), (), ()> {
     /// Starts a complete router and worker topology.
-    pub fn start<R, W, RF, WF>(
-        config: RuntimeConfig,
-        router_factory: RF,
-        worker_factory: WF,
-    ) -> Result<StartedRuntime<R, W>, StartError>
+    pub fn start<R, W, RF, WF>(config: RuntimeConfig, router_factory: RF, worker_factory: WF) -> Result<StartedRuntime<R, W>, StartError>
     where
         R: Router<WorkerInput = W::Input>,
         W: Worker,
