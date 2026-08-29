@@ -6,7 +6,7 @@
 
 **Architecture:** The crate declares local generic `Router` and `Worker` traits and treats every message as opaque. One shared Crossbeam receiver distributes complete inputs among router threads; every worker has a private receiver, and routers receive senders for the complete worker set. A generic `Runtime` owns the apply sender and join handles while remaining independent of every other ConTime crate.
 
-**Tech Stack:** Rust 2021, standard threads, `crossbeam-channel` 0.5, inline unit tests, Criterion 0.5 for an isolated lifecycle benchmark.
+**Tech Stack:** Rust 2021, standard threads, `crossbeam-channel` 0.5, inline unit tests, Criterion 0.5 for isolated warm-throughput benchmarks.
 
 **Spec:** `crates/runtime/docs/design.md`
 
@@ -641,24 +641,20 @@ git commit -m "fix(runtime): clean up partial thread startup"
 
 - [ ] **Step 1: Add an ignored inline Criterion benchmark**
 
-Inside `runtime.rs` tests, add `benchmark_runtime`. Prepare a runtime with two relay routers and four counting workers. Outside the timed routine, prepare 1,000 opaque `u64` messages. Each timed iteration must:
+Inside `runtime.rs` tests, add `benchmark_runtime`. Start one runtime with two relay routers and four counting workers before either timed routine. Each timed iteration must:
 
-1. Start a fresh runtime.
-2. Send all 1,000 messages through `Runtime::send`.
-3. Shut down and join it.
-4. Pass the shutdown report and consumed count through `black_box`.
+1. Send 1,000 opaque batches representing 1,000 logical events each.
+2. Wait until workers confirm all 1,000 batches were consumed.
+3. Leave the runtime alive for the next iteration.
 
-Register the exact benchmark name:
+Register these exact benchmark names:
 
 ```rust
-criterion.bench_function("runtime/apply/1000_inputs/2_routers/4_workers", |bencher| {
-    // Use iter_batched so fixture construction and message-vector creation are
-    // excluded, while runtime startup, sends, processing, and shutdown remain
-    // inside the measurement.
-});
+"runtime/throughput/runtime_send/1000_batches_1000_events_each"
+"runtime/throughput/direct_sender/1000_batches_1000_events_each"
 ```
 
-The benchmark intentionally measures the complete isolated runtime lifecycle. It must not import sibling crates.
+The first case uses `Runtime::send`; the second uses the same runtime-owned Crossbeam sender directly. Shut down only after both Criterion routines finish. The benchmark must not import sibling crates.
 
 - [ ] **Step 2: Run tests and the benchmark**
 
@@ -683,9 +679,9 @@ Document:
 - explicit shutdown and external-sender lifetime rule;
 - startup rollback and lack of automatic recovery;
 - exact test and benchmark commands; and
-- the measured median, nanoseconds per input, and inputs per second.
+- the measured median, nanoseconds per batch, batches per second, and derived logical events per second.
 
-State clearly that the benchmark includes thread startup, channel traffic, no-op routing, no-op worker processing, shutdown, and joining. It excludes real routing, event storage, replay, lanes, and API rejection collection.
+State clearly that startup and shutdown are outside timing. The measurement includes warm channel traffic, no-op routing, no-op worker processing, and completion observation. It excludes real routing, event storage, replay, lanes, and API rejection collection.
 
 - [ ] **Step 4: Run final focused verification**
 

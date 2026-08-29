@@ -65,17 +65,28 @@ cargo test --release --manifest-path crates/runtime/Cargo.toml \
 
 Local release-mode Criterion results recorded on 2026-08-29:
 
-| Workload | Median | ns/input | Inputs/s |
-| --- | ---: | ---: | ---: |
-| 1,000 inputs, 2 routers, 4 workers | 155.40 us | 155.40 | 6.44 million |
+| Warm path | 1,000 batches | ns/batch | Batches/s | Logical events/s at 1,000/batch |
+| --- | ---: | ---: | ---: | ---: |
+| `Runtime::send` | 98.432 us | 98.432 | 10.16 million | 10.16 billion |
+| Direct input sender | 99.171 us | 99.171 | 10.08 million | 10.08 billion |
 
-Each timed iteration starts a new runtime, starts two router threads and four
-worker threads, sends 1,000 `u64` inputs through the public runtime boundary,
-routes each input to one worker, confirms all 1,000 inputs were consumed,
-shuts down the topology, and joins all six threads. Prepared input vectors and
-the shared consumption counter are created outside the timed routine.
+The runtime is started once before timing and remains hot for the complete
+Criterion run. Every timed iteration sends 1,000 opaque apply batches through
+two shared-input routers and four private-input workers, then waits until all
+1,000 batches have reached a worker. Startup and shutdown are outside the
+timed region.
 
-The result measures complete isolated lifecycle overhead rather than only
-steady-state channel throughput. It excludes real snapshot routing, event
-storage, replay, lane projection and filtering, checkpoint work, API rejection
-collection, and every sibling ConTime crate.
+Each opaque benchmark batch represents 1,000 logical events. The runtime never
+opens the batch, so logical-event throughput is the batch throughput multiplied
+by 1,000 rather than a claim about event processing.
+
+The direct case calls the same runtime-owned Crossbeam sender without the
+`Runtime::send` wrapper. The wrapper measured about 0.75% faster in this run,
+which is noise rather than a real speedup. The comparison therefore finds no
+measurable steady-state orchestration overhead in `Runtime::send`.
+
+Both cases include channel traffic through the hot router and worker threads,
+the benchmark router's worker selection, and one atomic completion update per
+batch. They exclude real snapshot routing, event storage, replay, lane
+projection and filtering, checkpoint work, API rejection collection, and
+every sibling ConTime crate.

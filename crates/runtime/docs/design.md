@@ -173,8 +173,9 @@ Inline unit tests will use local fake implementations and cover:
 - cleanup of already-started threads when later startup fails, where the
   standard thread API permits deterministic fault injection.
 
-Unit benchmarks should measure only meaningful runtime-owned operations such
-as startup/shutdown overhead. An end-to-end integration benchmark with no-op
-router and worker implementations is deferred until the functional contract
-is stable. Real ConTime adapters and domain work are explicitly excluded from
-this isolated crate's measurements.
+The runtime benchmark measures only warm steady-state throughput. It starts
+the topology before timing, sends complete opaque batches through hot router
+and worker threads, waits for worker completion, and shuts down after timing.
+It compares `Runtime::send` with direct use of the same runtime-owned sender so
+the wrapper's overhead is visible. Startup latency is intentionally not
+measured. Real ConTime adapters and domain work are explicitly excluded.
