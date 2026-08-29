@@ -4,7 +4,7 @@
 
 **Goal:** Build an isolated apply-only runtime that starts configurable router and worker threads, connects them through channels, and reports complete shutdown outcomes.
 
-**Architecture:** The crate declares local generic `Router` and `Worker` traits and treats every message as opaque. One shared Crossbeam receiver distributes complete inputs among router threads; every worker has a private receiver, and routers receive senders for the complete worker set. A generic `Runtime` owns the apply sender and join handles while remaining independent of every other ConTime crate.
+**Architecture:** The crate declares local generic `Router` and `Worker` traits and treats every message as opaque. Every router and worker has a private Crossbeam receiver, and routers receive senders for the complete worker set. A generic `Runtime` owns an indexed router-sender collection and join handles while remaining independent of every other ConTime crate.
 
 **Tech Stack:** Rust 2021, standard threads, `crossbeam-channel` 0.5, inline unit tests, Criterion 0.5 for isolated warm-throughput benchmarks.
 
@@ -17,7 +17,7 @@
 - The runtime must never inspect, clone, route, apply, replay, or interpret messages.
 - Router and worker behavior must be expressed only through traits declared in this crate.
 - Router and worker counts must both be nonzero.
-- Routers share one apply-input receiver; the first available router consumes the next complete input.
+- The caller selects a router through the runtime's stable indexed sender collection.
 - Each worker owns one private input receiver.
 - Factories receive stable zero-based router or worker indexes.
 - Shutdown must join every thread and must not return early after one failure.
@@ -169,7 +169,7 @@ pub struct ShutdownReport<RE, WE> {
 }
 
 pub struct Runtime<I, RE, WE> {
-    pub(crate) input: Option<Sender<I>>,
+    pub(crate) inputs: Vec<Sender<I>>,
     pub(crate) routers: Vec<JoinHandle<Result<(), RE>>>,
     pub(crate) workers: Vec<JoinHandle<Result<(), WE>>>,
 }
@@ -253,7 +253,7 @@ fn zero_worker_count_is_rejected_before_factories_run() {
 }
 ```
 
-Add a successful-start test in which two router factories and four worker factories push their indexes into shared vectors. Assert the returned runtime owns two router handles and four worker handles. In a private test helper, take and drop its input sender, drain and join the router handles, then drain and join the worker handles. Finally assert the sorted factory-index vectors contain `[0, 1]` and `[0, 1, 2, 3]`. This keeps Task 2 independent of the public shutdown method introduced in Task 3.
+Add a successful-start test in which two router factories and four worker factories push their indexes into shared vectors. Assert the returned runtime owns two router input senders, two router handles, and four worker handles. In a private test helper, clear its input senders, drain and join the router handles, then drain and join the worker handles. Finally assert the sorted factory-index vectors contain `[0, 1]` and `[0, 1, 2, 3]`. This keeps Task 2 independent of the public shutdown method introduced in Task 3.
 
 - [ ] **Step 2: Run the startup tests and verify failure**
 
@@ -317,13 +317,13 @@ impl Runtime<(), (), ()> {
 Inside `start_with_deps`:
 
 1. Reject zero counts before invoking either factory.
-2. Create one `unbounded::<R::Input>()` channel.
+2. Create `router_count` `unbounded::<R::Input>()` channels.
 3. Create `worker_count` `unbounded::<W::Input>()` channels.
 4. Spawn workers in index order using names `contime-worker-{index}`.
 5. Spawn routers in index order using names `contime-router-{index}`.
-6. Give each router `input_receiver.clone()` and `worker_senders.clone()`.
-7. Drop the original input receiver and startup-owned worker senders.
-8. Return `Runtime { input: Some(input_sender), routers, workers }`.
+6. Give each router its indexed private receiver and `worker_senders.clone()`.
+7. Drop the startup-owned receiver collection and worker senders.
+8. Return `Runtime { inputs: input_senders, routers, workers }`.
 
 Implement a private rollback helper that drops all remaining senders and receivers, joins routers before workers, and ignores their outcomes because startup is returning the spawn error.
 
@@ -367,7 +367,7 @@ fn send_forwards_one_opaque_input_into_the_running_topology() {
     let received = Arc::new(Mutex::new(Vec::new()));
     let runtime = test_runtime(Arc::clone(&received));
 
-    runtime.send(42).unwrap();
+    runtime.send(0, 42).unwrap();
     finish_test_runtime(runtime);
 
     assert_eq!(*received.lock().unwrap(), vec![42]);
@@ -376,21 +376,20 @@ fn send_forwards_one_opaque_input_into_the_running_topology() {
 #[test]
 fn input_returns_the_runtime_owned_sender() {
     let runtime = test_runtime(Arc::new(Mutex::new(Vec::new())));
-    runtime.input().send(7).unwrap();
+    runtime.input(0).unwrap().send(7).unwrap();
     finish_test_runtime(runtime);
 }
 ```
 
-`finish_test_runtime` is a private test helper that takes and drops the input
-sender, then drains and joins router handles followed by worker handles. The
+`finish_test_runtime` is a private test helper that clears the input sender
+collection, then drains and joins router handles followed by worker handles. The
 public shutdown contract remains entirely in Task 4.
 
 Add a two-router test that sends the integers `0..1_000`. Each router forwards
 every input it receives to worker zero. After shutdown, sort the worker's
 recorded values and assert they equal `(0..1_000).collect::<Vec<_>>()`. Also
-record a per-router receive count and assert the two counts sum to 1,000. Do
-not assert a particular split because shared-queue scheduling is deliberately
-availability-driven.
+record a per-router receive count and send alternating values through sender
+indexes zero and one. Assert each router receives exactly 500 inputs.
 
 - [ ] **Step 2: Run the focused tests and verify failure**
 
@@ -408,15 +407,18 @@ Define a local error rather than exposing Crossbeam's error type directly:
 
 ```rust
 #[derive(Debug, Eq, PartialEq)]
-pub struct RuntimeSendError<I>(pub I);
+pub struct RuntimeSendError<I> {
+    pub router_index: usize,
+    pub input: I,
+}
 
 impl<I, RE, WE> Runtime<I, RE, WE> {
-    pub fn input(&self) -> &Sender<I> {
-        self.input.as_ref().expect("a running runtime owns its input sender")
+    pub fn inputs(&self) -> &[Sender<I>] {
+        &self.inputs
     }
 
-    pub fn send(&self, input: I) -> Result<(), RuntimeSendError<I>> {
-        self.input().send(input).map_err(|error| RuntimeSendError(error.0))
+    pub fn send(&self, router_index: usize, input: I) -> Result<(), RuntimeSendError<I>> {
+        // Look up the selected sender and return the input if unavailable.
     }
 }
 ```
@@ -594,14 +596,14 @@ Expected: tests fail because one or more exit notifications do not arrive before
 
 For worker failure:
 
-1. Drop the shared input sender and receiver.
+1. Drop every router input sender and receiver.
 2. Drop every worker sender and every unowned worker receiver.
 3. Join all worker handles already created.
 4. Return `StartError::ThreadSpawn { stage: RuntimeStage::Worker { index }, source }`.
 
 For router failure:
 
-1. Drop the shared input sender and the startup receiver.
+1. Drop every router input sender and remaining receiver.
 2. Drop startup-owned worker senders.
 3. Join every started router so their worker-sender clones are dropped.
 4. Join every worker.
@@ -637,24 +639,23 @@ git commit -m "fix(runtime): clean up partial thread startup"
 
 **Interfaces:**
 - Consumes: the complete public runtime API.
-- Produces: one ignored inline Criterion benchmark and user-facing crate documentation.
+- Produces: one external Criterion/pprof integration benchmark and user-facing crate documentation.
 
-- [ ] **Step 1: Add an ignored inline Criterion benchmark**
+- [x] **Step 1: Add an external Criterion benchmark with flamegraphs**
 
-Inside `runtime.rs` tests, add `benchmark_runtime`. Start one runtime with two relay routers and four counting workers before either timed routine. Each timed iteration must:
+In `benches/runtime.rs`, start each runtime topology before timing. Each timed iteration must:
 
-1. Send 1,000 opaque batches representing 1,000 logical events each.
-2. Wait until workers confirm all 1,000 batches were consumed.
+1. Send 1,000 benchmark events through their encoded router index.
+2. Forward each event through its encoded worker index.
+3. Wait for constant-count router and worker flush acknowledgements.
 3. Leave the runtime alive for the next iteration.
 
-Register these exact benchmark names:
+Register topology benchmarks for one router/one worker and two routers/four workers.
 
-```rust
-"runtime/throughput/runtime_send/1000_batches_1000_events_each"
-"runtime/throughput/direct_sender/1000_batches_1000_events_each"
-```
-
-The first case uses `Runtime::send`; the second uses the same runtime-owned Crossbeam sender directly. Shut down only after both Criterion routines finish. The benchmark must not import sibling crates.
+The benchmark indexes the runtime's router-sender slice directly. It performs
+no hashing, modulo, runtime trait lookup, or per-event acknowledgement. Shut
+down only after Criterion finishes. The benchmark must not import sibling
+crates.
 
 - [ ] **Step 2: Run tests and the benchmark**
 
@@ -662,8 +663,7 @@ Run:
 
 ```bash
 cargo test --manifest-path crates/runtime/Cargo.toml --lib
-cargo test --release --manifest-path crates/runtime/Cargo.toml \
-  runtime::tests::benchmark_runtime -- --ignored --nocapture --test-threads=1
+cargo bench --manifest-path crates/runtime/Cargo.toml --bench runtime
 ```
 
 Expected: all unit tests pass and Criterion prints a stable median for the named workload.
@@ -674,7 +674,7 @@ Document:
 
 - isolated purpose and exclusions;
 - local `Router` and `Worker` contracts;
-- shared-router/private-worker topology;
+- private indexed router and worker queues;
 - configuration and factory indexing;
 - explicit shutdown and external-sender lifetime rule;
 - startup rollback and lack of automatic recovery;

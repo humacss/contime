@@ -5,7 +5,7 @@ use crate::{Runtime, ShutdownReport, ThreadOutcome};
 impl<I, RE, WE> Runtime<I, RE, WE> {
     /// Closes the apply path and joins every router and worker thread.
     pub fn shutdown(mut self) -> ShutdownReport<RE, WE> {
-        drop(self.input.take());
+        self.inputs.clear();
         let routers = join_all(std::mem::take(&mut self.routers));
         let workers = join_all(std::mem::take(&mut self.workers));
         ShutdownReport { routers, workers }

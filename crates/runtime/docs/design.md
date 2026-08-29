@@ -17,7 +17,7 @@ The first version supports apply execution only:
 
 - start a configurable number of router threads;
 - start a configurable number of worker threads;
-- distribute complete apply inputs among routers through one shared queue;
+- give every router a private input queue selected explicitly by the caller;
 - give every router access to every worker input queue;
 - expose the apply-input boundary to the caller;
 - close the pipeline gracefully; and
@@ -90,16 +90,17 @@ instance it creates.
 Startup performs these operations:
 
 1. Validate configuration.
-2. Create one shared apply-input channel.
+2. Create one private apply-input channel for each router.
 3. Create one private input channel for each worker.
 4. Construct and start every worker.
-5. Construct and start every router, cloning the shared input receiver and
-   worker senders for each router.
+5. Construct and start every router with its private input receiver and clones
+   of the worker senders.
 6. Drop startup-only channel handles.
 7. Return a running `Runtime` handle.
 
-The routers compete on the shared receiver. The first available router takes
-the next complete message. Messages are never split by the runtime.
+The runtime exposes router senders in stable router-index order. The caller
+selects the sender; the runtime never reads an input to choose a router.
+Messages are never split by the runtime.
 
 If a thread cannot be spawned, startup closes all channels already created,
 joins every thread already started, and returns a structured startup error.
@@ -109,14 +110,13 @@ No started thread is intentionally detached during startup rollback.
 
 The running handle owns:
 
-- the apply-input sender;
+- one apply-input sender per router;
 - router join handles; and
 - worker join handles.
 
-It provides a direct `send` convenience method and borrowed access to the
-input sender for adapters that already operate on channels. Callers may clone
-that sender, but graceful shutdown cannot finish until all external sender
-clones have been dropped.
+It provides `send(router_index, input)` and borrowed access to the stable slice
+of router input senders. Callers may clone those senders, but graceful shutdown
+cannot finish until all external sender clones have been dropped.
 
 Completion and rejection semantics remain inside the opaque input message.
 The runtime never waits for, combines, or interprets request responses.
@@ -125,7 +125,7 @@ The runtime never waits for, combines, or interprets request responses.
 
 Explicit shutdown consumes the runtime and proceeds in dependency order:
 
-1. Drop the runtime-owned apply sender.
+1. Drop all runtime-owned router input senders.
 2. Join every router.
 3. Once all routers have returned, their worker-sender clones are gone and
    every worker input channel closes.
@@ -136,7 +136,7 @@ Joining never returns early. The report preserves an ordered outcome for each
 configured router and worker. Each outcome distinguishes successful
 completion, a returned implementation error, and a thread panic.
 
-Dropping a runtime without explicit shutdown closes its owned apply sender,
+Dropping a runtime without explicit shutdown closes its owned apply senders,
 but cannot return thread outcomes. Explicit shutdown is the supported path
 when the caller needs proof that every thread terminated.
 
@@ -166,16 +166,17 @@ Inline unit tests will use local fake implementations and cover:
 
 - rejection of zero routers or workers before startup;
 - stable router and worker factory indexes;
-- shared-queue distribution where each input is consumed once;
+- deterministic delivery through the router queue selected by the caller;
 - router-to-worker forwarding without runtime message inspection;
 - clean channel-driven shutdown;
 - collection of all returned errors and panics; and
 - cleanup of already-started threads when later startup fails, where the
   standard thread API permits deterministic fault injection.
 
-The runtime benchmark measures only warm steady-state throughput. It starts
-the topology before timing, sends complete opaque batches through hot router
-and worker threads, waits for worker completion, and shuts down after timing.
-It compares `Runtime::send` with direct use of the same runtime-owned sender so
-the wrapper's overhead is visible. Startup latency is intentionally not
-measured. Real ConTime adapters and domain work are explicitly excluded.
+The external Criterion benchmark measures only warm steady-state throughput.
+It starts the topology before timing, sends 1,000 benchmark events through
+explicitly indexed router and worker queues, waits for the queues to drain,
+and shuts down after timing. Startup latency is intentionally not measured.
+The pprof integration generates process-wide flamegraphs of the caller,
+routers, and workers. Real ConTime adapters and domain work are explicitly
+excluded.
