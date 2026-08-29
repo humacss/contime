@@ -7,7 +7,7 @@ use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criteri
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
 
-const EVENTS_PER_WORKER: [usize; 6] = [1, 100, 1_000, 10_000, 100_000, 1_000_000];
+const WORKLOADS: [(usize, usize); 6] = [(1, 1), (1, 100), (1, 1_000), (10, 1_000), (100, 1_000), (1_000, 1_000)];
 
 #[derive(Clone, Copy)]
 struct Event {
@@ -86,13 +86,15 @@ struct PreparedRun {
 }
 
 impl Harness {
-    fn new(router_count: usize, worker_count: usize, events_per_worker: usize) -> Self {
+    fn new(router_count: usize, worker_count: usize, batches_per_worker: usize, events_per_batch: usize) -> Self {
         let runtime = Runtime::start(RuntimeConfig { router_count, worker_count }, |_| BatchRouter, |_| BatchWorker).unwrap();
         let batches = (0..worker_count)
-            .map(|worker_index| {
-                let first_value = worker_index * events_per_worker;
-                let events = (first_value..first_value + events_per_worker).map(|value| Event { value }).collect::<Vec<_>>().into();
-                EventBatch { router_index: worker_index % router_count, worker_index, events }
+            .flat_map(|worker_index| {
+                (0..batches_per_worker).map(move |batch_index| {
+                    let first_value = (worker_index * batches_per_worker + batch_index) * events_per_batch;
+                    let events = (first_value..first_value + events_per_batch).map(|value| Event { value }).collect::<Vec<_>>().into();
+                    EventBatch { router_index: worker_index % router_count, worker_index, events }
+                })
             })
             .collect();
         Self { runtime, batches }
@@ -130,23 +132,27 @@ fn process_directly(batches: &[EventBatch]) {
 }
 
 fn benchmark_batch_sizes(criterion: &mut Criterion) {
-    let mut group = criterion.benchmark_group("batching/events_per_worker");
+    let mut group = criterion.benchmark_group("batching/realistic_batches");
 
     for (router_count, worker_count) in [(1, 1), (2, 4)] {
-        for events_per_worker in EVENTS_PER_WORKER {
+        for (batches_per_worker, events_per_batch) in WORKLOADS {
+            let events_per_worker = batches_per_worker * events_per_batch;
             let total_events = events_per_worker * worker_count;
             group.throughput(Throughput::Elements(total_events as u64));
-            let harness = Harness::new(router_count, worker_count, events_per_worker);
+            let harness = Harness::new(router_count, worker_count, batches_per_worker, events_per_batch);
             harness.run(harness.prepare());
             if router_count == 1 {
-                group.bench_function(BenchmarkId::new("direct_no_channels", format!("{events_per_worker}_events_per_worker")), |bencher| {
-                    bencher.iter(|| process_directly(&harness.batches))
-                });
+                group.bench_function(
+                    BenchmarkId::new("direct_no_channels", format!("{batches_per_worker}_batches_{events_per_batch}_events_each")),
+                    |bencher| bencher.iter(|| process_directly(&harness.batches)),
+                );
             }
             group.bench_function(
                 BenchmarkId::new(
                     format!("{router_count}_routers_{worker_count}_workers"),
-                    format!("{events_per_worker}_events_per_worker_{total_events}_total"),
+                    format!(
+                        "{batches_per_worker}_batches_per_worker_{events_per_batch}_events_per_batch_{events_per_worker}_events_per_worker"
+                    ),
                 ),
                 |bencher| bencher.iter_batched(|| harness.prepare(), |prepared| harness.run(prepared), BatchSize::SmallInput),
             );
