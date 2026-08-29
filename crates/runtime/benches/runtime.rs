@@ -16,14 +16,16 @@ struct BenchmarkEvent {
 }
 
 enum RouterInput {
-    Event(BenchmarkEvent),
-    FlushRouter(Sender<()>),
-    FlushWorkers(Sender<()>),
+    Event(PendingEvent),
 }
 
 enum WorkerInput {
-    Event(BenchmarkEvent),
-    Flush(Sender<()>),
+    Event(PendingEvent),
+}
+
+struct PendingEvent {
+    event: BenchmarkEvent,
+    completion: Sender<()>,
 }
 
 struct BenchmarkRouter;
@@ -36,13 +38,7 @@ impl Router for BenchmarkRouter {
     fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
         for message in input {
             match message {
-                RouterInput::Event(event) => workers[event.worker_index].send(WorkerInput::Event(event)).unwrap(),
-                RouterInput::FlushRouter(sender) => sender.send(()).unwrap(),
-                RouterInput::FlushWorkers(sender) => {
-                    for worker in &workers {
-                        worker.send(WorkerInput::Flush(sender.clone())).unwrap();
-                    }
-                }
+                RouterInput::Event(pending) => workers[pending.event.worker_index].send(WorkerInput::Event(pending)).unwrap(),
             }
         }
         Ok(())
@@ -59,10 +55,10 @@ impl Worker for BenchmarkWorker {
         let mut checksum = 0usize;
         for message in input {
             match message {
-                WorkerInput::Event(event) => checksum = checksum.wrapping_add(black_box(event.value)),
-                WorkerInput::Flush(sender) => {
+                WorkerInput::Event(pending) => {
+                    checksum = checksum.wrapping_add(black_box(pending.event.value));
                     black_box(checksum);
-                    sender.send(()).unwrap();
+                    drop(pending.completion);
                 }
             }
         }
@@ -74,12 +70,6 @@ impl Worker for BenchmarkWorker {
 struct Harness {
     runtime: Runtime<RouterInput, (), ()>,
     events: Vec<BenchmarkEvent>,
-    router_acknowledgements: Receiver<()>,
-    router_acknowledger: Sender<()>,
-    worker_acknowledgements: Receiver<()>,
-    worker_acknowledger: Sender<()>,
-    router_count: usize,
-    worker_count: usize,
 }
 
 impl Harness {
@@ -88,36 +78,17 @@ impl Harness {
         let events = (0..INPUT_COUNT)
             .map(|value| BenchmarkEvent { router_index: value % router_count, worker_index: value % worker_count, value })
             .collect();
-        let (router_acknowledger, router_acknowledgements) = unbounded();
-        let (worker_acknowledger, worker_acknowledgements) = unbounded();
-        Self {
-            runtime,
-            events,
-            router_acknowledgements,
-            router_acknowledger,
-            worker_acknowledgements,
-            worker_acknowledger,
-            router_count,
-            worker_count,
-        }
+        Self { runtime, events }
     }
 
     fn run(&self) {
+        let (completion, completed) = unbounded();
         for event in &self.events {
-            self.runtime.inputs()[event.router_index].send(RouterInput::Event(*event)).unwrap();
+            let pending = PendingEvent { event: *event, completion: completion.clone() };
+            self.runtime.inputs()[event.router_index].send(RouterInput::Event(pending)).unwrap();
         }
-
-        for input in self.runtime.inputs() {
-            input.send(RouterInput::FlushRouter(self.router_acknowledger.clone())).unwrap();
-        }
-        for _ in 0..self.router_count {
-            self.router_acknowledgements.recv().unwrap();
-        }
-
-        self.runtime.inputs()[0].send(RouterInput::FlushWorkers(self.worker_acknowledger.clone())).unwrap();
-        for _ in 0..self.worker_count {
-            self.worker_acknowledgements.recv().unwrap();
-        }
+        drop(completion);
+        assert!(completed.recv().is_err());
     }
 
     fn shutdown(self) {

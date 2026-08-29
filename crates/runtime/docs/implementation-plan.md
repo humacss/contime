@@ -647,13 +647,14 @@ In `benches/runtime.rs`, start each runtime topology before timing. Each timed i
 
 1. Send 1,000 benchmark events through their encoded router index.
 2. Forward each event through its encoded worker index.
-3. Wait for constant-count router and worker flush acknowledgements.
+3. Drop the original completion sender and wait for its receiver to close
+   after workers drop every forwarded sender clone.
 3. Leave the runtime alive for the next iteration.
 
 Register topology benchmarks for one router/one worker and two routers/four workers.
 
 The benchmark indexes the runtime's router-sender slice directly. It performs
-no hashing, modulo, runtime trait lookup, or per-event acknowledgement. Shut
+no hashing, modulo, runtime trait lookup, or acknowledgement messages. Shut
 down only after Criterion finishes. The benchmark must not import sibling
 crates.
 
