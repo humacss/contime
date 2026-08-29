@@ -17,11 +17,7 @@ pub trait Router: Send + 'static {
     type WorkerInput: Send + 'static;
     type Error: Send + 'static;
 
-    fn run(
-        self,
-        input: Receiver<Self::Input>,
-        workers: Vec<Sender<Self::WorkerInput>>,
-    ) -> Result<(), Self::Error>;
+    fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error>;
 }
 
 /// Opaque worker execution owned by one runtime thread.

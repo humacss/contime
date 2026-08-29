@@ -14,6 +14,8 @@ trait Deps {
 
 struct DefaultDeps;
 
+type StartedRuntime<R, W> = Runtime<<R as Router>::Input, <R as Router>::Error, <W as Worker>::Error>;
+
 impl Deps for DefaultDeps {
     fn spawn<T, F>(&self, name: String, run: F) -> io::Result<JoinHandle<T>>
     where
@@ -30,7 +32,7 @@ impl Runtime<(), (), ()> {
         config: RuntimeConfig,
         router_factory: RF,
         worker_factory: WF,
-    ) -> Result<Runtime<R::Input, R::Error, W::Error>, StartError>
+    ) -> Result<StartedRuntime<R, W>, StartError>
     where
         R: Router<WorkerInput = W::Input>,
         W: Worker,
@@ -46,7 +48,7 @@ fn start_with_deps<D, R, W, RF, WF>(
     config: RuntimeConfig,
     mut router_factory: RF,
     mut worker_factory: WF,
-) -> Result<Runtime<R::Input, R::Error, W::Error>, StartError>
+) -> Result<StartedRuntime<R, W>, StartError>
 where
     D: Deps,
     R: Router<WorkerInput = W::Input>,
@@ -178,11 +180,7 @@ mod tests {
 
     #[test]
     fn zero_worker_count_is_rejected_before_factories_run() {
-        let result = Runtime::start(
-            RuntimeConfig { router_count: 1, worker_count: 0 },
-            |_| TestRouter,
-            |_| TestWorker,
-        );
+        let result = Runtime::start(RuntimeConfig { router_count: 1, worker_count: 0 }, |_| TestRouter, |_| TestWorker);
 
         assert!(matches!(result, Err(StartError::NoWorkers)));
     }
@@ -288,10 +286,7 @@ mod tests {
             |_| ExitWorker { exited: worker_exited.clone() },
         );
 
-        assert!(matches!(
-            result,
-            Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Worker { index: 2 }, .. })
-        ));
+        assert!(matches!(result, Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Worker { index: 2 }, .. })));
         assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
         assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
     }
@@ -308,10 +303,7 @@ mod tests {
             |_| ExitWorker { exited: worker_exited.clone() },
         );
 
-        assert!(matches!(
-            result,
-            Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Router { index: 1 }, .. })
-        ));
+        assert!(matches!(result, Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Router { index: 1 }, .. })));
         assert_eq!(router_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
         assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
         assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
