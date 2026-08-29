@@ -7,7 +7,7 @@ use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criteri
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
 
-const EVENTS_PER_WORKER: [usize; 3] = [1, 100, 1_000];
+const EVENTS_PER_WORKER: [usize; 6] = [1, 100, 1_000, 10_000, 100_000, 1_000_000];
 
 #[derive(Clone, Copy)]
 struct Event {
