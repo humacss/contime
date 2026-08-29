@@ -106,28 +106,30 @@ and synchronization, not router-index calculation inside the runtime.
 
 ## Batch Size Results
 
-The batching benchmark holds total work constant at 100,000 logical events.
-Prepared batch payloads are shared slices. Timed submission clones one shared
-batch handle, sends the batch through the selected router and worker, and the
-worker visits every event. The direct baseline performs the same batch-handle
-clone and event iteration without channels.
+The batching benchmark gives every worker one prepared shared-slice batch of
+the requested size. Total events therefore equal `events_per_worker *
+worker_count`: the four-worker cases process 4, 400, and 4,000 events. Timed
+submission clones one shared batch handle, sends it through the selected
+router and worker, and the worker visits every event. The direct baseline
+performs the same clone and event iteration without channels.
 
-| Topology | Events/batch | Channel messages | Total time | ns/event | Events/s |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Direct, no channels | 1 | 100,000 | 241.35 us | 2.414 | 414.34 million |
-| Direct, no channels | 100 | 1,000 | 38.647 us | 0.386 | 2.588 billion |
-| Direct, no channels | 1,000 | 100 | 38.646 us | 0.386 | 2.588 billion |
-| 1 router, 1 worker | 1 | 100,000 | 2.4931 ms | 24.931 | 40.111 million |
-| 1 router, 1 worker | 100 | 1,000 | 74.870 us | 0.749 | 1.336 billion |
-| 1 router, 1 worker | 1,000 | 100 | 61.702 us | 0.617 | 1.621 billion |
-| 2 routers, 4 workers | 1 | 100,000 | 2.1134 ms | 21.134 | 47.318 million |
-| 2 routers, 4 workers | 100 | 1,000 | 98.774 us | 0.988 | 1.012 billion |
-| 2 routers, 4 workers | 1,000 | 100 | 77.381 us | 0.774 | 1.292 billion |
+| Topology | Events/worker | Total events | Batches | Total time | ns/event | Events/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Direct, no channels | 1 | 1 | 1 | 4.813 ns | 4.813 | 207.76 million |
+| Direct, no channels | 100 | 100 | 1 | 39.660 ns | 0.397 | 2.521 billion |
+| Direct, no channels | 1,000 | 1,000 | 1 | 389.20 ns | 0.389 | 2.569 billion |
+| 1 router, 1 worker | 1 | 1 | 1 | 4.1494 us | 4,149.4 | 241.00 thousand |
+| 1 router, 1 worker | 100 | 100 | 1 | 4.2009 us | 42.009 | 23.805 million |
+| 1 router, 1 worker | 1,000 | 1,000 | 1 | 5.7219 us | 5.722 | 174.77 million |
+| 2 routers, 4 workers | 1 | 4 | 4 | 70.770 us | 17,692.5 | 56.521 thousand |
+| 2 routers, 4 workers | 100 | 400 | 4 | 70.162 us | 175.405 | 5.701 million |
+| 2 routers, 4 workers | 1,000 | 4,000 | 4 | 71.380 us | 17.845 | 56.038 million |
 
-For one router and one worker, subtracting the direct baseline leaves about
-2.252 ms of channel overhead for single-event messages, 36.223 us for batches
-of 100, and 23.056 us for batches of 1,000. Batching 100 events therefore
-reduces total latency by 33.3 times and batching 1,000 reduces it by 40.4
-times. At the larger sizes, the fixed 38.65 us event-iteration baseline is the
-majority of the remaining measurement, so increasing the batch beyond 100 has
-diminishing returns for this no-op workload.
+The nearly flat times within each topology show that these small workloads
+measure completion latency more than sustained throughput. One router and one
+worker require about 4.1 us to cross both queues and acknowledge completion.
+Two routers and four workers require about 70 us because the benchmark drains
+and acknowledges every router and worker before returning. Event work begins
+to dominate only as each worker's batch grows. These measurements should be
+read alongside the fixed-total throughput benchmark above rather than used as
+its replacement.
