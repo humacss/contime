@@ -119,11 +119,15 @@ fn join_ignoring_outcomes<E>(handles: Vec<JoinHandle<Result<(), E>>>) {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::thread::JoinHandle;
+    use std::time::Duration;
 
-    use crossbeam_channel::{Receiver, Sender};
+    use crossbeam_channel::{unbounded, Receiver, Sender};
 
+    use super::{start_with_deps, Deps};
     use crate::{Router, Runtime, RuntimeConfig, StartError, Worker};
 
     struct TestRouter;
@@ -214,5 +218,102 @@ mod tests {
         }
         assert_eq!(*router_indexes.lock().unwrap(), vec![0, 1]);
         assert_eq!(*worker_indexes.lock().unwrap(), vec![0, 1, 2, 3]);
+    }
+
+    struct StubDeps {
+        calls: AtomicUsize,
+        failing_call: usize,
+    }
+
+    impl StubDeps {
+        fn failing_on(failing_call: usize) -> Self {
+            Self { calls: AtomicUsize::new(0), failing_call }
+        }
+    }
+
+    impl Deps for StubDeps {
+        fn spawn<T, F>(&self, name: String, run: F) -> io::Result<JoinHandle<T>>
+        where
+            T: Send + 'static,
+            F: FnOnce() -> T + Send + 'static,
+        {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == self.failing_call {
+                return Err(io::Error::other("stub spawn failure"));
+            }
+            std::thread::Builder::new().name(name).spawn(run)
+        }
+    }
+
+    struct ExitRouter {
+        exited: Sender<()>,
+    }
+
+    impl Router for ExitRouter {
+        type Input = ();
+        type WorkerInput = ();
+        type Error = ();
+
+        fn run(self, input: Receiver<Self::Input>, _workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
+            for _ in input {}
+            self.exited.send(()).unwrap();
+            Ok(())
+        }
+    }
+
+    struct ExitWorker {
+        exited: Sender<()>,
+    }
+
+    impl Worker for ExitWorker {
+        type Input = ();
+        type Error = ();
+
+        fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error> {
+            for _ in input {}
+            self.exited.send(()).unwrap();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn worker_spawn_failure_closes_and_joins_workers_already_started() {
+        let (worker_exited, worker_exits) = unbounded();
+        let (router_exited, _router_exits) = unbounded();
+
+        let result = start_with_deps(
+            &StubDeps::failing_on(2),
+            RuntimeConfig { router_count: 1, worker_count: 3 },
+            |_| ExitRouter { exited: router_exited.clone() },
+            |_| ExitWorker { exited: worker_exited.clone() },
+        );
+
+        assert!(matches!(
+            result,
+            Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Worker { index: 2 }, .. })
+        ));
+        assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
+        assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
+    }
+
+    #[test]
+    fn router_spawn_failure_closes_and_joins_the_entire_partial_topology() {
+        let (worker_exited, worker_exits) = unbounded();
+        let (router_exited, router_exits) = unbounded();
+
+        let result = start_with_deps(
+            &StubDeps::failing_on(3),
+            RuntimeConfig { router_count: 2, worker_count: 2 },
+            |_| ExitRouter { exited: router_exited.clone() },
+            |_| ExitWorker { exited: worker_exited.clone() },
+        );
+
+        assert!(matches!(
+            result,
+            Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Router { index: 1 }, .. })
+        ));
+        assert_eq!(router_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
+        assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
+        assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
     }
 }
