@@ -17,3 +17,11 @@ pprof = { version = "0.15", features = ["criterion", "flamegraph"] }
 [[bench]]
 name = "runtime"
 harness = false
+
+[[bench]]
+name = "breakdown"
+harness = false
+
+[[bench]]
+name = "batching"
+harness = false
