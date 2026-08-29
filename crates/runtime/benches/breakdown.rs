@@ -17,13 +17,16 @@ struct Event {
 }
 
 enum RouterInput {
-    Event(Event),
-    Flush(Sender<()>),
+    Event(PendingEvent),
 }
 
 enum WorkerInput {
-    Event(Event),
-    Flush(Sender<()>),
+    Event(PendingEvent),
+}
+
+struct PendingEvent {
+    event: Event,
+    completion: Sender<()>,
 }
 
 struct RelayRouter;
@@ -36,8 +39,7 @@ impl Router for RelayRouter {
     fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
         for message in input {
             match message {
-                RouterInput::Event(event) => workers[event.worker_index].send(WorkerInput::Event(event)).unwrap(),
-                RouterInput::Flush(sender) => workers[0].send(WorkerInput::Flush(sender)).unwrap(),
+                RouterInput::Event(pending) => workers[pending.event.worker_index].send(WorkerInput::Event(pending)).unwrap(),
             }
         }
         Ok(())
@@ -60,10 +62,10 @@ fn drain_worker(input: Receiver<WorkerInput>) {
     let mut checksum = 0usize;
     for message in input {
         match message {
-            WorkerInput::Event(event) => checksum = checksum.wrapping_add(black_box(event.value)),
-            WorkerInput::Flush(sender) => {
+            WorkerInput::Event(pending) => {
+                checksum = checksum.wrapping_add(black_box(pending.event.value));
                 black_box(checksum);
-                sender.send(()).unwrap();
+                drop(pending.completion);
             }
         }
     }
@@ -87,24 +89,26 @@ impl LocalChannelHarness {
     }
 
     fn run(&self) {
+        let (completion, completed) = unbounded();
         for event in &self.events {
-            self.input.send(RouterInput::Event(*event)).unwrap();
+            let pending = PendingEvent { event: *event, completion: completion.clone() };
+            self.input.send(RouterInput::Event(pending)).unwrap();
         }
+        drop(completion);
         for _ in &self.events {
             match self.output.recv().unwrap() {
-                RouterInput::Event(event) => {
-                    black_box(event);
+                RouterInput::Event(pending) => {
+                    black_box(pending.event);
+                    drop(pending.completion);
                 }
-                RouterInput::Flush(_) => unreachable!(),
             }
         }
+        assert!(completed.recv().is_err());
     }
 }
 
 struct OneHopHarness {
     input: Sender<WorkerInput>,
-    acknowledgement: Receiver<()>,
-    acknowledger: Sender<()>,
     worker: JoinHandle<()>,
     events: Vec<Event>,
 }
@@ -121,17 +125,18 @@ impl OneHopHarness {
     }
 
     fn from_channel(input_count: usize, input: Sender<WorkerInput>, output: Receiver<WorkerInput>) -> Self {
-        let (acknowledger, acknowledgement) = unbounded();
         let worker = std::thread::spawn(move || drain_worker(output));
-        Self { input, acknowledgement, acknowledger, worker, events: events(input_count) }
+        Self { input, worker, events: events(input_count) }
     }
 
     fn run(&self) {
+        let (completion, completed) = unbounded();
         for event in &self.events {
-            self.input.send(WorkerInput::Event(*event)).unwrap();
+            let pending = PendingEvent { event: *event, completion: completion.clone() };
+            self.input.send(WorkerInput::Event(pending)).unwrap();
         }
-        self.input.send(WorkerInput::Flush(self.acknowledger.clone())).unwrap();
-        self.acknowledgement.recv().unwrap();
+        drop(completion);
+        assert!(completed.recv().is_err());
     }
 
     fn shutdown(self) {
@@ -142,8 +147,6 @@ impl OneHopHarness {
 
 struct BoundedTwoHopHarness {
     input: Sender<RouterInput>,
-    acknowledgement: Receiver<()>,
-    acknowledger: Sender<()>,
     router: JoinHandle<()>,
     worker: JoinHandle<()>,
     events: Vec<Event>,
@@ -153,25 +156,25 @@ impl BoundedTwoHopHarness {
     fn new(input_count: usize) -> Self {
         let (input, router_input) = bounded(input_count + 1);
         let (worker_input, worker_output) = bounded(input_count + 1);
-        let (acknowledger, acknowledgement) = unbounded();
         let router = std::thread::spawn(move || {
             for message in router_input {
                 match message {
-                    RouterInput::Event(event) => worker_input.send(WorkerInput::Event(event)).unwrap(),
-                    RouterInput::Flush(sender) => worker_input.send(WorkerInput::Flush(sender)).unwrap(),
+                    RouterInput::Event(pending) => worker_input.send(WorkerInput::Event(pending)).unwrap(),
                 }
             }
         });
         let worker = std::thread::spawn(move || drain_worker(worker_output));
-        Self { input, acknowledgement, acknowledger, router, worker, events: events(input_count) }
+        Self { input, router, worker, events: events(input_count) }
     }
 
     fn run(&self) {
+        let (completion, completed) = unbounded();
         for event in &self.events {
-            self.input.send(RouterInput::Event(*event)).unwrap();
+            let pending = PendingEvent { event: *event, completion: completion.clone() };
+            self.input.send(RouterInput::Event(pending)).unwrap();
         }
-        self.input.send(RouterInput::Flush(self.acknowledger.clone())).unwrap();
-        self.acknowledgement.recv().unwrap();
+        drop(completion);
+        assert!(completed.recv().is_err());
     }
 
     fn shutdown(self) {
@@ -183,24 +186,23 @@ impl BoundedTwoHopHarness {
 
 struct TwoHopHarness {
     runtime: Runtime<RouterInput, (), ()>,
-    acknowledgement: Receiver<()>,
-    acknowledger: Sender<()>,
     events: Vec<Event>,
 }
 
 impl TwoHopHarness {
     fn new(input_count: usize) -> Self {
         let runtime = Runtime::start(RuntimeConfig { router_count: 1, worker_count: 1 }, |_| RelayRouter, |_| DrainWorker).unwrap();
-        let (acknowledger, acknowledgement) = unbounded();
-        Self { runtime, acknowledgement, acknowledger, events: events(input_count) }
+        Self { runtime, events: events(input_count) }
     }
 
     fn run(&self) {
+        let (completion, completed) = unbounded();
         for event in &self.events {
-            self.runtime.inputs()[event.router_index].send(RouterInput::Event(*event)).unwrap();
+            let pending = PendingEvent { event: *event, completion: completion.clone() };
+            self.runtime.inputs()[event.router_index].send(RouterInput::Event(pending)).unwrap();
         }
-        self.runtime.inputs()[0].send(RouterInput::Flush(self.acknowledger.clone())).unwrap();
-        self.acknowledgement.recv().unwrap();
+        drop(completion);
+        assert!(completed.recv().is_err());
     }
 
     fn shutdown(self) {

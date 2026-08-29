@@ -22,14 +22,16 @@ struct EventBatch {
 }
 
 enum RouterInput {
-    Batch(EventBatch),
-    FlushRouter(Sender<()>),
-    FlushWorkers(Sender<()>),
+    Batch(PendingBatch),
 }
 
 enum WorkerInput {
-    Batch(EventBatch),
-    Flush(Sender<()>),
+    Batch(PendingBatch),
+}
+
+struct PendingBatch {
+    batch: EventBatch,
+    completion: Sender<()>,
 }
 
 struct BatchRouter;
@@ -42,13 +44,7 @@ impl Router for BatchRouter {
     fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
         for message in input {
             match message {
-                RouterInput::Batch(batch) => workers[batch.worker_index].send(WorkerInput::Batch(batch)).unwrap(),
-                RouterInput::FlushRouter(sender) => sender.send(()).unwrap(),
-                RouterInput::FlushWorkers(sender) => {
-                    for worker in &workers {
-                        worker.send(WorkerInput::Flush(sender.clone())).unwrap();
-                    }
-                }
+                RouterInput::Batch(pending) => workers[pending.batch.worker_index].send(WorkerInput::Batch(pending)).unwrap(),
             }
         }
         Ok(())
@@ -65,14 +61,12 @@ impl Worker for BatchWorker {
         let mut checksum = 0usize;
         for message in input {
             match message {
-                WorkerInput::Batch(batch) => {
-                    for event in batch.events.iter() {
+                WorkerInput::Batch(pending) => {
+                    for event in pending.batch.events.iter() {
                         checksum = checksum.wrapping_add(black_box(event.value));
                     }
-                }
-                WorkerInput::Flush(sender) => {
                     black_box(checksum);
-                    sender.send(()).unwrap();
+                    drop(pending.completion);
                 }
             }
         }
@@ -84,12 +78,6 @@ impl Worker for BatchWorker {
 struct Harness {
     runtime: Runtime<RouterInput, (), ()>,
     batches: Vec<EventBatch>,
-    router_acknowledgements: Receiver<()>,
-    router_acknowledger: Sender<()>,
-    worker_acknowledgements: Receiver<()>,
-    worker_acknowledger: Sender<()>,
-    router_count: usize,
-    worker_count: usize,
 }
 
 impl Harness {
@@ -102,36 +90,17 @@ impl Harness {
                 EventBatch { router_index: worker_index % router_count, worker_index, events }
             })
             .collect();
-        let (router_acknowledger, router_acknowledgements) = unbounded();
-        let (worker_acknowledger, worker_acknowledgements) = unbounded();
-        Self {
-            runtime,
-            batches,
-            router_acknowledgements,
-            router_acknowledger,
-            worker_acknowledgements,
-            worker_acknowledger,
-            router_count,
-            worker_count,
-        }
+        Self { runtime, batches }
     }
 
     fn run(&self) {
+        let (completion, completed) = unbounded();
         for batch in &self.batches {
-            self.runtime.inputs()[batch.router_index].send(RouterInput::Batch(batch.clone())).unwrap();
+            let pending = PendingBatch { batch: batch.clone(), completion: completion.clone() };
+            self.runtime.inputs()[batch.router_index].send(RouterInput::Batch(pending)).unwrap();
         }
-
-        for input in self.runtime.inputs() {
-            input.send(RouterInput::FlushRouter(self.router_acknowledger.clone())).unwrap();
-        }
-        for _ in 0..self.router_count {
-            self.router_acknowledgements.recv().unwrap();
-        }
-
-        self.runtime.inputs()[0].send(RouterInput::FlushWorkers(self.worker_acknowledger.clone())).unwrap();
-        for _ in 0..self.worker_count {
-            self.worker_acknowledgements.recv().unwrap();
-        }
+        drop(completion);
+        assert!(completed.recv().is_err());
     }
 
     fn shutdown(self) {

@@ -82,16 +82,18 @@ Local release-mode Criterion results recorded on 2026-08-29:
 
 | Topology | 1,000 inputs | ns/input | Inputs/s |
 | --- | ---: | ---: | ---: |
-| 1 router, 1 worker | 67.104 us | 67.104 | 14.902 million |
-| 2 routers, 4 workers | 89.763 us | 89.763 | 11.140 million |
+| 1 router, 1 worker | 50.313 us | 50.313 | 19.876 million |
+| 2 routers, 4 workers | 80.664 us | 80.664 | 12.397 million |
 
 The runtime is started once before timing and remains hot for the complete
 Criterion run. Every timed iteration sends 1,000 benchmark events through the
 router sender selected by `event.router_index`. The selected router forwards
 the event through the worker sender selected by `event.worker_index`. There is
 no hash, modulo, runtime trait lookup, or runtime message inspection in the
-timed path. A constant number of flush messages confirms that all router and
-worker queues drained; there is no per-event acknowledgement or atomic.
+timed path. Every input carries a clone of one completion sender. The
+benchmark drops its original sender and waits for the receiver to disconnect
+after workers process the inputs and drop every remaining sender clone. No
+acknowledgement messages are sent.
 
 Both cases include two Crossbeam channel hops, the sender-slice index accesses,
 the router and worker receive loops, and final queue-drain observation. They
@@ -115,21 +117,22 @@ performs the same clone and event iteration without channels.
 
 | Topology | Events/worker | Total events | Batches | Total time | ns/event | Events/s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Direct, no channels | 1 | 1 | 1 | 4.813 ns | 4.813 | 207.76 million |
-| Direct, no channels | 100 | 100 | 1 | 39.660 ns | 0.397 | 2.521 billion |
-| Direct, no channels | 1,000 | 1,000 | 1 | 389.20 ns | 0.389 | 2.569 billion |
-| 1 router, 1 worker | 1 | 1 | 1 | 4.1494 us | 4,149.4 | 241.00 thousand |
-| 1 router, 1 worker | 100 | 100 | 1 | 4.2009 us | 42.009 | 23.805 million |
-| 1 router, 1 worker | 1,000 | 1,000 | 1 | 5.7219 us | 5.722 | 174.77 million |
-| 2 routers, 4 workers | 1 | 4 | 4 | 70.770 us | 17,692.5 | 56.521 thousand |
-| 2 routers, 4 workers | 100 | 400 | 4 | 70.162 us | 175.405 | 5.701 million |
-| 2 routers, 4 workers | 1,000 | 4,000 | 4 | 71.380 us | 17.845 | 56.038 million |
+| Direct, no channels | 1 | 1 | 1 | 5.398 ns | 5.398 | 185.24 million |
+| Direct, no channels | 100 | 100 | 1 | 42.709 ns | 0.427 | 2.341 billion |
+| Direct, no channels | 1,000 | 1,000 | 1 | 412.77 ns | 0.413 | 2.423 billion |
+| 1 router, 1 worker | 1 | 1 | 1 | 14.440 us | 14,440.0 | 69.250 thousand |
+| 1 router, 1 worker | 100 | 100 | 1 | 12.949 us | 129.490 | 7.723 million |
+| 1 router, 1 worker | 1,000 | 1,000 | 1 | 18.521 us | 18.521 | 53.994 million |
+| 2 routers, 4 workers | 1 | 4 | 4 | 41.576 us | 10,394.0 | 96.209 thousand |
+| 2 routers, 4 workers | 100 | 400 | 4 | 41.711 us | 104.278 | 9.590 million |
+| 2 routers, 4 workers | 1,000 | 4,000 | 4 | 43.296 us | 10.824 | 92.388 million |
 
 The nearly flat times within each topology show that these small workloads
 measure completion latency more than sustained throughput. One router and one
-worker require about 4.1 us to cross both queues and acknowledge completion.
-Two routers and four workers require about 70 us because the benchmark drains
-and acknowledges every router and worker before returning. Event work begins
+worker require roughly 13-18 us to create the completion channel, cross both
+queues, process the batch, and observe receiver disconnection. Two routers and
+four workers require roughly 42-43 us for four batches to traverse the
+topology before the last completion-sender clone is dropped. Event work begins
 to dominate only as each worker's batch grows. These measurements should be
-read alongside the fixed-total throughput benchmark above rather than used as
+read alongside the sustained 1,000-input benchmark above rather than used as
 its replacement.
