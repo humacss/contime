@@ -1,0 +1,14 @@
+[package]
+name = "contime-runtime"
+version = "0.1.0"
+edition = "2021"
+autobenches = false
+license = "MIT"
+description = "Isolated thread and channel orchestration for ConTime"
+publish = false
+
+[dependencies]
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
