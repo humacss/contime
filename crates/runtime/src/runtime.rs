@@ -30,9 +30,11 @@ impl<I, RE, WE> Runtime<I, RE, WE> {
 
 #[cfg(test)]
 mod tests {
+    use std::hint::black_box;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use criterion::{BatchSize, Criterion};
     use crossbeam_channel::{Receiver, Sender};
 
     use crate::{Router, Runtime, RuntimeConfig, Worker};
@@ -70,11 +72,7 @@ mod tests {
         }
     }
 
-    fn test_runtime(
-        router_count: usize,
-        received: Arc<Mutex<Vec<u64>>>,
-        received_counts: Arc<Vec<AtomicUsize>>,
-    ) -> Runtime<u64, (), ()> {
+    fn test_runtime(router_count: usize, received: Arc<Mutex<Vec<u64>>>, received_counts: Arc<Vec<AtomicUsize>>) -> Runtime<u64, (), ()> {
         Runtime::start(
             RuntimeConfig { router_count, worker_count: 1 },
             move |index| RelayRouter { index, received_counts: Arc::clone(&received_counts) },
@@ -132,5 +130,64 @@ mod tests {
         received.sort_unstable();
         assert_eq!(*received, (0..1_000).collect::<Vec<_>>());
         assert_eq!(counts.iter().map(|count| count.load(Ordering::Relaxed)).sum::<usize>(), 1_000);
+    }
+
+    struct BenchmarkRouter;
+
+    impl Router for BenchmarkRouter {
+        type Input = u64;
+        type WorkerInput = u64;
+        type Error = ();
+
+        fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
+            for value in input {
+                let worker_index = value as usize % workers.len();
+                workers[worker_index].send(value).unwrap();
+            }
+            Ok(())
+        }
+    }
+
+    struct BenchmarkWorker {
+        consumed: Arc<AtomicUsize>,
+    }
+
+    impl Worker for BenchmarkWorker {
+        type Input = u64;
+        type Error = ();
+
+        fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error> {
+            let consumed = input.into_iter().count();
+            self.consumed.fetch_add(consumed, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[ignore = "inline Criterion benchmark"]
+    fn benchmark_runtime() {
+        let mut criterion = Criterion::default();
+        criterion.bench_function("runtime/apply/1000_inputs/2_routers/4_workers", |bencher| {
+            bencher.iter_batched(
+                || ((0..1_000).collect::<Vec<u64>>(), Arc::new(AtomicUsize::new(0))),
+                |(inputs, consumed)| {
+                    let consumed_for_workers = Arc::clone(&consumed);
+                    let runtime = Runtime::start(
+                        RuntimeConfig { router_count: 2, worker_count: 4 },
+                        |_| BenchmarkRouter,
+                        move |_| BenchmarkWorker { consumed: Arc::clone(&consumed_for_workers) },
+                    )
+                    .unwrap();
+                    for input in inputs {
+                        runtime.send(input).unwrap();
+                    }
+                    let report = runtime.shutdown();
+                    assert_eq!(consumed.load(Ordering::Relaxed), 1_000);
+                    black_box(report)
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        criterion.final_summary();
     }
 }

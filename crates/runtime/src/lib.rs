@@ -6,6 +6,4 @@ mod start;
 mod types;
 
 pub use runtime::RuntimeSendError;
-pub use types::{
-    Router, Runtime, RuntimeConfig, RuntimeStage, ShutdownReport, StartError, ThreadOutcome, Worker,
-};
+pub use types::{Router, Runtime, RuntimeConfig, RuntimeStage, ShutdownReport, StartError, ThreadOutcome, Worker};
