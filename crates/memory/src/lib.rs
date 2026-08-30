@@ -1,10 +1,9 @@
-//! Isolated retained-allocation and pointer accounting.
+//! Isolated ownership-driven memory accounting.
 
-mod access;
-mod budget;
-mod clone;
-mod drop;
-mod new;
+mod change;
 mod types;
 
-pub use types::{ConservativeSize, MemoryAccount, MemoryBudget, MemoryFull, MemoryKind, TrackedArc};
+pub use types::{
+    ConservativeTrackedSize, MemoryAccount, MemoryBudget, MemoryBudgetConfig,
+    MemoryBudgetConfigError, MemoryChange, MemoryKind, MemoryState, MemoryStatus,
+};
