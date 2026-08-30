@@ -1,3 +1,6 @@
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
+
 /// A conservative estimate of memory retained by one underlying value.
 pub trait ConservativeTrackedSize {
     fn conservative_tracked_size(&self) -> usize;
@@ -71,4 +74,20 @@ pub struct MeasuredAccount;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CachedAccount {
     pub(crate) bytes: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct AtomicMemoryBudget {
+    pub(crate) state: Arc<AtomicMemoryState>,
+}
+
+#[derive(Debug)]
+pub(crate) struct AtomicMemoryState {
+    pub(crate) hard_limit: usize,
+    pub(crate) action_ceiling: usize,
+    pub(crate) action_buffer: usize,
+    pub(crate) used: AtomicUsize,
+    pub(crate) allocation_bytes: AtomicUsize,
+    pub(crate) pointer_bytes: AtomicUsize,
+    pub(crate) buffer_exceeded_count: AtomicUsize,
 }

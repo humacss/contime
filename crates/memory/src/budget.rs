@@ -1,34 +1,29 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use crate::types::{BudgetState, MemoryAccount, MemoryBudget, MemoryFull, MemoryKind};
+use crate::types::AtomicMemoryState;
+use crate::{
+    AtomicMemoryBudget, MemoryBudget, MemoryBudgetConfig, MemoryBudgetConfigError, MemoryChange, MemoryKind, MemoryState, MemoryStatus,
+};
 
-impl MemoryBudget {
-    pub fn new(limit: u64) -> Self {
-        Self { state: Arc::new(BudgetState { limit, used: 0.into(), allocation_bytes: 0.into(), pointer_bytes: 0.into() }) }
+impl AtomicMemoryBudget {
+    pub fn new(config: MemoryBudgetConfig) -> Result<Self, MemoryBudgetConfigError> {
+        let headroom = config.concurrent_actions.checked_mul(config.action_buffer).ok_or(MemoryBudgetConfigError::HeadroomOverflow)?;
+        let action_ceiling = config.hard_limit.checked_sub(headroom).ok_or(MemoryBudgetConfigError::HeadroomExceedsHardLimit)?;
+        Ok(Self {
+            state: Arc::new(AtomicMemoryState {
+                hard_limit: config.hard_limit,
+                action_ceiling,
+                action_buffer: config.action_buffer,
+                used: AtomicUsize::new(0),
+                allocation_bytes: AtomicUsize::new(0),
+                pointer_bytes: AtomicUsize::new(0),
+                buffer_exceeded_count: AtomicUsize::new(0),
+            }),
+        })
     }
 
-    pub fn limit(&self) -> u64 {
-        self.state.limit
-    }
-
-    pub fn used(&self) -> u64 {
-        self.state.used.load(Ordering::Acquire)
-    }
-
-    pub fn remaining(&self) -> u64 {
-        self.limit().saturating_sub(self.used())
-    }
-
-    pub fn allocation_bytes(&self) -> u64 {
-        self.state.allocation_bytes.load(Ordering::Acquire)
-    }
-
-    pub fn pointer_bytes(&self) -> u64 {
-        self.state.pointer_bytes.load(Ordering::Acquire)
-    }
-
-    fn category(&self, kind: MemoryKind) -> &std::sync::atomic::AtomicU64 {
+    fn category(&self, kind: MemoryKind) -> &AtomicUsize {
         match kind {
             MemoryKind::Allocation => &self.state.allocation_bytes,
             MemoryKind::Pointer => &self.state.pointer_bytes,
@@ -36,30 +31,60 @@ impl MemoryBudget {
     }
 }
 
-impl MemoryAccount for MemoryBudget {
-    type Error = MemoryFull;
+fn add_saturating(counter: &AtomicUsize, bytes: usize) {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| Some(current.saturating_add(bytes)))
+        .expect("saturating update always succeeds");
+}
 
-    fn try_reserve(&self, kind: MemoryKind, bytes: u64) -> Result<(), Self::Error> {
-        let mut current = self.state.used.load(Ordering::Acquire);
-        loop {
-            let Some(next) = current.checked_add(bytes).filter(|next| *next <= self.state.limit) else {
-                return Err(MemoryFull { requested: bytes, remaining: self.state.limit.saturating_sub(current) });
-            };
-            match self.state.used.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) => {
-                    self.category(kind).fetch_add(bytes, Ordering::Release);
-                    return Ok(());
+fn subtract_checked(counter: &AtomicUsize, bytes: usize) {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current.checked_sub(bytes))
+        .expect("released more memory than reserved");
+}
+
+impl MemoryBudget for AtomicMemoryBudget {
+    fn reserve(&self, kind: MemoryKind, bytes: usize) {
+        add_saturating(self.category(kind), bytes);
+        add_saturating(&self.state.used, bytes);
+    }
+
+    fn resize(&self, kind: MemoryKind, change: MemoryChange) {
+        match change {
+            MemoryChange::Increase(bytes) => {
+                if bytes > self.state.action_buffer {
+                    add_saturating(&self.state.buffer_exceeded_count, 1);
                 }
-                Err(observed) => current = observed,
+                self.reserve(kind, bytes);
             }
+            MemoryChange::Decrease(bytes) => self.release(kind, bytes),
+            MemoryChange::Unchanged => {}
         }
     }
 
-    fn release(&self, kind: MemoryKind, bytes: u64) {
-        let category_before = self.category(kind).fetch_sub(bytes, Ordering::AcqRel);
-        let total_before = self.state.used.fetch_sub(bytes, Ordering::AcqRel);
-        assert!(category_before >= bytes, "released more category memory than reserved");
-        assert!(total_before >= bytes, "released more total memory than reserved");
+    fn release(&self, kind: MemoryKind, bytes: usize) {
+        subtract_checked(self.category(kind), bytes);
+        subtract_checked(&self.state.used, bytes);
+    }
+
+    fn state(&self) -> MemoryState {
+        let used = self.state.used.load(Ordering::Acquire);
+        let status = if used > self.state.hard_limit {
+            MemoryStatus::HardLimitExceeded
+        } else if used > self.state.action_ceiling {
+            MemoryStatus::ActionBlocked
+        } else {
+            MemoryStatus::Ready
+        };
+        MemoryState {
+            used,
+            allocation_bytes: self.state.allocation_bytes.load(Ordering::Acquire),
+            pointer_bytes: self.state.pointer_bytes.load(Ordering::Acquire),
+            action_ceiling: self.state.action_ceiling,
+            hard_limit: self.state.hard_limit,
+            status,
+            buffer_exceeded_count: self.state.buffer_exceeded_count.load(Ordering::Acquire),
+        }
     }
 }
 
@@ -67,84 +92,94 @@ impl MemoryAccount for MemoryBudget {
 mod tests {
     use criterion::Criterion;
 
-    use crate::{MemoryAccount, MemoryBudget, MemoryFull, MemoryKind};
+    use crate::{AtomicMemoryBudget, MemoryBudget, MemoryBudgetConfig, MemoryBudgetConfigError, MemoryChange, MemoryKind, MemoryStatus};
 
-    #[test]
-    fn reservations_share_one_limit_and_preserve_categories() {
-        let memory = MemoryBudget::new(64);
-
-        memory.try_reserve(MemoryKind::Allocation, 40).unwrap();
-        memory.try_reserve(MemoryKind::Pointer, 8).unwrap();
-
-        assert_eq!(memory.limit(), 64);
-        assert_eq!(memory.used(), 48);
-        assert_eq!(memory.remaining(), 16);
-        assert_eq!(memory.allocation_bytes(), 40);
-        assert_eq!(memory.pointer_bytes(), 8);
+    fn budget(limit: usize, actions: usize, buffer: usize) -> AtomicMemoryBudget {
+        AtomicMemoryBudget::new(MemoryBudgetConfig { hard_limit: limit, concurrent_actions: actions, action_buffer: buffer }).unwrap()
     }
 
     #[test]
-    fn failed_reservation_changes_no_accounting_state() {
-        let memory = MemoryBudget::new(16);
-        memory.try_reserve(MemoryKind::Allocation, 12).unwrap();
-
-        let error = memory.try_reserve(MemoryKind::Pointer, 8).unwrap_err();
-
-        assert_eq!(error, MemoryFull { requested: 8, remaining: 4 });
-        assert_eq!(memory.used(), 12);
-        assert_eq!(memory.allocation_bytes(), 12);
-        assert_eq!(memory.pointer_bytes(), 0);
+    fn validates_headroom_and_calculates_exact_ceiling() {
+        assert_eq!(
+            AtomicMemoryBudget::new(MemoryBudgetConfig { hard_limit: usize::MAX, concurrent_actions: usize::MAX, action_buffer: 2 })
+                .unwrap_err(),
+            MemoryBudgetConfigError::HeadroomOverflow
+        );
+        assert_eq!(
+            AtomicMemoryBudget::new(MemoryBudgetConfig { hard_limit: 9, concurrent_actions: 2, action_buffer: 5 }).unwrap_err(),
+            MemoryBudgetConfigError::HeadroomExceedsHardLimit
+        );
+        assert_eq!(budget(100, 2, 10).state().action_ceiling, 80);
+        assert_eq!(budget(100, 0, 10).state().action_ceiling, 100);
     }
 
     #[test]
-    fn release_returns_category_and_total_bytes() {
-        let memory = MemoryBudget::new(64);
-        memory.try_reserve(MemoryKind::Allocation, 40).unwrap();
-        memory.try_reserve(MemoryKind::Pointer, 8).unwrap();
-
-        memory.release(MemoryKind::Pointer, 8);
-        memory.release(MemoryKind::Allocation, 40);
-
-        assert_eq!(memory.used(), 0);
-        assert_eq!(memory.remaining(), 64);
-        assert_eq!(memory.allocation_bytes(), 0);
-        assert_eq!(memory.pointer_bytes(), 0);
+    fn accounts_categories_changes_and_thresholds() {
+        let memory = budget(100, 1, 20);
+        memory.reserve(MemoryKind::Allocation, 70);
+        memory.reserve(MemoryKind::Pointer, 8);
+        assert_eq!(memory.state().status, MemoryStatus::Ready);
+        memory.resize(MemoryKind::Allocation, MemoryChange::Increase(5));
+        assert_eq!(memory.state().status, MemoryStatus::ActionBlocked);
+        memory.resize(MemoryKind::Allocation, MemoryChange::Decrease(5));
+        memory.resize(MemoryKind::Allocation, MemoryChange::Unchanged);
+        assert_eq!(memory.state().status, MemoryStatus::Ready);
+        memory.reserve(MemoryKind::Allocation, 30);
+        let state = memory.state();
+        assert_eq!(state.status, MemoryStatus::HardLimitExceeded);
+        assert_eq!(state.allocation_bytes, 100);
+        assert_eq!(state.pointer_bytes, 8);
+        assert_eq!(state.used, 108);
     }
 
     #[test]
-    fn cloned_budgets_share_state() {
-        let memory = MemoryBudget::new(64);
-        let clone = memory.clone();
-
-        clone.try_reserve(MemoryKind::Allocation, 24).unwrap();
-
-        assert_eq!(memory.used(), 24);
-        memory.release(MemoryKind::Allocation, 24);
-        assert_eq!(clone.used(), 0);
+    fn records_large_action_and_saturates_addition() {
+        let memory = budget(usize::MAX, 0, 10);
+        memory.resize(MemoryKind::Allocation, MemoryChange::Increase(11));
+        assert_eq!(memory.state().buffer_exceeded_count, 1);
+        memory.reserve(MemoryKind::Allocation, usize::MAX);
+        assert_eq!(memory.state().used, usize::MAX);
     }
 
     #[test]
-    fn overflow_cannot_bypass_the_limit() {
-        let memory = MemoryBudget::new(u64::MAX);
-        memory.try_reserve(MemoryKind::Allocation, u64::MAX).unwrap();
+    fn concurrent_balanced_accounting_returns_to_zero() {
+        let memory = budget(usize::MAX, 0, 0);
+        let threads = (0..8)
+            .map(|_| {
+                let memory = memory.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..10_000 {
+                        memory.reserve(MemoryKind::Pointer, 1);
+                        memory.release(MemoryKind::Pointer, 1);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(memory.state().used, 0);
+    }
 
-        assert!(memory.try_reserve(MemoryKind::Pointer, 1).is_err());
-        assert_eq!(memory.used(), u64::MAX);
+    #[test]
+    #[should_panic(expected = "released more")]
+    fn release_underflow_panics() {
+        budget(100, 0, 0).release(MemoryKind::Pointer, 1);
     }
 
     #[test]
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_budget() {
         let mut criterion = Criterion::default();
-        let memory = MemoryBudget::new(u64::MAX);
-
-        criterion.bench_function("memory/budget/reserve_and_release_pointer", |bencher| {
+        let memory = budget(usize::MAX, 0, usize::MAX);
+        criterion.bench_function("memory/budget/balanced/1000", |bencher| {
             bencher.iter(|| {
-                memory.try_reserve(MemoryKind::Pointer, 8).unwrap();
-                memory.release(MemoryKind::Pointer, 8);
+                for _ in 0..1_000 {
+                    memory.reserve(MemoryKind::Pointer, 8);
+                    memory.release(MemoryKind::Pointer, 8);
+                }
             });
         });
-
         criterion.final_summary();
     }
 }
