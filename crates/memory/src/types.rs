@@ -91,3 +91,23 @@ pub(crate) struct AtomicMemoryState {
     pub(crate) pointer_bytes: AtomicUsize,
     pub(crate) buffer_exceeded_count: AtomicUsize,
 }
+
+pub struct TrackedArc<T, A = MeasuredAccount, B = AtomicMemoryBudget>
+where
+    T: ConservativeTrackedSize,
+    A: MemoryAccount<T>,
+    B: MemoryBudget,
+{
+    pub(crate) inner: Arc<ArcAllocation<T, A, B>>,
+}
+
+pub(crate) struct ArcAllocation<T, A, B>
+where
+    T: ConservativeTrackedSize,
+    A: MemoryAccount<T>,
+    B: MemoryBudget,
+{
+    pub(crate) value: T,
+    pub(crate) account: A,
+    pub(crate) budget: B,
+}
