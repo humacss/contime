@@ -64,3 +64,11 @@ pub trait MemoryBudget: Clone + Send + Sync {
     fn release(&self, kind: MemoryKind, bytes: usize);
     fn state(&self) -> MemoryState;
 }
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MeasuredAccount;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CachedAccount {
+    pub(crate) bytes: usize,
+}
