@@ -90,7 +90,7 @@ impl MemoryBudget for AtomicMemoryBudget {
 
 #[cfg(test)]
 mod tests {
-    use criterion::Criterion;
+    use criterion::{BatchSize, Criterion};
 
     use crate::{AtomicMemoryBudget, MemoryBudget, MemoryBudgetConfig, MemoryBudgetConfigError, MemoryChange, MemoryKind, MemoryStatus};
 
@@ -171,12 +171,51 @@ mod tests {
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_budget() {
         let mut criterion = Criterion::default();
-        let memory = budget(usize::MAX, 0, usize::MAX);
+        let allocation = budget(usize::MAX, 0, usize::MAX);
+        criterion.bench_function("memory/budget/reserve_allocation/1000", |bencher| {
+            bencher.iter(|| {
+                for _ in 0..1_000 {
+                    allocation.reserve(MemoryKind::Allocation, 8);
+                }
+            });
+        });
+        let pointer = budget(usize::MAX, 0, usize::MAX);
+        criterion.bench_function("memory/budget/reserve_pointer/1000", |bencher| {
+            bencher.iter(|| {
+                for _ in 0..1_000 {
+                    pointer.reserve(MemoryKind::Pointer, 8);
+                }
+            });
+        });
+        let increase = budget(usize::MAX, 0, usize::MAX);
+        criterion.bench_function("memory/budget/resize_increase/1000", |bencher| {
+            bencher.iter(|| {
+                for _ in 0..1_000 {
+                    increase.resize(MemoryKind::Allocation, MemoryChange::Increase(8));
+                }
+            });
+        });
+        criterion.bench_function("memory/budget/resize_decrease/1000", |bencher| {
+            bencher.iter_batched(
+                || {
+                    let memory = budget(usize::MAX, 0, usize::MAX);
+                    memory.reserve(MemoryKind::Allocation, 8_000);
+                    memory
+                },
+                |memory| {
+                    for _ in 0..1_000 {
+                        memory.resize(MemoryKind::Allocation, MemoryChange::Decrease(8));
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        let balanced = budget(usize::MAX, 0, usize::MAX);
         criterion.bench_function("memory/budget/balanced/1000", |bencher| {
             bencher.iter(|| {
                 for _ in 0..1_000 {
-                    memory.reserve(MemoryKind::Pointer, 8);
-                    memory.release(MemoryKind::Pointer, 8);
+                    balanced.reserve(MemoryKind::Pointer, 8);
+                    balanced.release(MemoryKind::Pointer, 8);
                 }
             });
         });

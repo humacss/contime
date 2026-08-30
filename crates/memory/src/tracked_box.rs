@@ -135,7 +135,7 @@ where
 mod tests {
     use std::mem::size_of;
 
-    use criterion::Criterion;
+    use criterion::{BatchSize, Criterion};
 
     use crate::{AtomicMemoryBudget, CachedAccount, ConservativeTrackedSize, MemoryBudget, MemoryBudgetConfig, TrackedBox};
 
@@ -190,7 +190,34 @@ mod tests {
     fn benchmark_tracked_box() {
         let mut criterion = Criterion::default();
         let memory = budget();
+        criterion.bench_function("memory/tracked_box/new", |bencher| {
+            bencher.iter_batched(
+                || (Value(Vec::new()), memory.clone()),
+                |(value, memory)| TrackedBox::new(value, memory),
+                BatchSize::SmallInput,
+            );
+        });
         let original = TrackedBox::new(Value(vec![1; 1_000]), memory);
+        criterion.bench_function("memory/tracked_box/deep_clone", |bencher| {
+            bencher.iter(|| std::hint::black_box(original.clone()));
+        });
+        criterion.bench_function("memory/tracked_box/drop", |bencher| {
+            bencher.iter_batched(|| original.clone(), drop, BatchSize::SmallInput);
+        });
+        criterion.bench_function("memory/tracked_box/measured_update", |bencher| {
+            bencher.iter_batched(|| original.clone(), |mut value| value.update(|value| value.0[0] = 2), BatchSize::SmallInput);
+        });
+        let cached = TrackedBox::<Value, CachedAccount, _>::new_with_account(Value(vec![1; 1_000]), budget());
+        criterion.bench_function("memory/tracked_box/cached_update", |bencher| {
+            bencher.iter_batched(|| cached.clone(), |mut value| value.update(|value| value.0[0] = 2), BatchSize::SmallInput);
+        });
+        criterion.bench_function("memory/tracked_box/vector_growth_1000", |bencher| {
+            bencher.iter_batched(
+                || TrackedBox::new(Value(Vec::new()), budget()),
+                |mut value| value.update(|value| value.0.extend_from_slice(&[0; 1_000])),
+                BatchSize::SmallInput,
+            );
+        });
         criterion.bench_function("memory/tracked_box/deep_clone_drop/1000", |bencher| {
             bencher.iter(|| {
                 for _ in 0..1_000 {
