@@ -134,11 +134,11 @@ the shared tracked-allocation overhead instead.
 ## Tracked pointer representation
 
 ```rust
-pub struct TrackedArc<T, M = MemoryBudget> {
+pub struct TrackedArc<T, M: MemoryAccount = MemoryBudget> {
     inner: Arc<Allocation<T, M>>,
 }
 
-struct Allocation<T, M> {
+struct Allocation<T, M: MemoryAccount> {
     value: T,
     memory: M,
     allocation_bytes: u64,
@@ -167,10 +167,9 @@ protects this representation.
 ## Construction
 
 ```rust
-impl<T, M> TrackedArc<T, M>
+impl<T, M: MemoryAccount> TrackedArc<T, M>
 where
     T: ConservativeSize,
-    M: MemoryAccount,
 {
     pub fn try_new(value: T, memory: M) -> Result<Self, M::Error>;
 }
@@ -191,10 +190,7 @@ underlying Arc aborts, normal Rust allocation-failure behavior applies.
 ## Fallible cloning
 
 ```rust
-impl<T, M> TrackedArc<T, M>
-where
-    M: MemoryAccount,
-{
+impl<T, M: MemoryAccount> TrackedArc<T, M> {
     pub fn try_clone(&self) -> Result<Self, M::Error>;
 }
 ```
