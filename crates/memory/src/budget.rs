@@ -65,6 +65,8 @@ impl MemoryAccount for MemoryBudget {
 
 #[cfg(test)]
 mod tests {
+    use criterion::Criterion;
+
     use crate::{MemoryAccount, MemoryBudget, MemoryFull, MemoryKind};
 
     #[test]
@@ -128,5 +130,21 @@ mod tests {
 
         assert!(memory.try_reserve(MemoryKind::Pointer, 1).is_err());
         assert_eq!(memory.used(), u64::MAX);
+    }
+
+    #[test]
+    #[ignore = "inline Criterion benchmark"]
+    fn benchmark_budget() {
+        let mut criterion = Criterion::default();
+        let memory = MemoryBudget::new(u64::MAX);
+
+        criterion.bench_function("memory/budget/reserve_and_release_pointer", |bencher| {
+            bencher.iter(|| {
+                memory.try_reserve(MemoryKind::Pointer, 8).unwrap();
+                memory.release(MemoryKind::Pointer, 8);
+            });
+        });
+
+        criterion.final_summary();
     }
 }

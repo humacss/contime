@@ -17,6 +17,8 @@ where
 mod tests {
     use std::mem::size_of;
 
+    use criterion::{BatchSize, Criterion};
+
     use crate::{ConservativeSize, MemoryBudget, TrackedArc};
 
     struct Value(u64);
@@ -89,5 +91,19 @@ mod tests {
         assert_eq!(memory.used(), 0);
         assert_eq!(memory.allocation_bytes(), 0);
         assert_eq!(memory.pointer_bytes(), 0);
+    }
+
+    #[test]
+    #[ignore = "inline Criterion benchmark"]
+    fn benchmark_try_clone() {
+        let mut criterion = Criterion::default();
+        let memory = MemoryBudget::new(u64::MAX);
+        let original = TrackedArc::try_new(Value(7), memory).unwrap();
+
+        criterion.bench_function("memory/tracked_arc/try_clone", |bencher| {
+            bencher.iter_batched(|| (), |()| original.try_clone().unwrap(), BatchSize::SmallInput);
+        });
+
+        criterion.final_summary();
     }
 }

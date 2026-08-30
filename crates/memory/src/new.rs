@@ -36,6 +36,8 @@ where
 mod tests {
     use std::mem::size_of;
 
+    use criterion::{BatchSize, Criterion};
+
     use crate::{ConservativeSize, MemoryBudget, TrackedArc};
 
     #[derive(Debug, Eq, PartialEq)]
@@ -96,5 +98,21 @@ mod tests {
     #[test]
     fn tracked_pointer_is_one_machine_pointer_wide() {
         assert_eq!(size_of::<TrackedArc<Value>>(), size_of::<usize>());
+    }
+
+    #[test]
+    #[ignore = "inline Criterion benchmark"]
+    fn benchmark_try_new() {
+        let mut criterion = Criterion::default();
+
+        criterion.bench_function("memory/tracked_arc/try_new", |bencher| {
+            bencher.iter_batched(
+                || (Value(7), MemoryBudget::new(1_000)),
+                |(value, memory)| TrackedArc::try_new(value, memory).unwrap(),
+                BatchSize::SmallInput,
+            );
+        });
+
+        criterion.final_summary();
     }
 }
