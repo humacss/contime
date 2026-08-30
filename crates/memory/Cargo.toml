@@ -11,3 +11,7 @@ publish = false
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "lifecycle"
+harness = false
