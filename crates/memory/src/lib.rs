@@ -2,6 +2,7 @@
 
 mod access;
 mod budget;
+mod clone;
 mod drop;
 mod new;
 mod types;
