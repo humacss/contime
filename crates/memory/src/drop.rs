@@ -19,3 +19,45 @@ where
         self.memory.release(MemoryKind::Allocation, self.allocation_bytes);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use criterion::{BatchSize, Criterion};
+
+    use crate::{ConservativeSize, MemoryBudget, TrackedArc};
+
+    struct Value;
+
+    impl ConservativeSize for Value {
+        fn conservative_size(&self) -> u64 {
+            64
+        }
+    }
+
+    #[test]
+    #[ignore = "inline Criterion benchmark"]
+    fn benchmark_drop() {
+        let mut criterion = Criterion::default();
+
+        criterion.bench_function("memory/tracked_arc/drop_non_final", |bencher| {
+            bencher.iter_batched(
+                || {
+                    let original = TrackedArc::try_new(Value, MemoryBudget::new(1_000)).unwrap();
+                    let clone = original.try_clone().unwrap();
+                    (original, clone)
+                },
+                |(original, clone)| {
+                    drop(clone);
+                    std::hint::black_box(original)
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        criterion.bench_function("memory/tracked_arc/drop_final", |bencher| {
+            bencher.iter_batched(|| TrackedArc::try_new(Value, MemoryBudget::new(1_000)).unwrap(), drop, BatchSize::SmallInput);
+        });
+
+        criterion.final_summary();
+    }
+}
