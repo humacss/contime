@@ -1,53 +1,66 @@
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-
-/// A conservative retained-memory estimate for one complete value graph.
-pub trait ConservativeSize {
-    fn conservative_size(&self) -> u64;
+/// A conservative estimate of memory retained by one underlying value.
+pub trait ConservativeTrackedSize {
+    fn conservative_tracked_size(&self) -> usize;
 }
 
-/// The category charged by one memory-accounting operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryChange {
+    Increase(usize),
+    Decrease(usize),
+    Unchanged,
+}
+
+pub trait MemoryAccount<T>: Sized
+where
+    T: ConservativeTrackedSize,
+{
+    fn new(value: &T) -> Self;
+    fn current(&self, value: &T) -> usize;
+    fn change<R, F>(&mut self, value: &mut T, action: F) -> (R, MemoryChange)
+    where
+        F: FnOnce(&mut T) -> R;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryKind {
     Allocation,
     Pointer,
 }
 
-/// Thread-safe retained-memory reservation and release.
-pub trait MemoryAccount: Clone + Send + Sync {
-    type Error;
-
-    fn try_reserve(&self, kind: MemoryKind, bytes: u64) -> Result<(), Self::Error>;
-    fn release(&self, kind: MemoryKind, bytes: u64);
-}
-
-/// A reservation that would exceed the shared memory limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MemoryFull {
-    pub requested: u64,
-    pub remaining: u64,
+pub enum MemoryStatus {
+    Ready,
+    ActionBlocked,
+    HardLimitExceeded,
 }
 
-/// One cloneable handle to a shared atomic memory budget.
-#[derive(Clone)]
-pub struct MemoryBudget {
-    pub(crate) state: Arc<BudgetState>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryState {
+    pub used: usize,
+    pub allocation_bytes: usize,
+    pub pointer_bytes: usize,
+    pub action_ceiling: usize,
+    pub hard_limit: usize,
+    pub status: MemoryStatus,
+    pub buffer_exceeded_count: usize,
 }
 
-pub(crate) struct BudgetState {
-    pub(crate) limit: u64,
-    pub(crate) used: AtomicU64,
-    pub(crate) allocation_bytes: AtomicU64,
-    pub(crate) pointer_bytes: AtomicU64,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryBudgetConfig {
+    pub hard_limit: usize,
+    pub concurrent_actions: usize,
+    pub action_buffer: usize,
 }
 
-/// A fallibly cloned strong pointer with automatic memory accounting.
-pub struct TrackedArc<T, M: MemoryAccount = MemoryBudget> {
-    pub(crate) inner: Arc<Allocation<T, M>>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryBudgetConfigError {
+    HeadroomOverflow,
+    HeadroomExceedsHardLimit,
 }
 
-pub(crate) struct Allocation<T, M: MemoryAccount> {
-    pub(crate) value: T,
-    pub(crate) memory: M,
-    pub(crate) allocation_bytes: u64,
+pub trait MemoryBudget: Clone + Send + Sync {
+    fn reserve(&self, kind: MemoryKind, bytes: usize);
+    fn resize(&self, kind: MemoryKind, change: MemoryChange);
+    fn release(&self, kind: MemoryKind, bytes: usize);
+    fn state(&self) -> MemoryState;
 }
