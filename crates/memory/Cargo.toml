@@ -1,0 +1,13 @@
+[package]
+name = "contime-memory"
+version = "0.1.0"
+edition = "2021"
+autobenches = false
+license = "MIT"
+description = "Isolated tracked allocation and pointer memory accounting for ConTime"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
