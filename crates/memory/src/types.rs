@@ -40,3 +40,14 @@ pub(crate) struct BudgetState {
     pub(crate) allocation_bytes: AtomicU64,
     pub(crate) pointer_bytes: AtomicU64,
 }
+
+/// A fallibly cloned strong pointer with automatic memory accounting.
+pub struct TrackedArc<T, M: MemoryAccount = MemoryBudget> {
+    pub(crate) inner: Arc<Allocation<T, M>>,
+}
+
+pub(crate) struct Allocation<T, M: MemoryAccount> {
+    pub(crate) value: T,
+    pub(crate) memory: M,
+    pub(crate) allocation_bytes: u64,
+}
