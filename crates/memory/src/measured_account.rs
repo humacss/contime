@@ -44,6 +44,14 @@ mod tests {
         }
     }
 
+    struct Expensive(Vec<usize>);
+
+    impl ConservativeTrackedSize for Expensive {
+        fn conservative_tracked_size(&self) -> usize {
+            self.0.iter().copied().fold(0, usize::saturating_add)
+        }
+    }
+
     #[test]
     fn measures_current_values_and_each_side_of_a_change() {
         let mut value = Value { bytes: 8, measurements: Cell::new(0) };
@@ -68,6 +76,15 @@ mod tests {
         let mut criterion = Criterion::default();
         criterion.bench_function("memory/account/measured/1000", |bencher| {
             let mut value = Value { bytes: 8, measurements: Cell::new(0) };
+            let mut account = MeasuredAccount::new(&value);
+            bencher.iter(|| {
+                for _ in 0..1_000 {
+                    std::hint::black_box(account.change(&mut value, |_| ()));
+                }
+            });
+        });
+        criterion.bench_function("memory/account/measured_expensive/1000", |bencher| {
+            let mut value = Expensive(vec![1; 1_000]);
             let mut account = MeasuredAccount::new(&value);
             bencher.iter(|| {
                 for _ in 0..1_000 {

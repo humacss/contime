@@ -134,7 +134,7 @@ where
 mod tests {
     use std::mem::size_of;
 
-    use criterion::Criterion;
+    use criterion::{BatchSize, Criterion};
 
     use crate::{AtomicMemoryBudget, ConservativeTrackedSize, MemoryBudget, MemoryBudgetConfig, TrackedArc};
 
@@ -194,7 +194,19 @@ mod tests {
     fn benchmark_tracked_arc() {
         let mut criterion = Criterion::default();
         let memory = budget();
+        criterion.bench_function("memory/tracked_arc/new", |bencher| {
+            bencher.iter_batched(|| (Value(7), memory.clone()), |(value, memory)| TrackedArc::new(value, memory), BatchSize::SmallInput);
+        });
         let original = TrackedArc::new(Value(7), memory);
+        criterion.bench_function("memory/tracked_arc/clone", |bencher| {
+            bencher.iter(|| std::hint::black_box(original.clone()));
+        });
+        criterion.bench_function("memory/tracked_arc/drop_non_final", |bencher| {
+            bencher.iter_batched(|| original.clone(), drop, BatchSize::SmallInput);
+        });
+        criterion.bench_function("memory/tracked_arc/drop_final", |bencher| {
+            bencher.iter_batched(|| TrackedArc::new(Value(7), budget()), drop, BatchSize::SmallInput);
+        });
         criterion.bench_function("memory/tracked_arc/clone_drop/1000", |bencher| {
             bencher.iter(|| {
                 for _ in 0..1_000 {
