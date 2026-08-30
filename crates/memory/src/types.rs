@@ -111,3 +111,23 @@ where
     pub(crate) account: A,
     pub(crate) budget: B,
 }
+
+pub struct TrackedBox<T, A = MeasuredAccount, B = AtomicMemoryBudget>
+where
+    T: ConservativeTrackedSize,
+    A: MemoryAccount<T>,
+    B: MemoryBudget,
+{
+    pub(crate) inner: Box<BoxAllocation<T, A, B>>,
+}
+
+pub(crate) struct BoxAllocation<T, A, B>
+where
+    T: ConservativeTrackedSize,
+    A: MemoryAccount<T>,
+    B: MemoryBudget,
+{
+    pub(crate) value: T,
+    pub(crate) account: A,
+    pub(crate) budget: B,
+}
