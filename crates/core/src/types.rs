@@ -55,6 +55,31 @@ where
     pub(crate) completion: CompletionHandle,
 }
 
+pub struct SnapshotQuery<T, S> {
+    pub(crate) time: T,
+    pub(crate) snapshot_ids: Vec<u128>,
+    pub(crate) response: Sender<Vec<Box<S>>>,
+}
+
+pub struct EventQuery<T, I>
+where
+    I: Input,
+{
+    pub(crate) snapshot_id: u128,
+    pub(crate) from: T,
+    pub(crate) to: T,
+    pub(crate) response: Sender<Vec<TrackedEvent<I>>>,
+}
+
+pub enum RouterMessage<I, S>
+where
+    I: Input,
+{
+    Apply(RouterBatch<I>),
+    SnapshotQuery(SnapshotQuery<I::Time, S>),
+    EventQuery(EventQuery<I::Time, I>),
+}
+
 /// One snapshot-specific route emitted by a router.
 pub struct Route<I>
 where
@@ -71,6 +96,15 @@ where
 {
     pub(crate) routes: Vec<Route<I>>,
     pub(crate) completion: CompletionHandle,
+}
+
+pub enum WorkerMessage<I, S>
+where
+    I: Input,
+{
+    Apply(WorkerBatch<I>),
+    SnapshotQuery(SnapshotQuery<I::Time, S>),
+    EventQuery(EventQuery<I::Time, I>),
 }
 
 pub(crate) struct History<I>
@@ -110,12 +144,12 @@ where
 
 /// Deterministic router execution supplied to the runtime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RouterProcess<I>
+pub struct RouterProcess<I, S>
 where
     I: Input,
 {
     pub(crate) seed: u64,
-    pub(crate) input: PhantomData<fn() -> I>,
+    pub(crate) input: PhantomData<fn() -> (I, S)>,
 }
 
 /// Replay worker execution supplied to the runtime.
@@ -131,7 +165,7 @@ where
     pub(crate) types: PhantomData<fn() -> (I, S)>,
 }
 
-/// Complete apply-only process configuration.
+/// Complete apply-and-query process configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConTimeConfig {
     pub router_count: usize,
@@ -143,12 +177,12 @@ pub struct ConTimeConfig {
     pub checkpoints: contime_checkpoints::CheckpointConfig,
 }
 
-/// A running, memory-accounted apply pipeline.
+/// A running, memory-accounted apply-and-query pipeline.
 pub struct ConTime<I, S, W>
 where
     I: Input,
 {
-    pub(crate) runtime: contime_runtime::Runtime<RouterBatch<I>, contime_router::RouterError, std::convert::Infallible>,
+    pub(crate) runtime: contime_runtime::Runtime<RouterMessage<I, S>, contime_router::RouterError, std::convert::Infallible>,
     pub(crate) budget: MemoryBudget,
     pub(crate) types: PhantomData<fn() -> (S, W)>,
 }

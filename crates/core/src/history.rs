@@ -36,6 +36,17 @@ where
     }
 }
 
+impl<I> contime_worker::QueryEvents<TrackedEvent<I>> for History<I>
+where
+    I: Input,
+{
+    type Time = I::Time;
+
+    fn clone_between(&self, from: &Self::Time, to: &Self::Time) -> Vec<TrackedEvent<I>> {
+        self.events.clone_between(from, to)
+    }
+}
+
 impl<'a, I> Iterator for HistoryIter<'a, I>
 where
     I: Input,

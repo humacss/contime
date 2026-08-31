@@ -6,7 +6,7 @@ use contime_memory::ConservativeTrackedSize;
 use crossbeam_channel::Receiver;
 
 use crate::types::{CheckpointStorage, CheckpointStorageConfig, History};
-use crate::{Input, MemoryBudget, WorkerBatch, WorkerProcess};
+use crate::{Input, MemoryBudget, WorkerMessage, WorkerProcess};
 
 impl<I, S, W> WorkerProcess<I, S, W>
 where
@@ -24,12 +24,12 @@ where
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + ConservativeTrackedSize + Send + 'static,
     W: ApplyWrapper<S, I> + Send + 'static,
 {
-    type Input = WorkerBatch<I>;
+    type Input = WorkerMessage<I, S>;
     type Error = Infallible;
 
     fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error> {
         let checkpoint_config = CheckpointStorageConfig { checkpoints: self.checkpoints, budget: self.budget };
-        contime_worker::work::<WorkerBatch<I>, History<I>, CheckpointStorage<S, W>>(
+        contime_worker::work_messages::<WorkerMessage<I, S>, History<I>, CheckpointStorage<S, W>>(
             input,
             self.worker,
             (),
@@ -56,7 +56,7 @@ mod tests {
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use crate::input::prepare_inputs;
-    use crate::{CompletionHandle, Input, MemoryBudget, RejectionReason, Route, WorkerBatch, WorkerProcess};
+    use crate::{CompletionHandle, Input, MemoryBudget, RejectionReason, Route, WorkerBatch, WorkerMessage, WorkerProcess};
 
     struct TestInput {
         id: u128,
@@ -156,7 +156,7 @@ mod tests {
         let observed = Arc::new(AtomicUsize::new(0));
         let (sender, receiver) = unbounded();
         let (batch, rejections) = batch(&budget, 5);
-        sender.send(batch).unwrap();
+        sender.send(WorkerMessage::Apply(batch)).unwrap();
         drop(sender);
 
         RuntimeWorker::run(process(budget, Arc::clone(&observed)), receiver).unwrap();
@@ -175,7 +175,7 @@ mod tests {
                     let budget = MemoryBudget::new(usize::MAX, 0);
                     let observed = Arc::new(AtomicUsize::new(0));
                     let (sender, receiver) = unbounded();
-                    sender.send(batch(&budget, 1_000).0).unwrap();
+                    sender.send(WorkerMessage::Apply(batch(&budget, 1_000).0)).unwrap();
                     drop(sender);
                     (process(budget, observed), receiver)
                 },

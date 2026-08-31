@@ -1,11 +1,20 @@
 use std::convert::Infallible;
 
-use contime_api::{ApplyOutput, RejectionMessage};
-use contime_router::{RouteInputBatch, RouteOutput, WorkerOutput};
-use contime_worker::{ApplyInput, Completion, RouteInput};
+use contime_api::{ApplyOutput, EventQueryOutput, RejectionMessage, SnapshotQueryOutput};
+use contime_router::{
+    EventQueryInput as RouterEventQueryInput, EventQueryWorkerOutput, RouteInput as RouterInput, RouteInputBatch, RouteInputKind,
+    RouteOutput, SnapshotQueryInput as RouterSnapshotQueryInput, SnapshotQueryWorkerOutput, WorkerOutput,
+};
+use contime_worker::{
+    ApplyInput, Completion, EventQueryInput as WorkerEventQueryInput, RouteInput, SnapshotQueryInput as WorkerSnapshotQueryInput,
+    WorkInput, WorkInputKind,
+};
 use crossbeam_channel::Sender;
 
-use crate::{CompletionHandle, Input, RejectionReason, Route, RouterBatch, TrackedEvent, WorkerBatch};
+use crate::{
+    CompletionHandle, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage, SnapshotQuery, TrackedEvent, WorkerBatch,
+    WorkerMessage,
+};
 
 impl CompletionHandle {
     pub fn new(sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
@@ -31,6 +40,33 @@ where
     }
 }
 
+impl<I, S> ApplyOutput<TrackedEvent<I>, RejectionReason> for RouterMessage<I, S>
+where
+    I: Input,
+{
+    fn create(inputs: Vec<TrackedEvent<I>>, rejection_sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
+        Self::Apply(RouterBatch { inputs, completion: CompletionHandle::new(rejection_sender) })
+    }
+}
+
+impl<I, S> SnapshotQueryOutput<I::Time, S> for RouterMessage<I, S>
+where
+    I: Input,
+{
+    fn snapshot_query(time: I::Time, snapshot_ids: Vec<u128>, response: Sender<Vec<Box<S>>>) -> Self {
+        Self::SnapshotQuery(SnapshotQuery { time, snapshot_ids, response })
+    }
+}
+
+impl<I, S> EventQueryOutput<I::Time, TrackedEvent<I>> for RouterMessage<I, S>
+where
+    I: Input,
+{
+    fn event_query(snapshot_id: u128, from: I::Time, to: I::Time, response: Sender<Vec<TrackedEvent<I>>>) -> Self {
+        Self::EventQuery(EventQuery { snapshot_id, from, to, response })
+    }
+}
+
 impl<I> RouteInputBatch for RouterBatch<I>
 where
     I: Input,
@@ -40,6 +76,44 @@ where
 
     fn into_parts(self) -> (Vec<Self::Input>, Self::Completion) {
         (self.inputs, self.completion)
+    }
+}
+
+impl<T, S> RouterSnapshotQueryInput for SnapshotQuery<T, S> {
+    type Time = T;
+    type Response = Sender<Vec<Box<S>>>;
+
+    fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Response) {
+        (self.time, self.snapshot_ids, self.response)
+    }
+}
+
+impl<T, I> RouterEventQueryInput for EventQuery<T, I>
+where
+    I: Input,
+{
+    type Time = T;
+    type Response = Sender<Vec<TrackedEvent<I>>>;
+
+    fn into_parts(self) -> (u128, Self::Time, Self::Time, Self::Response) {
+        (self.snapshot_id, self.from, self.to, self.response)
+    }
+}
+
+impl<I, S> RouterInput for RouterMessage<I, S>
+where
+    I: Input,
+{
+    type Apply = RouterBatch<I>;
+    type SnapshotQuery = SnapshotQuery<I::Time, S>;
+    type EventQuery = EventQuery<I::Time, I>;
+
+    fn into_kind(self) -> RouteInputKind<RouterBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>> {
+        match self {
+            Self::Apply(batch) => RouteInputKind::Apply(batch),
+            Self::SnapshotQuery(query) => RouteInputKind::SnapshotQuery(query),
+            Self::EventQuery(query) => RouteInputKind::EventQuery(query),
+        }
     }
 }
 
@@ -74,6 +148,35 @@ where
     }
 }
 
+impl<I, S> WorkerOutput<TrackedEvent<I>, CompletionHandle> for WorkerMessage<I, S>
+where
+    I: Input,
+{
+    type Route = Route<I>;
+
+    fn create(inputs: Vec<Self::Route>, completion: CompletionHandle) -> Self {
+        Self::Apply(WorkerBatch { routes: inputs, completion })
+    }
+}
+
+impl<I, S> SnapshotQueryWorkerOutput<I::Time, Sender<Vec<Box<S>>>> for WorkerMessage<I, S>
+where
+    I: Input,
+{
+    fn snapshot_query(time: I::Time, snapshot_ids: Vec<u128>, response: Sender<Vec<Box<S>>>) -> Self {
+        Self::SnapshotQuery(SnapshotQuery { time, snapshot_ids, response })
+    }
+}
+
+impl<I, S> EventQueryWorkerOutput<I::Time, Sender<Vec<TrackedEvent<I>>>> for WorkerMessage<I, S>
+where
+    I: Input,
+{
+    fn event_query(snapshot_id: u128, from: I::Time, to: I::Time, response: Sender<Vec<TrackedEvent<I>>>) -> Self {
+        Self::EventQuery(EventQuery { snapshot_id, from, to, response })
+    }
+}
+
 impl<I> ApplyInput for WorkerBatch<I>
 where
     I: Input,
@@ -83,6 +186,44 @@ where
 
     fn into_parts(self) -> (Vec<Self::Route>, Self::Completion) {
         (self.routes, self.completion)
+    }
+}
+
+impl<T, S> WorkerSnapshotQueryInput for SnapshotQuery<T, S> {
+    type Time = T;
+    type Response = Sender<Vec<Box<S>>>;
+
+    fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Response) {
+        (self.time, self.snapshot_ids, self.response)
+    }
+}
+
+impl<T, I> WorkerEventQueryInput for EventQuery<T, I>
+where
+    I: Input,
+{
+    type Time = T;
+    type Response = Sender<Vec<TrackedEvent<I>>>;
+
+    fn into_parts(self) -> (u128, Self::Time, Self::Time, Self::Response) {
+        (self.snapshot_id, self.from, self.to, self.response)
+    }
+}
+
+impl<I, S> WorkInput for WorkerMessage<I, S>
+where
+    I: Input,
+{
+    type Apply = WorkerBatch<I>;
+    type SnapshotQuery = SnapshotQuery<I::Time, S>;
+    type EventQuery = EventQuery<I::Time, I>;
+
+    fn into_kind(self) -> WorkInputKind<WorkerBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>> {
+        match self {
+            Self::Apply(batch) => WorkInputKind::Apply(batch),
+            Self::SnapshotQuery(query) => WorkInputKind::SnapshotQuery(query),
+            Self::EventQuery(query) => WorkInputKind::EventQuery(query),
+        }
     }
 }
 
