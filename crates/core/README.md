@@ -55,20 +55,50 @@ acknowledge event history, force replay, or change worker scheduling.
 
 Local optimized results recorded on 2026-09-01. Each runtime is populated
 before timing; the measured region contains one synchronous query from the
-public API through router and worker response-channel closure.
+public API through router and worker response-channel closure. Point estimates
+are Criterion means.
 
-| Routers | Workers | 1,000 snapshots | Snapshot throughput | 1,000 event handles | Event throughput |
+Snapshot queries partition independent IDs and return boxed exact-checkpoint
+clones:
+
+| Routers | Workers | Results | Latency | Per snapshot | Throughput |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 1 | 70.23 us | 14.24 M/s | 30.55 us | 32.73 M/s |
-| 1 | 4 | 63.77 us | 15.68 M/s | 31.11 us | 32.15 M/s |
-| 1 | 10 | 96.13 us | 10.40 M/s | 34.56 us | 28.94 M/s |
-| 2 | 10 | 94.30 us | 10.60 M/s | 28.77 us | 34.75 M/s |
+| 1 | 1 | 1 | 19.101 us | 19.101 us | 52.354 K/s |
+| 1 | 1 | 100 | 27.238 us | 272.38 ns | 3.6713 M/s |
+| 1 | 1 | 1,000 | 65.376 us | 65.376 ns | 15.296 M/s |
+| 1 | 4 | 1 | 20.323 us | 20.323 us | 49.205 K/s |
+| 1 | 4 | 100 | 45.749 us | 457.49 ns | 2.1858 M/s |
+| 1 | 4 | 1,000 | 67.559 us | 67.559 ns | 14.802 M/s |
+| 1 | 10 | 1 | 19.438 us | 19.438 us | 51.446 K/s |
+| 1 | 10 | 100 | 67.317 us | 673.17 ns | 1.4855 M/s |
+| 1 | 10 | 1,000 | 96.442 us | 96.442 ns | 10.369 M/s |
+| 2 | 10 | 1 | 19.022 us | 19.022 us | 52.572 K/s |
+| 2 | 10 | 100 | 64.582 us | 645.82 ns | 1.5484 M/s |
+| 2 | 10 | 1,000 | 96.037 us | 96.037 ns | 10.413 M/s |
 
-Snapshot queries partition 1,000 independent IDs and return 1,000 boxed exact
-checkpoint clones. Event queries target one history and clone 1,000 tracked
-handles over a half-open range. Additional workers only help the partitionable
-snapshot case when the parallel work exceeds added channel and completion
-overhead; a single-history event query always executes on one worker.
+Event queries target one history and clone tracked handles over a half-open
+range:
+
+| Routers | Workers | Results | Latency | Per event | Throughput |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1 | 17.900 us | 17.900 us | 55.865 K/s |
+| 1 | 1 | 100 | 22.110 us | 221.10 ns | 4.5228 M/s |
+| 1 | 1 | 1,000 | 31.679 us | 31.679 ns | 31.566 M/s |
+| 1 | 4 | 1 | 19.736 us | 19.736 us | 50.669 K/s |
+| 1 | 4 | 100 | 21.704 us | 217.04 ns | 4.6075 M/s |
+| 1 | 4 | 1,000 | 31.912 us | 31.912 ns | 31.336 M/s |
+| 1 | 10 | 1 | 18.435 us | 18.435 us | 54.245 K/s |
+| 1 | 10 | 100 | 22.142 us | 221.42 ns | 4.5164 M/s |
+| 1 | 10 | 1,000 | 32.224 us | 32.224 ns | 31.033 M/s |
+| 2 | 10 | 1 | 17.462 us | 17.462 us | 57.267 K/s |
+| 2 | 10 | 100 | 21.619 us | 216.19 ns | 4.6257 M/s |
+| 2 | 10 | 1,000 | 30.556 us | 30.556 ns | 32.726 M/s |
+
+The one-result measurements expose roughly 17-20 us of fixed synchronous
+round-trip cost. Snapshot queries can fan out across workers, but at these
+sizes the extra worker messages and response coordination cost more than the
+parallel checkpoint cloning saves. A single-history event query always runs on
+one worker, so its throughput is largely topology-independent.
 
 ## Unit benchmark snapshot
 

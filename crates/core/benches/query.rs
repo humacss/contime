@@ -6,6 +6,7 @@ use contime_core::memory_tracking::ConservativeTrackedSize;
 use contime_core::{ConTime, ConTimeConfig, Input};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
+const RESULT_COUNTS: [usize; 3] = [1, 100, 1_000];
 const SNAPSHOT_COUNT: usize = 1_000;
 
 struct BenchEvent {
@@ -99,17 +100,20 @@ fn query_benchmarks(criterion: &mut Criterion) {
     for (router_count, worker_count) in [(1_usize, 1_usize), (1, 4), (1, 10), (2, 10)] {
         let contime = prepared_runtime(router_count, worker_count);
         let topology = format!("{router_count}_routers_{worker_count}_workers");
-        let snapshot_ids = (0..SNAPSHOT_COUNT as u128).collect::<Vec<_>>();
+        for result_count in RESULT_COUNTS {
+            let snapshot_ids = (0..result_count as u128).collect::<Vec<_>>();
 
-        group.throughput(Throughput::Elements(SNAPSHOT_COUNT as u64));
-        group.bench_function(BenchmarkId::new("1000_snapshots", &topology), |bencher| {
-            bencher.iter(|| black_box(contime.query_at(black_box(10), snapshot_ids.iter().copied()).unwrap()));
-        });
+            group.throughput(Throughput::Elements(result_count as u64));
+            group.bench_function(BenchmarkId::new(format!("{result_count}_snapshots"), &topology), |bencher| {
+                bencher.iter(|| black_box(contime.query_at(black_box(10), snapshot_ids.iter().copied()).unwrap()));
+            });
 
-        group.throughput(Throughput::Elements(SNAPSHOT_COUNT as u64));
-        group.bench_function(BenchmarkId::new("1000_event_handles", &topology), |bencher| {
-            bencher.iter(|| black_box(contime.query_events_between(u128::MAX, 20, 1_020).unwrap()));
-        });
+            group.throughput(Throughput::Elements(result_count as u64));
+            group.bench_function(BenchmarkId::new(format!("{result_count}_event_handles"), &topology), |bencher| {
+                let to = 20 + result_count as u64;
+                bencher.iter(|| black_box(contime.query_events_between(u128::MAX, 20, to).unwrap()));
+            });
+        }
 
         contime.shutdown();
     }
