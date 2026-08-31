@@ -5,6 +5,16 @@ pub trait ApplyOutput<I, R>: Sized {
     fn create(inputs: Vec<I>, rejection_sender: Sender<RejectionMessage<R>>) -> Self;
 }
 
+/// Constructs a caller-selected snapshot-query message.
+pub trait SnapshotQueryOutput<T, S>: Sized {
+    fn snapshot_query(time: T, snapshot_ids: Vec<u128>, response: Sender<Vec<Box<S>>>) -> Self;
+}
+
+/// Constructs a caller-selected event-history query message.
+pub trait EventQueryOutput<T, E>: Sized {
+    fn event_query(snapshot_id: u128, from: T, to: T, response: Sender<Vec<E>>) -> Self;
+}
+
 /// One batch of inputs forwarded across the API boundary.
 #[derive(Debug)]
 pub struct InputBatch<I, R> {
