@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Worker-local scheduling and memory policy.
@@ -20,15 +19,15 @@ pub struct WorkerConfig {
 
 /// One event route already assigned to this worker.
 #[derive(Debug)]
-pub struct RoutedInput<E> {
+pub struct RoutedInput<I> {
     pub snapshot_id: u128,
-    pub input: Arc<E>,
+    pub input: I,
 }
 
 /// One independently admitted worker message.
 #[derive(Debug)]
-pub struct ApplyBatch<E, C> {
-    pub inputs: Vec<RoutedInput<E>>,
+pub struct ApplyBatch<I, C> {
+    pub inputs: Vec<RoutedInput<I>>,
     pub completion: C,
 }
 
@@ -75,13 +74,13 @@ pub struct EventInsert<R> {
 }
 
 /// Canonical per-snapshot event storage owned by a worker.
-pub trait Events<E>: Sized {
+pub trait Events<I>: Sized {
     type Config;
     type Rejection;
 
     fn create(snapshot_id: u128, config: &Self::Config, retained_bytes_limit: u64) -> Option<EventsCreated<Self>>;
 
-    fn insert(&mut self, input: Arc<E>, retained_bytes_limit: u64) -> EventInsert<Self::Rejection>;
+    fn insert(&mut self, input: I, retained_bytes_limit: u64) -> EventInsert<Self::Rejection>;
 }
 
 /// A newly initialized checkpoint store and its retained-memory change.

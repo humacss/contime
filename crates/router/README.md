@@ -14,11 +14,12 @@ it is not a workspace member. It has no dependency on `contime` or
 - Flatten directly into final worker vectors.
 - Send one batch per affected worker.
 
-Every input event enters the router in `Arc`. A single snapshot route moves the
-existing Arc without cloning it; each additional snapshot route clones only the
-pointer. Workers receive exact `{ snapshot_id, Arc<Event> }` records and never
-revisit or rehash an event's snapshot IDs. The underlying event implements
-`RoutableInput` and does not need to implement `Clone`.
+The router is generic over input ownership. A single snapshot route moves the
+existing input without cloning it; each additional snapshot route calls
+`Clone` on the caller-selected input type. Workers receive exact
+`{ snapshot_id, input }` records and never revisit or rehash snapshot IDs. The
+router does not know whether cloning copies an owned value, increments a shared
+pointer, or updates a tracked pointer.
 
 ## Exclusions
 
@@ -93,24 +94,25 @@ The snapshot-ID vector is constructed outside the timed routine.
 
 ### Sustained routing
 
-The integration benchmark prepares 100 complete batches of 1,000 inputs before
-timing begins. The following historical matrix compared direct ownership with
-a benchmark-local consumer `Arc` wrapper and provided the evidence for making
-the public boundary Arc-only. The owned cases are no longer executable through
-the current router API:
+The executable generic benchmark prepares 100 complete batches of 1,000 inputs
+before timing begins. It compares direct ownership with a benchmark-local
+consumer `Arc` wrapper. Fixture construction and initial Arc allocation remain
+outside the timed routine.
 
 | Event bytes | Routes per event | Owned total | Owned per route | Shared total | Shared per route |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 32 | 1 | 310.98 µs | 3.110 ns | 308.22 µs | 3.082 ns |
-| 64 | 1 | 985.67 µs | 9.857 ns | 699.83 µs | 6.998 ns |
-| 64 | 2 | 1.9858 ms | 9.929 ns | 1.3813 ms | 6.907 ns |
-| 64 | 3 | 3.1544 ms | 10.515 ns | 2.0980 ms | 6.993 ns |
-| 208 | 1 | 2.3490 ms | 23.490 ns | 869.04 µs | 8.690 ns |
-| 208 | 2 | 4.7359 ms | 23.680 ns | 1.4820 ms | 7.410 ns |
-| 208 | 3 | 7.5927 ms | 25.309 ns | 2.2519 ms | 7.506 ns |
-| 1,008 | 1 | 8.3363 ms | 83.363 ns | 739.31 µs | 7.393 ns |
-| 1,008 | 2 | 15.626 ms | 78.130 ns | 1.3966 ms | 6.983 ns |
-| 1,008 | 3 | 26.241 ms | 87.470 ns | 2.1705 ms | 7.235 ns |
+| 32 | 1 | 428.62 µs | 4.286 ns | 340.39 µs | 3.404 ns |
+| 32 | 2 | 1.0614 ms | 5.307 ns | 925.87 µs | 4.629 ns |
+| 32 | 3 | 1.5979 ms | 5.326 ns | 1.6710 ms | 5.570 ns |
+| 64 | 1 | 982.04 µs | 9.820 ns | 725.70 µs | 7.257 ns |
+| 64 | 2 | 2.0099 ms | 10.050 ns | 1.3855 ms | 6.928 ns |
+| 64 | 3 | 3.1067 ms | 10.356 ns | 2.0264 ms | 6.755 ns |
+| 208 | 1 | 2.3360 ms | 23.360 ns | 816.35 µs | 8.164 ns |
+| 208 | 2 | 4.8476 ms | 24.238 ns | 1.4892 ms | 7.446 ns |
+| 208 | 3 | 7.8331 ms | 26.110 ns | 2.2846 ms | 7.615 ns |
+| 1,008 | 1 | 8.4624 ms | 84.624 ns | 721.59 µs | 7.216 ns |
+| 1,008 | 2 | 15.766 ms | 78.830 ns | 1.3907 ms | 6.954 ns |
+| 1,008 | 3 | 26.022 ms | 86.740 ns | 2.2119 ms | 7.373 ns |
 
 `SnapshotIds` has one-, two-, and three-ID variants, so snapshot-ID count is
 the route count without a separate field. The payload lengths are 0, 144, and
@@ -120,19 +122,21 @@ these sizes from drifting. Within each event-size group, payload bytes and ID
 values are identical except for the deliberately selected snapshot-ID variant.
 The paired shared case changes only event ownership.
 
-The historical 32-byte single-route event is a separate compact fixture
+The 32-byte event is a separate compact fixture
 containing one `u128` snapshot ID and 16 payload bytes. Its owned routed record
 was 48 bytes and the corresponding shared routed record was 32 bytes. At this
 boundary the two ownership strategies were effectively tied.
 
-Owned cost in the historical matrix scales with both event size and emitted
-routes. Shared routed records remain pointer-sized regardless of the underlying
-event size.
+Owned cost scales with both event size and emitted routes. Shared routed
+records remain pointer-sized regardless of the underlying event size. At 1,008
+bytes, owned routing costs approximately 79–87 ns per route while shared
+routing remains approximately 7 ns per route. The 32-byte results are close
+enough that ordinary measurement and layout effects can outweigh either
+ownership strategy.
 
-The current executable Arc-only routing measurements were recorded together in
-one unfiltered Criterion run. Every timed operation routes 100 batches of 1,000
-input events. Input throughput divides 100,000 by total latency; route
-throughput additionally multiplies by the configured routes per event:
+The following table records the previous Arc-only reference run. It remains
+useful for implementation-drift comparisons, while the matrix above is the
+current executable ownership comparison:
 
 | Event bytes | Workers | Routes/event | Total | ns/input | ns/route | Input events/s | Routes/s |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -150,12 +154,10 @@ throughput additionally multiplies by the configured routes per event:
 | 1,008 | 8 | 3 | 2.1995 ms | 21.9950 | 7.3317 | 45,464,878 | 136,394,635 |
 | 64 | 1 | 1 | 584.48 µs | 5.8448 | 5.8448 | 171,092,253 | 171,092,253 |
 
-These cases use the Arc boundary directly rather than wrapping an Arc inside a
-second benchmark event type. The full integration matrix contains four exact
-event sizes and one, two, and three routes per event, plus the 64-byte
-single-worker shortcut. The compact 32-byte event stores a first snapshot ID,
-15 payload bytes, and a one-byte route count; compile-time assertions keep its
-size fixed while it emits consecutive snapshot IDs. The 64-, 208-, and
+The generic integration matrix contains four exact event sizes and one, two,
+and three routes per event. The compact 32-byte event stores a first snapshot
+ID, 15 payload bytes, and a one-byte route count; compile-time assertions keep
+its size fixed while it emits consecutive snapshot IDs. The 64-, 208-, and
 1,008-byte fixtures store their snapshot IDs directly.
 
 Input-event throughput necessarily falls as each event fans out further. Route
@@ -172,10 +174,9 @@ pre-Arc-boundary experiment changed the median from 719.47 µs to 580.80 µs, a
 measures 584.48 µs for one worker and 738.57 µs for eight workers with one
 route per event.
 
-Payload construction, initial `Arc` allocation, input-batch Arc cloning, and
-worker execution are outside the timed routine. The routing results therefore
-measure events already accepted through the Arc-only API and do not include
-the cost of initially allocating an `Arc`.
+Payload construction, initial `Arc` allocation, input-batch cloning, and worker
+execution are outside the timed routine. The results isolate routing after the
+caller has selected an ownership strategy.
 
 ### `Arc::new`
 

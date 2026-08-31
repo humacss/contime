@@ -3,6 +3,10 @@
 `contime-worker` owns the blocking worker receive loop, worker-local memory
 limits, event-store insertion scheduling, and checkpoint orchestration.
 
+Routed input ownership is generic. The worker moves the caller-selected input
+type into its event-store implementation and does not know whether the value is
+owned, shared, tracked, or represented another way.
+
 The crate is isolated. It does not depend on `contime`, `contime-api`,
 `contime-router`, or a replay implementation. An orchestrator is responsible
 for adapting independently defined message types and choosing where
@@ -68,6 +72,26 @@ One replay per receive was fastest in both current integration workloads. The
 setting remains configurable because replay cost and snapshot fan-out are
 consumer-dependent.
 
+### Input ownership comparison
+
+The generic ownership benchmark processes 1,000 one-input batches across four
+snapshots with one replay per receive. Input construction occurs outside the
+timed routine. `shared` is a benchmark-local one-pointer wrapper around
+`Arc<Event>`; production worker code does not refer to `Arc`.
+
+| Event bytes | Owned total | Owned throughput | Shared total | Shared throughput |
+| ---: | ---: | ---: | ---: | ---: |
+| 64 | 199.76 µs | 5.006M/s | 165.95 µs | 6.026M/s |
+| 208 | 158.13 µs | 6.324M/s | 177.98 µs | 5.619M/s |
+| 1,008 | 192.15 µs | 5.204M/s | 190.59 µs | 5.247M/s |
+
+The worker does not fan inputs out or clone them, so these results show no
+stable relationship between payload size and ownership strategy. Scheduling,
+event insertion, memory bookkeeping, checkpoint updates, and completion
+dominate this workload. Pointer ownership is selected for efficient router
+fan-out and retained event history, not because it intrinsically accelerates
+the worker loop.
+
 ### Pipeline comparison
 
 The independently measured Arc/shared fast paths currently have the following
@@ -76,7 +100,7 @@ approximate throughput:
 | Boundary | Throughput |
 | --- | ---: |
 | API, 1,000 already-shared inputs | 1.9–2.1 billion inputs/s |
-| Router, 64-byte-or-larger shared events | 133–144 million routes/s |
+| Router, 64-byte-or-larger shared events | 122–148 million routes/s |
 | Worker, one replay per receive | 6.09–10.37 million routed inputs/s per worker |
 
 The worker is therefore the narrowest single instance, as expected for the

@@ -2,7 +2,8 @@
 //!
 //! The API forwards one batch per call to an opaque downstream receiver and
 //! uses rejection-channel closure to detect synchronous apply
-//! completion. It has no knowledge of downstream processing topology.
+//! completion. Rejection reasons are generic, and the crate has no knowledge
+//! of downstream processing topology or the root `contime` crate.
 
 mod apply;
 mod send;

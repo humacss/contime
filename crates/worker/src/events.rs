@@ -97,7 +97,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::hint::black_box;
-    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use ahash::AHashMap;
@@ -110,6 +109,7 @@ mod tests {
     use crate::types::SnapshotSlot;
     use crate::{ApplyBatch, EventInsert, Events, EventsCreated, RoutedInput, WorkerInput, WorkerRejection};
 
+    #[derive(Clone)]
     struct TestInput(u128);
 
     impl WorkerInput for TestInput {
@@ -132,10 +132,40 @@ mod tests {
             Some(EventsCreated { events: Self::default(), retained_bytes_delta: 0 })
         }
 
-        fn insert(&mut self, input: Arc<TestInput>, _limit: u64) -> EventInsert<()> {
+        fn insert(&mut self, input: TestInput, _limit: u64) -> EventInsert<()> {
             self.0.push(input.0);
             EventInsert { retained_bytes_delta: 32, changed: true, rejections: Vec::new() }
         }
+    }
+
+    #[derive(Default)]
+    struct DirectEvents(Vec<u128>);
+
+    impl Events<TestInput> for DirectEvents {
+        type Config = ();
+        type Rejection = ();
+
+        fn create(_id: u128, _config: &(), _limit: u64) -> Option<EventsCreated<Self>> {
+            Some(EventsCreated { events: Self::default(), retained_bytes_delta: 0 })
+        }
+
+        fn insert(&mut self, input: TestInput, _limit: u64) -> EventInsert<()> {
+            self.0.push(input.0);
+            EventInsert { retained_bytes_delta: 32, changed: true, rejections: Vec::new() }
+        }
+    }
+
+    #[test]
+    fn worker_preserves_the_selected_input_ownership_type() {
+        let (completion, _responses) = unbounded();
+        let batch = ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestInput(9) }], completion };
+        let mut snapshots = AHashMap::new();
+        let mut schedule = Schedule::new(usize::MAX, 2);
+        let mut memory = Memory::new(1_000);
+
+        insert_batch::<_, DirectEvents, (), _>(batch, &mut snapshots, &mut schedule, &mut memory, &(), Instant::now());
+
+        assert_eq!(snapshots.get(&7).unwrap().events.0, vec![9]);
     }
 
     fn batch(
@@ -143,7 +173,7 @@ mod tests {
     ) -> (ApplyBatch<TestInput, crossbeam_channel::Sender<Vec<WorkerRejection<()>>>>, crossbeam_channel::Receiver<Vec<WorkerRejection<()>>>)
     {
         let (completion, responses) = unbounded();
-        let inputs = (0..count).map(|id| RoutedInput { snapshot_id: 7, input: Arc::new(TestInput(id)) }).collect();
+        let inputs = (0..count).map(|id| RoutedInput { snapshot_id: 7, input: TestInput(id) }).collect();
         (ApplyBatch { inputs, completion }, responses)
     }
 
@@ -204,7 +234,7 @@ mod tests {
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_event_components() {
         let mut criterion = Criterion::default();
-        let inputs = (0..1_000_u128).map(|id| Arc::new(TestInput(id))).collect::<Vec<_>>();
+        let inputs = (0..1_000_u128).map(TestInput).collect::<Vec<_>>();
 
         criterion.bench_function("worker/events/components/1000_reservation_scan", |bencher| {
             bencher.iter(|| {

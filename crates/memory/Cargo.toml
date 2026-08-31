@@ -13,5 +13,5 @@ publish = false
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
-name = "lifecycle"
+name = "ownership"
 harness = false

@@ -1,133 +1,60 @@
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-/// A conservative estimate of memory retained by one underlying value.
+/// A conservative estimate of memory retained by an underlying value.
 pub trait ConservativeTrackedSize {
     fn conservative_tracked_size(&self) -> usize;
 }
 
+/// A change in conservatively tracked memory usage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MemoryChange {
+pub enum SizeDelta {
     Increase(usize),
     Decrease(usize),
     Unchanged,
 }
 
-pub trait MemoryAccount<T>: Sized
+/// Runs a mutation and reports its change in conservatively tracked size.
+pub trait TrackedSizeDelta {
+    fn size_delta<R>(&mut self, action: impl FnOnce(&mut Self) -> R) -> (R, SizeDelta);
+}
+
+/// Receives tracked memory changes and exposes the configured safety buffer.
+pub trait TrackedMemoryBudget: Clone {
+    fn apply_delta(&self, delta: SizeDelta);
+    fn has_buffer(&self) -> bool;
+    fn buffer_size(&self) -> usize;
+}
+
+pub struct TrackedArc<T, B>
 where
     T: ConservativeTrackedSize,
+    B: TrackedMemoryBudget,
 {
-    fn new(value: &T) -> Self;
-    fn current(&self, value: &T) -> usize;
-    fn change<R, F>(&mut self, value: &mut T, action: F) -> (R, MemoryChange)
-    where
-        F: FnOnce(&mut T) -> R;
+    pub(crate) inner: Arc<ArcAllocation<T, B>>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MemoryKind {
-    Allocation,
-    Pointer,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MemoryStatus {
-    Ready,
-    ActionBlocked,
-    HardLimitExceeded,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MemoryState {
-    pub used: usize,
-    pub allocation_bytes: usize,
-    pub pointer_bytes: usize,
-    pub action_ceiling: usize,
-    pub hard_limit: usize,
-    pub status: MemoryStatus,
-    pub buffer_exceeded_count: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MemoryBudgetConfig {
-    pub hard_limit: usize,
-    pub concurrent_actions: usize,
-    pub action_buffer: usize,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MemoryBudgetConfigError {
-    HeadroomOverflow,
-    HeadroomExceedsHardLimit,
-}
-
-pub trait MemoryBudget: Clone + Send + Sync {
-    fn reserve(&self, kind: MemoryKind, bytes: usize);
-    fn resize(&self, kind: MemoryKind, change: MemoryChange);
-    fn release(&self, kind: MemoryKind, bytes: usize);
-    fn state(&self) -> MemoryState;
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct MeasuredAccount;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CachedAccount {
-    pub(crate) bytes: usize,
-}
-
-#[derive(Clone, Debug)]
-pub struct AtomicMemoryBudget {
-    pub(crate) state: Arc<AtomicMemoryState>,
-}
-
-#[derive(Debug)]
-pub(crate) struct AtomicMemoryState {
-    pub(crate) hard_limit: usize,
-    pub(crate) action_ceiling: usize,
-    pub(crate) action_buffer: usize,
-    pub(crate) used: AtomicUsize,
-    pub(crate) allocation_bytes: AtomicUsize,
-    pub(crate) pointer_bytes: AtomicUsize,
-    pub(crate) buffer_exceeded_count: AtomicUsize,
-}
-
-pub struct TrackedArc<T, A = MeasuredAccount, B = AtomicMemoryBudget>
+pub(crate) struct ArcAllocation<T, B>
 where
     T: ConservativeTrackedSize,
-    A: MemoryAccount<T>,
-    B: MemoryBudget,
-{
-    pub(crate) inner: Arc<ArcAllocation<T, A, B>>,
-}
-
-pub(crate) struct ArcAllocation<T, A, B>
-where
-    T: ConservativeTrackedSize,
-    A: MemoryAccount<T>,
-    B: MemoryBudget,
+    B: TrackedMemoryBudget,
 {
     pub(crate) value: T,
-    pub(crate) account: A,
     pub(crate) budget: B,
 }
 
-pub struct TrackedBox<T, A = MeasuredAccount, B = AtomicMemoryBudget>
+pub struct TrackedBox<T, B>
 where
     T: ConservativeTrackedSize,
-    A: MemoryAccount<T>,
-    B: MemoryBudget,
+    B: TrackedMemoryBudget,
 {
-    pub(crate) inner: Box<BoxAllocation<T, A, B>>,
+    pub(crate) inner: Box<BoxAllocation<T, B>>,
 }
 
-pub(crate) struct BoxAllocation<T, A, B>
+pub(crate) struct BoxAllocation<T, B>
 where
     T: ConservativeTrackedSize,
-    A: MemoryAccount<T>,
-    B: MemoryBudget,
+    B: TrackedMemoryBudget,
 {
     pub(crate) value: T,
-    pub(crate) account: A,
     pub(crate) budget: B,
 }
