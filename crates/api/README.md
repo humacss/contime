@@ -30,6 +30,12 @@ defined locally; it does not know that a router exists. An orchestrator can
 implement `ApplyOutput` on a type that also implements another crate's input
 trait, making the handoff compile-time checked without an API dependency.
 
+Snapshot and event-history queries use the same ownership-neutral boundary.
+Asynchronous calls forward a caller-owned response sender. Synchronous wrappers
+collect result batches until every downstream sender clone is dropped.
+Snapshot queries return only found boxed snapshots; event queries return owned
+handles selected by the consumer's output type.
+
 ## Verification
 
 Run the unit tests from the ConTime repository root:
@@ -87,3 +93,17 @@ shared ownership materially valuable.
 closure of the internally owned rejection channel plus empty rejection
 collection. Its `send` dependency is stubbed, so it does not include input
 normalization, output-channel transport, or downstream work.
+
+Query boundary results recorded on 2026-09-01 include one real request/response
+round trip to a minimal downstream thread and synchronous result collection:
+
+| Results | Snapshot query | Event query |
+| ---: | ---: | ---: |
+| 1 | 1.534 us | 1.023 us |
+| 10 | 2.325 us | 1.014 us |
+| 100 | 11.01 us | 1.409 us |
+| 1,000 | 34.32 us | 3.724 us |
+
+The snapshot fixture allocates one boxed value per result downstream. The event
+fixture returns one contiguous vector, so the difference primarily describes
+result ownership and allocation rather than request construction.
