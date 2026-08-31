@@ -1,40 +1,44 @@
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::hash::RouterHasher;
-use crate::types::{InputBatch, RoutableInput, RoutedInput, RouterError, WorkerBatch};
+use crate::types::{RoutableInput, RouteInputBatch, RouteOutput, RouterError, WorkerOutput};
 
-trait Deps<I, C> {
+trait Deps<W> {
     fn worker_count(&self) -> usize;
-    fn send(&self, worker_index: usize, batch: WorkerBatch<I, C>) -> Result<(), ()>;
+    fn send(&self, worker_index: usize, batch: W) -> Result<(), ()>;
 }
 
-struct DefaultDeps<'a, I, C> {
-    worker_outputs: &'a [Sender<WorkerBatch<I, C>>],
+struct DefaultDeps<'a, W> {
+    worker_outputs: &'a [Sender<W>],
 }
 
-impl<I, C> Deps<I, C> for DefaultDeps<'_, I, C> {
+impl<W> Deps<W> for DefaultDeps<'_, W> {
     fn worker_count(&self) -> usize {
         self.worker_outputs.len()
     }
 
-    fn send(&self, worker_index: usize, batch: WorkerBatch<I, C>) -> Result<(), ()> {
+    fn send(&self, worker_index: usize, batch: W) -> Result<(), ()> {
         self.worker_outputs[worker_index].send(batch).map_err(|_| ())
     }
 }
 
-pub fn route<I, C>(seed: u64, input: Receiver<InputBatch<I, C>>, worker_outputs: &[Sender<WorkerBatch<I, C>>]) -> Result<(), RouterError>
+pub fn route<B, W>(seed: u64, input: Receiver<B>, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
 where
-    I: RoutableInput + Clone,
-    C: Clone,
+    B: RouteInputBatch,
+    B::Input: RoutableInput + Clone,
+    B::Completion: Clone,
+    W: WorkerOutput<B::Input, B::Completion>,
 {
     route_with_deps(seed, input, &DefaultDeps { worker_outputs })
 }
 
-fn route_with_deps<D, I, C>(seed: u64, input: Receiver<InputBatch<I, C>>, deps: &D) -> Result<(), RouterError>
+fn route_with_deps<D, B, W>(seed: u64, input: Receiver<B>, deps: &D) -> Result<(), RouterError>
 where
-    D: Deps<I, C>,
-    I: RoutableInput + Clone,
-    C: Clone,
+    D: Deps<W>,
+    B: RouteInputBatch,
+    B::Input: RoutableInput + Clone,
+    B::Completion: Clone,
+    W: WorkerOutput<B::Input, B::Completion>,
 {
     if deps.worker_count() == 0 {
         return Err(RouterError::NoWorkers);
@@ -47,19 +51,22 @@ where
     Ok(())
 }
 
-fn route_batch<D, I, C>(hasher: &RouterHasher, batch: InputBatch<I, C>, deps: &D) -> Result<(), RouterError>
+fn route_batch<D, B, W>(hasher: &RouterHasher, batch: B, deps: &D) -> Result<(), RouterError>
 where
-    D: Deps<I, C>,
-    I: RoutableInput + Clone,
-    C: Clone,
+    D: Deps<W>,
+    B: RouteInputBatch,
+    B::Input: RoutableInput + Clone,
+    B::Completion: Clone,
+    W: WorkerOutput<B::Input, B::Completion>,
 {
     let worker_count = deps.worker_count();
-    let base_capacity = batch.inputs.len().div_ceil(worker_count);
+    let (inputs, batch_completion) = batch.into_parts();
+    let base_capacity = inputs.len().div_ceil(worker_count);
     let estimated_capacity = base_capacity.saturating_add(base_capacity / 4).saturating_add(1);
     let mut worker_inputs = Vec::with_capacity(worker_count);
-    worker_inputs.resize_with(worker_count, || None::<Vec<RoutedInput<I>>>);
+    worker_inputs.resize_with(worker_count, || None::<Vec<W::Route>>);
 
-    for input in batch.inputs {
+    for input in inputs {
         let mut pending_snapshot_id = None;
         input.snapshot_ids(&mut |snapshot_id| {
             if let Some(previous_snapshot_id) = pending_snapshot_id.replace(snapshot_id) {
@@ -73,7 +80,7 @@ where
 
     let affected_workers = worker_inputs.iter().flatten().count();
     let mut remaining_workers = affected_workers;
-    let mut completion = Some(batch.completion);
+    let mut completion = Some(batch_completion);
 
     for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
         let Some(inputs) = inputs else {
@@ -85,23 +92,24 @@ where
         } else {
             completion.as_ref().expect("the completion handle exists before the final worker").clone()
         };
-        deps.send(worker_index, WorkerBatch { inputs, completion: worker_completion })
-            .map_err(|()| RouterError::WorkerUnavailable { worker_index })?;
+        deps.send(worker_index, W::create(inputs, worker_completion)).map_err(|()| RouterError::WorkerUnavailable { worker_index })?;
     }
 
     Ok(())
 }
 
-fn push_route<I>(
-    worker_inputs: &mut [Option<Vec<RoutedInput<I>>>],
+fn push_route<I, R>(
+    worker_inputs: &mut [Option<Vec<R>>],
     hasher: &RouterHasher,
     worker_count: usize,
     estimated_capacity: usize,
     snapshot_id: u128,
     input: I,
-) {
+) where
+    R: RouteOutput<I>,
+{
     let worker_index = hasher.worker_index(snapshot_id, worker_count);
-    worker_inputs[worker_index].get_or_insert_with(|| Vec::with_capacity(estimated_capacity)).push(RoutedInput { snapshot_id, input });
+    worker_inputs[worker_index].get_or_insert_with(|| Vec::with_capacity(estimated_capacity)).push(R::create(snapshot_id, input));
 }
 
 #[cfg(test)]
@@ -115,7 +123,7 @@ mod tests {
 
     use super::route;
     use crate::hash::RouterHasher;
-    use crate::{InputBatch, RoutableInput, RouterError, WorkerBatch};
+    use crate::{InputBatch, RoutableInput, RouteInputBatch, RouteOutput, RouterError, WorkerBatch, WorkerOutput};
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct TestInput {
@@ -146,10 +154,63 @@ mod tests {
         }
     }
 
+    struct AdapterInputBatch {
+        inputs: Vec<TestInput>,
+        completion: u64,
+    }
+
+    impl RouteInputBatch for AdapterInputBatch {
+        type Input = TestInput;
+        type Completion = u64;
+
+        fn into_parts(self) -> (Vec<Self::Input>, Self::Completion) {
+            (self.inputs, self.completion)
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct AdapterRoute {
+        snapshot_id: u128,
+        input: TestInput,
+    }
+
+    impl RouteOutput<TestInput> for AdapterRoute {
+        fn create(snapshot_id: u128, input: TestInput) -> Self {
+            Self { snapshot_id, input }
+        }
+    }
+
+    struct AdapterWorkerBatch {
+        inputs: Vec<AdapterRoute>,
+        completion: u64,
+    }
+
+    impl WorkerOutput<TestInput, u64> for AdapterWorkerBatch {
+        type Route = AdapterRoute;
+
+        fn create(inputs: Vec<Self::Route>, completion: u64) -> Self {
+            Self { inputs, completion }
+        }
+    }
+
+    #[test]
+    fn route_uses_caller_selected_input_route_and_worker_output_types() {
+        let (input_sender, input_receiver) = unbounded();
+        let (worker_sender, worker_receiver) = unbounded::<AdapterWorkerBatch>();
+        input_sender.send(AdapterInputBatch { inputs: vec![TestInput { value: 10, snapshot_ids: vec![11] }], completion: 29 }).unwrap();
+        drop(input_sender);
+
+        route(7, input_receiver, &[worker_sender]).unwrap();
+
+        let batch: AdapterWorkerBatch = worker_receiver.recv().unwrap();
+        assert_eq!(batch.inputs, vec![AdapterRoute { snapshot_id: 11, input: TestInput { value: 10, snapshot_ids: vec![11] } }]);
+        assert_eq!(batch.completion, 29);
+    }
+
     #[test]
     fn route_preserves_the_selected_input_ownership_type() {
         let (input_sender, input_receiver) = unbounded();
-        let (worker_sender, worker_receiver) = unbounded();
+        let (worker_sender, worker_receiver) = unbounded::<WorkerBatch<TestInput, ()>>();
         input_sender.send(InputBatch { inputs: vec![TestInput { value: 10, snapshot_ids: vec![11] }], completion: () }).unwrap();
         drop(input_sender);
 
@@ -173,7 +234,7 @@ mod tests {
     #[test]
     fn route_accepts_a_non_clone_event_behind_a_cloneable_wrapper() {
         let (input_sender, input_receiver) = unbounded();
-        let (worker_sender, worker_receiver) = unbounded();
+        let (worker_sender, worker_receiver) = unbounded::<WorkerBatch<SharedInput<NonCloneInput>, ()>>();
         input_sender
             .send(InputBatch { inputs: vec![SharedInput(Arc::new(NonCloneInput { value: 10, snapshot_ids: vec![11] }))], completion: () })
             .unwrap();
@@ -225,8 +286,9 @@ mod tests {
     #[test]
     fn route_rejects_an_empty_worker_list() {
         let (_input_sender, input_receiver) = unbounded::<InputBatch<TestInput, ()>>();
+        let worker_outputs = [] as [Sender<WorkerBatch<TestInput, ()>>; 0];
 
-        let result = route(7, input_receiver, &[]);
+        let result = route(7, input_receiver, &worker_outputs);
 
         assert_eq!(result, Err(RouterError::NoWorkers));
     }
@@ -234,7 +296,7 @@ mod tests {
     #[test]
     fn route_stops_normally_when_input_disconnects() {
         let (input_sender, input_receiver) = unbounded::<InputBatch<TestInput, ()>>();
-        let (worker_sender, _worker_receiver) = unbounded();
+        let (worker_sender, _worker_receiver) = unbounded::<WorkerBatch<TestInput, ()>>();
         drop(input_sender);
 
         let result = route(7, input_receiver, &[worker_sender]);
@@ -297,7 +359,7 @@ mod tests {
         let event = Arc::new(TestInput { value: 10, snapshot_ids: vec![11, 22, 33] });
         let weak = Arc::downgrade(&event);
         let (input_sender, input_receiver) = unbounded();
-        let mut worker_outputs = Vec::new();
+        let mut worker_outputs = Vec::<Sender<WorkerBatch<SharedInput<TestInput>, ()>>>::new();
         let mut worker_receivers = Vec::new();
         for _ in 0..4 {
             let (worker_sender, worker_receiver) = unbounded();
@@ -319,7 +381,7 @@ mod tests {
         let event = Arc::new(TestInput { value: 10, snapshot_ids: vec![11] });
         let weak = Arc::downgrade(&event);
         let (input_sender, input_receiver) = unbounded();
-        let (worker_sender, worker_receiver) = unbounded();
+        let (worker_sender, worker_receiver) = unbounded::<WorkerBatch<SharedInput<TestInput>, ()>>();
         input_sender.send(InputBatch { inputs: vec![SharedInput(event)], completion: () }).unwrap();
         drop(input_sender);
 
@@ -345,7 +407,7 @@ mod tests {
         let snapshot_ids = (0..3).map(|worker| snapshot_id_for_worker(7, 3, worker)).collect::<Vec<_>>();
         let completion_clone_count = Arc::new(AtomicUsize::new(0));
         let (input_sender, input_receiver) = unbounded();
-        let mut worker_outputs = Vec::new();
+        let mut worker_outputs = Vec::<Sender<WorkerBatch<TestInput, CompletionToken>>>::new();
         let mut worker_receivers = Vec::new();
         for _ in 0..3 {
             let (worker_sender, worker_receiver) = unbounded();
@@ -380,8 +442,8 @@ mod tests {
         let (input_sender, input_receiver) = unbounded();
         input_sender.send(InputBatch { inputs: vec![TestInput { value: 10, snapshot_ids: vec![snapshot_id] }], completion: () }).unwrap();
         drop(input_sender);
-        let (first_worker, _first_receiver) = unbounded();
-        let (second_worker, second_receiver) = unbounded();
+        let (first_worker, _first_receiver) = unbounded::<WorkerBatch<TestInput, ()>>();
+        let (second_worker, second_receiver) = unbounded::<WorkerBatch<TestInput, ()>>();
         drop(second_receiver);
 
         let result = route(7, input_receiver, &[first_worker, second_worker]);

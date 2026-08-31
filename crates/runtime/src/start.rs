@@ -3,7 +3,7 @@ use std::thread::JoinHandle;
 
 use crossbeam_channel::unbounded;
 
-use crate::{Router, Runtime, RuntimeConfig, RuntimeStage, StartError, Worker};
+use crate::{Router, Runtime, RuntimeStage, StartError, Worker};
 
 trait Deps {
     fn spawn<T, F>(&self, name: String, run: F) -> io::Result<JoinHandle<T>>
@@ -28,91 +28,74 @@ impl Deps for DefaultDeps {
 
 impl Runtime<(), (), ()> {
     /// Starts a complete router and worker topology.
-    pub fn start<R, W, RF, WF>(config: RuntimeConfig, router_factory: RF, worker_factory: WF) -> Result<StartedRuntime<R, W>, StartError>
+    pub fn start<R, W>(routers: Vec<R>, workers: Vec<W>) -> Result<StartedRuntime<R, W>, StartError>
     where
         R: Router<WorkerInput = W::Input>,
         W: Worker,
-        RF: FnMut(usize) -> R,
-        WF: FnMut(usize) -> W,
     {
-        start_with_deps(&DefaultDeps, config, router_factory, worker_factory)
+        start_with_deps(&DefaultDeps, routers, workers)
     }
 }
 
-fn start_with_deps<D, R, W, RF, WF>(
-    deps: &D,
-    config: RuntimeConfig,
-    mut router_factory: RF,
-    mut worker_factory: WF,
-) -> Result<StartedRuntime<R, W>, StartError>
+fn start_with_deps<D, R, W>(deps: &D, routers: Vec<R>, workers: Vec<W>) -> Result<StartedRuntime<R, W>, StartError>
 where
     D: Deps,
     R: Router<WorkerInput = W::Input>,
     W: Worker,
-    RF: FnMut(usize) -> R,
-    WF: FnMut(usize) -> W,
 {
-    if config.router_count == 0 {
+    if routers.is_empty() {
         return Err(StartError::NoRouters);
     }
-    if config.worker_count == 0 {
+    if workers.is_empty() {
         return Err(StartError::NoWorkers);
     }
 
-    let mut input_senders = Vec::with_capacity(config.router_count);
-    let mut input_receivers = Vec::with_capacity(config.router_count);
-    for _ in 0..config.router_count {
-        let (sender, receiver) = unbounded::<R::Input>();
-        input_senders.push(sender);
-        input_receivers.push(Some(receiver));
-    }
-    let mut worker_senders = Vec::with_capacity(config.worker_count);
-    let mut worker_receivers = Vec::with_capacity(config.worker_count);
-    for _ in 0..config.worker_count {
+    let (input_sender, input_receiver) = unbounded::<R::Input>();
+    let mut worker_senders = Vec::with_capacity(workers.len());
+    let mut worker_receivers = Vec::with_capacity(workers.len());
+    for _ in 0..workers.len() {
         let (sender, receiver) = unbounded::<W::Input>();
         worker_senders.push(sender);
         worker_receivers.push(Some(receiver));
     }
 
-    let mut workers = Vec::with_capacity(config.worker_count);
-    for index in 0..config.worker_count {
-        let worker = worker_factory(index);
+    let mut worker_handles = Vec::with_capacity(workers.len());
+    for (index, worker) in workers.into_iter().enumerate() {
         let receiver = worker_receivers[index].take().expect("each worker receiver is consumed exactly once");
         match deps.spawn(format!("contime-worker-{index}"), move || worker.run(receiver)) {
-            Ok(handle) => workers.push(handle),
+            Ok(handle) => worker_handles.push(handle),
             Err(source) => {
-                drop(input_senders);
-                drop(input_receivers);
+                drop(input_sender);
+                drop(input_receiver);
                 drop(worker_senders);
                 drop(worker_receivers);
-                join_ignoring_outcomes(workers);
+                join_ignoring_outcomes(worker_handles);
                 return Err(StartError::ThreadSpawn { stage: RuntimeStage::Worker { index }, source });
             }
         }
     }
     drop(worker_receivers);
 
-    let mut routers = Vec::with_capacity(config.router_count);
-    for index in 0..config.router_count {
-        let router = router_factory(index);
-        let router_input = input_receivers[index].take().expect("each router receiver is consumed exactly once");
+    let mut router_handles = Vec::with_capacity(routers.len());
+    for (index, router) in routers.into_iter().enumerate() {
+        let router_input = input_receiver.clone();
         let router_workers = worker_senders.clone();
         match deps.spawn(format!("contime-router-{index}"), move || router.run(router_input, router_workers)) {
-            Ok(handle) => routers.push(handle),
+            Ok(handle) => router_handles.push(handle),
             Err(source) => {
-                drop(input_senders);
-                drop(input_receivers);
+                drop(input_sender);
+                drop(input_receiver);
                 drop(worker_senders);
-                join_ignoring_outcomes(routers);
-                join_ignoring_outcomes(workers);
+                join_ignoring_outcomes(router_handles);
+                join_ignoring_outcomes(worker_handles);
                 return Err(StartError::ThreadSpawn { stage: RuntimeStage::Router { index }, source });
             }
         }
     }
 
-    drop(input_receivers);
+    drop(input_receiver);
     drop(worker_senders);
-    Ok(Runtime { inputs: input_senders, routers, workers })
+    Ok(Runtime { input: input_sender, routers: router_handles, workers: worker_handles })
 }
 
 fn join_ignoring_outcomes<E>(handles: Vec<JoinHandle<Result<(), E>>>) {
@@ -125,14 +108,13 @@ fn join_ignoring_outcomes<E>(handles: Vec<JoinHandle<Result<(), E>>>) {
 mod tests {
     use std::io;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
     use std::time::Duration;
 
     use crossbeam_channel::{unbounded, Receiver, Sender};
 
     use super::{start_with_deps, Deps};
-    use crate::{Router, Runtime, RuntimeConfig, StartError, Worker};
+    use crate::{Router, Runtime, StartError, Worker};
 
     struct TestRouter;
 
@@ -160,64 +142,37 @@ mod tests {
     }
 
     #[test]
-    fn zero_router_count_is_rejected_before_factories_run() {
-        let router_calls = AtomicUsize::new(0);
-        let worker_calls = AtomicUsize::new(0);
-        let result = Runtime::start(
-            RuntimeConfig { router_count: 0, worker_count: 1 },
-            |_| {
-                router_calls.fetch_add(1, Ordering::SeqCst);
-                TestRouter
-            },
-            |_| {
-                worker_calls.fetch_add(1, Ordering::SeqCst);
-                TestWorker
-            },
-        );
+    fn start_accepts_preassembled_router_and_worker_instances() {
+        let runtime = Runtime::start(vec![TestRouter, TestRouter], vec![TestWorker]).unwrap();
 
-        assert!(matches!(result, Err(StartError::NoRouters)));
-        assert_eq!(router_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(worker_calls.load(Ordering::SeqCst), 0);
+        let _input = runtime.input();
+        let report = runtime.shutdown();
+        assert_eq!(report.routers.len(), 2);
+        assert_eq!(report.workers.len(), 1);
     }
 
     #[test]
-    fn zero_worker_count_is_rejected_before_factories_run() {
-        let result = Runtime::start(RuntimeConfig { router_count: 1, worker_count: 0 }, |_| TestRouter, |_| TestWorker);
+    fn zero_router_count_is_rejected() {
+        let result = Runtime::start(Vec::<TestRouter>::new(), vec![TestWorker]);
+
+        assert!(matches!(result, Err(StartError::NoRouters)));
+    }
+
+    #[test]
+    fn zero_worker_count_is_rejected() {
+        let result = Runtime::start(vec![TestRouter], Vec::<TestWorker>::new());
 
         assert!(matches!(result, Err(StartError::NoWorkers)));
     }
 
     #[test]
-    fn startup_uses_stable_factory_indexes_and_thread_counts() {
-        let router_indexes = Arc::new(Mutex::new(Vec::new()));
-        let worker_indexes = Arc::new(Mutex::new(Vec::new()));
-        let router_indexes_for_factory = Arc::clone(&router_indexes);
-        let worker_indexes_for_factory = Arc::clone(&worker_indexes);
+    fn startup_preserves_the_supplied_process_counts() {
+        let runtime = Runtime::start(vec![TestRouter, TestRouter], vec![TestWorker, TestWorker, TestWorker, TestWorker]).unwrap();
 
-        let mut runtime = Runtime::start(
-            RuntimeConfig { router_count: 2, worker_count: 4 },
-            move |index| {
-                router_indexes_for_factory.lock().unwrap().push(index);
-                TestRouter
-            },
-            move |index| {
-                worker_indexes_for_factory.lock().unwrap().push(index);
-                TestWorker
-            },
-        )
-        .unwrap();
+        let report = runtime.shutdown();
 
-        assert_eq!(runtime.routers.len(), 2);
-        assert_eq!(runtime.workers.len(), 4);
-        runtime.inputs.clear();
-        for handle in runtime.routers.drain(..) {
-            assert_eq!(handle.join().unwrap(), Ok(()));
-        }
-        for handle in runtime.workers.drain(..) {
-            assert_eq!(handle.join().unwrap(), Ok(()));
-        }
-        assert_eq!(*router_indexes.lock().unwrap(), vec![0, 1]);
-        assert_eq!(*worker_indexes.lock().unwrap(), vec![0, 1, 2, 3]);
+        assert_eq!(report.routers.len(), 2);
+        assert_eq!(report.workers.len(), 4);
     }
 
     struct StubDeps {
@@ -283,9 +238,8 @@ mod tests {
 
         let result = start_with_deps(
             &StubDeps::failing_on(2),
-            RuntimeConfig { router_count: 1, worker_count: 3 },
-            |_| ExitRouter { exited: router_exited.clone() },
-            |_| ExitWorker { exited: worker_exited.clone() },
+            vec![ExitRouter { exited: router_exited }],
+            (0..3).map(|_| ExitWorker { exited: worker_exited.clone() }).collect(),
         );
 
         assert!(matches!(result, Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Worker { index: 2 }, .. })));
@@ -300,9 +254,8 @@ mod tests {
 
         let result = start_with_deps(
             &StubDeps::failing_on(3),
-            RuntimeConfig { router_count: 2, worker_count: 2 },
-            |_| ExitRouter { exited: router_exited.clone() },
-            |_| ExitWorker { exited: worker_exited.clone() },
+            (0..2).map(|_| ExitRouter { exited: router_exited.clone() }).collect(),
+            (0..2).map(|_| ExitWorker { exited: worker_exited.clone() }).collect(),
         );
 
         assert!(matches!(result, Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Router { index: 1 }, .. })));

@@ -1,22 +1,22 @@
 use crossbeam_channel::Sender;
 
-use crate::types::{ApiError, InputBatch, RejectionMessage};
+use crate::types::{ApiError, ApplyOutput, RejectionMessage};
 
-trait Deps<IL, R> {
+trait Deps<O> {
     type Error;
 
-    fn forward(&self, batch: InputBatch<IL, R>) -> Result<(), Self::Error>;
+    fn forward(&self, output: O) -> Result<(), Self::Error>;
 }
 
-struct DefaultDeps<'a, IL, R> {
-    output: &'a Sender<InputBatch<IL, R>>,
+struct DefaultDeps<'a, O> {
+    output: &'a Sender<O>,
 }
 
-impl<IL, R> Deps<IL, R> for DefaultDeps<'_, IL, R> {
+impl<O> Deps<O> for DefaultDeps<'_, O> {
     type Error = ApiError;
 
-    fn forward(&self, batch: InputBatch<IL, R>) -> Result<(), Self::Error> {
-        self.output.send(batch).map_err(|_| ApiError::OutputChannelClosed)
+    fn forward(&self, output: O) -> Result<(), Self::Error> {
+        self.output.send(output).map_err(|_| ApiError::OutputChannelClosed)
     }
 }
 
@@ -25,30 +25,36 @@ impl<IL, R> Deps<IL, R> for DefaultDeps<'_, IL, R> {
 /// The batch owns the rejection sender, allowing channel closure to signal
 /// that every downstream copy of the batch has finished processing. This API
 /// does not prescribe whether each input is owned, shared, or tracked.
-pub fn send<I, R, Input, Inputs>(
-    output: &Sender<InputBatch<I, R>>,
+pub fn send<O, I, R, Input, Inputs>(
+    output: &Sender<O>,
     inputs: Inputs,
     rejection_sender: Sender<RejectionMessage<R>>,
 ) -> Result<(), ApiError>
 where
     Inputs: IntoIterator<Item = Input>,
     Input: Into<I>,
+    O: ApplyOutput<I, R>,
 {
     send_with_deps(&DefaultDeps { output }, inputs, rejection_sender)
 }
 
-fn send_with_deps<D, I, R, Input, Inputs>(deps: &D, inputs: Inputs, rejection_sender: Sender<RejectionMessage<R>>) -> Result<(), D::Error>
+fn send_with_deps<D, O, I, R, Input, Inputs>(
+    deps: &D,
+    inputs: Inputs,
+    rejection_sender: Sender<RejectionMessage<R>>,
+) -> Result<(), D::Error>
 where
-    D: Deps<I, R>,
+    D: Deps<O>,
     Inputs: IntoIterator<Item = Input>,
     Input: Into<I>,
+    O: ApplyOutput<I, R>,
 {
     let inputs = inputs.into_iter().map(Into::into).collect::<Vec<_>>();
     if inputs.is_empty() {
         return Ok(());
     }
 
-    deps.forward(InputBatch { inputs, rejection_sender })
+    deps.forward(O::create(inputs, rejection_sender))
 }
 
 #[cfg(test)]
@@ -61,7 +67,7 @@ mod tests {
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use super::{send, send_with_deps, Deps};
-    use crate::types::{ApiError, InputBatch};
+    use crate::types::{ApiError, ApplyOutput, InputBatch, RejectionMessage};
 
     #[repr(C)]
     struct BenchmarkEvent<const PAYLOAD_BYTES: usize> {
@@ -121,7 +127,7 @@ mod tests {
         batches: RefCell<Vec<InputBatch<u128, ()>>>,
     }
 
-    impl Deps<u128, ()> for StubDeps {
+    impl Deps<InputBatch<u128, ()>> for StubDeps {
         type Error = StubError;
 
         fn forward(&self, batch: InputBatch<u128, ()>) -> Result<(), Self::Error> {
@@ -132,12 +138,37 @@ mod tests {
 
     struct FailingDeps;
 
-    impl Deps<u128, ()> for FailingDeps {
+    impl Deps<InputBatch<u128, ()>> for FailingDeps {
         type Error = StubError;
 
         fn forward(&self, _batch: InputBatch<u128, ()>) -> Result<(), Self::Error> {
             Err(StubError)
         }
+    }
+
+    #[derive(Debug)]
+    struct AdapterBatch {
+        inputs: Vec<u128>,
+        rejection_sender: crossbeam_channel::Sender<RejectionMessage<()>>,
+    }
+
+    impl ApplyOutput<u128, ()> for AdapterBatch {
+        fn create(inputs: Vec<u128>, rejection_sender: crossbeam_channel::Sender<RejectionMessage<()>>) -> Self {
+            Self { inputs, rejection_sender }
+        }
+    }
+
+    #[test]
+    fn send_constructs_the_caller_selected_output_type() {
+        let (output, output_receiver) = unbounded::<AdapterBatch>();
+        let (rejection_sender, rejection_receiver) = unbounded();
+
+        send(&output, [3_u128, 5, 8], rejection_sender).unwrap();
+
+        let batch = output_receiver.recv().unwrap();
+        assert_eq!(batch.inputs, vec![3, 5, 8]);
+        drop(batch.rejection_sender);
+        assert_eq!(rejection_receiver.try_recv(), Err(TryRecvError::Disconnected));
     }
 
     #[test]

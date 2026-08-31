@@ -56,9 +56,6 @@ pub trait Snapshot: Clone {
 
     /// Updates the materialized state's logical time after applying a bucket.
     fn set_time(&mut self, time: Self::Time);
-
-    /// Returns a conservative upper bound for the snapshot's retained bytes.
-    fn conservative_size(&self) -> u64;
 }
 
 /// One complete same-time event bucket.
@@ -124,7 +121,6 @@ where
     pub key: CheckpointKey<S::Time>,
     pub snapshot: S,
     pub history_event_count: u64,
-    pub(crate) retained_bytes: u64,
 }
 
 /// Materialized checkpoints for one externally scheduled snapshot ID.
@@ -135,7 +131,6 @@ where
 {
     pub(crate) snapshot_id: u128,
     pub(crate) interval: u64,
-    pub(crate) retained_bytes: u64,
     pub(crate) checkpoints: VecDeque<Checkpoint<S>>,
 }
 
@@ -151,14 +146,11 @@ where
     pub(crate) applied_events: u64,
     pub(crate) events_since_checkpoint: u64,
     pub(crate) next_checkpoint_index: usize,
-    pub(crate) retained_bytes_before: u64,
 }
 
 /// The effect of one apply-time replay on retained checkpoint state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ApplyResult {
-    /// Signed change in conservatively measured retained checkpoint bytes.
-    pub retained_bytes_delta: i64,
     /// Number of canonical events applied during this replay.
     pub applied_events: u64,
     /// Total checkpoints retained after this replay.

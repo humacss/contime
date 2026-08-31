@@ -1,12 +1,10 @@
 use ahash::AHashMap;
 
-use crate::memory::Memory;
 use crate::types::{complete_snapshot, Checkpoints, Completion, SnapshotSlot};
 
 pub(crate) fn update_snapshot<S, K, C, R>(
     snapshot_id: u128,
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
-    memory: &mut Memory,
     checkpoints_config: &K::Config,
     checkpoints_context: &mut K::Context,
 ) where
@@ -16,14 +14,11 @@ pub(crate) fn update_snapshot<S, K, C, R>(
     let slot = snapshots.get_mut(&snapshot_id).expect("dirty schedule referenced a missing event store");
 
     if slot.checkpoints.is_none() {
-        let created = K::create(snapshot_id, checkpoints_config, memory.remaining());
-        memory.apply_delta(created.retained_bytes_delta);
-        slot.checkpoints = Some(created.checkpoints);
+        slot.checkpoints = Some(K::create(snapshot_id, checkpoints_config));
     }
 
     let checkpoints = slot.checkpoints.as_mut().expect("checkpoint store was not initialized");
-    let result = checkpoints.update(&slot.events, checkpoints_context, memory.remaining());
-    memory.apply_delta(result.retained_bytes_delta);
+    checkpoints.update(&mut slot.events, checkpoints_context);
 
     for request in slot.waiters.drain(..) {
         complete_snapshot(request);
@@ -39,11 +34,25 @@ mod tests {
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use super::update_snapshot;
-    use crate::memory::Memory;
     use crate::types::{new_request, register_waiter, SnapshotSlot};
-    use crate::{CheckpointResult, Checkpoints, CheckpointsCreated, WorkerRejection};
+    use crate::Checkpoints;
 
     struct TestEvents(Vec<u128>);
+
+    struct AcknowledgingCheckpoints;
+
+    impl Checkpoints<TestEvents> for AcknowledgingCheckpoints {
+        type Config = ();
+        type Context = ();
+
+        fn create(_snapshot_id: u128, _config: &()) -> Self {
+            Self
+        }
+
+        fn update(&mut self, events: &mut TestEvents, _context: &mut ()) {
+            events.0.clear();
+        }
+    }
 
     #[derive(Default)]
     struct TestCheckpoints {
@@ -54,22 +63,21 @@ mod tests {
         type Config = ();
         type Context = Vec<usize>;
 
-        fn create(_snapshot_id: u128, _config: &(), _limit: u64) -> CheckpointsCreated<Self> {
-            CheckpointsCreated { checkpoints: Self::default(), retained_bytes_delta: 8 }
+        fn create(_snapshot_id: u128, _config: &()) -> Self {
+            Self::default()
         }
 
-        fn update(&mut self, events: &TestEvents, context: &mut Vec<usize>, _limit: u64) -> CheckpointResult {
+        fn update(&mut self, events: &mut TestEvents, context: &mut Vec<usize>) {
             self.event_count = events.0.len();
             context.push(self.event_count);
-            CheckpointResult { retained_bytes_delta: 16 }
         }
     }
 
     fn snapshot() -> (
-        AHashMap<u128, SnapshotSlot<TestEvents, TestCheckpoints, crossbeam_channel::Sender<Vec<WorkerRejection<()>>>, ()>>,
-        crossbeam_channel::Receiver<Vec<WorkerRejection<()>>>,
+        AHashMap<u128, SnapshotSlot<TestEvents, TestCheckpoints, crossbeam_channel::Sender<Vec<()>>, ()>>,
+        crossbeam_channel::Receiver<Vec<()>>,
     ) {
-        let (completion, responses) = unbounded();
+        let (completion, responses) = unbounded::<Vec<()>>();
         let request = new_request(completion);
         let mut slot = SnapshotSlot { events: TestEvents((0..1_000).collect()), checkpoints: None, waiters: Vec::new() };
         register_waiter(&mut slot, &request);
@@ -81,14 +89,28 @@ mod tests {
     #[test]
     fn checkpoint_update_reads_events_and_completes_snapshot_waiters() {
         let (mut snapshots, responses) = snapshot();
-        let mut memory = Memory::new(1_000);
         let mut context = Vec::new();
 
-        update_snapshot(7, &mut snapshots, &mut memory, &(), &mut context);
+        update_snapshot(7, &mut snapshots, &(), &mut context);
 
         assert_eq!(context, vec![1_000]);
         assert_eq!(snapshots.get(&7).unwrap().checkpoints.as_ref().unwrap().event_count, 1_000);
-        assert_eq!(memory.used(), 24);
+        assert_eq!(responses.try_recv(), Err(TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn checkpoint_update_can_acknowledge_mutable_event_history() {
+        let (completion, responses) = unbounded::<Vec<()>>();
+        let request = new_request(completion);
+        let mut slot =
+            SnapshotSlot { events: TestEvents(vec![1, 2, 3]), checkpoints: None::<AcknowledgingCheckpoints>, waiters: Vec::new() };
+        register_waiter(&mut slot, &request);
+        let mut snapshots = AHashMap::new();
+        snapshots.insert(7, slot);
+
+        update_snapshot(7, &mut snapshots, &(), &mut ());
+
+        assert!(snapshots.get(&7).unwrap().events.0.is_empty());
         assert_eq!(responses.try_recv(), Err(TryRecvError::Disconnected));
     }
 
@@ -100,10 +122,9 @@ mod tests {
             bencher.iter_batched(
                 || snapshot().0,
                 |mut snapshots| {
-                    let mut memory = Memory::new(1_000_000);
                     let mut context = Vec::new();
-                    update_snapshot(7, &mut snapshots, &mut memory, &(), &mut context);
-                    black_box((snapshots, memory, context));
+                    update_snapshot(7, &mut snapshots, &(), &mut context);
+                    black_box((snapshots, context));
                 },
                 BatchSize::LargeInput,
             );

@@ -4,38 +4,29 @@ use crossbeam_channel::Sender;
 
 use crate::Runtime;
 
-/// An apply input returned when its selected router is unavailable.
+/// An apply input returned when the shared router queue is unavailable.
 #[derive(Debug, Eq, PartialEq)]
 pub struct RuntimeSendError<I> {
-    pub router_index: usize,
     pub input: I,
 }
 
 impl<I> fmt::Display for RuntimeSendError<I> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "runtime router {} is unavailable", self.router_index)
+        formatter.write_str("the runtime input queue is unavailable")
     }
 }
 
 impl<I> std::error::Error for RuntimeSendError<I> where I: fmt::Debug {}
 
 impl<I, RE, WE> Runtime<I, RE, WE> {
-    /// Borrows every router input sender in stable router-index order.
-    pub fn inputs(&self) -> &[Sender<I>] {
-        &self.inputs
+    /// Borrows the shared input sender consumed by all routers.
+    pub fn input(&self) -> &Sender<I> {
+        &self.input
     }
 
-    /// Borrows one router input sender by its stable index.
-    pub fn input(&self, router_index: usize) -> Option<&Sender<I>> {
-        self.inputs.get(router_index)
-    }
-
-    /// Sends one opaque apply input to the explicitly selected router.
-    pub fn send(&self, router_index: usize, input: I) -> Result<(), RuntimeSendError<I>> {
-        let Some(sender) = self.input(router_index) else {
-            return Err(RuntimeSendError { router_index, input });
-        };
-        sender.send(input).map_err(|error| RuntimeSendError { router_index, input: error.0 })
+    /// Sends one opaque apply input to the shared router queue.
+    pub fn send(&self, input: I) -> Result<(), RuntimeSendError<I>> {
+        self.input.send(input).map_err(|error| RuntimeSendError { input: error.0 })
     }
 }
 
@@ -46,7 +37,7 @@ mod tests {
 
     use crossbeam_channel::{Receiver, Sender};
 
-    use crate::{Router, Runtime, RuntimeConfig, Worker};
+    use crate::{Router, Runtime, Worker};
 
     struct RelayRouter {
         index: usize,
@@ -82,22 +73,14 @@ mod tests {
     }
 
     fn test_runtime(router_count: usize, received: Arc<Mutex<Vec<u64>>>, received_counts: Arc<Vec<AtomicUsize>>) -> Runtime<u64, (), ()> {
-        Runtime::start(
-            RuntimeConfig { router_count, worker_count: 1 },
-            move |index| RelayRouter { index, received_counts: Arc::clone(&received_counts) },
-            move |_| RecordingWorker { received: Arc::clone(&received) },
-        )
-        .unwrap()
+        let routers = (0..router_count).map(|index| RelayRouter { index, received_counts: Arc::clone(&received_counts) }).collect();
+        Runtime::start(routers, vec![RecordingWorker { received }]).unwrap()
     }
 
-    fn finish_test_runtime(mut runtime: Runtime<u64, (), ()>) {
-        runtime.inputs.clear();
-        for handle in runtime.routers.drain(..) {
-            assert_eq!(handle.join().unwrap(), Ok(()));
-        }
-        for handle in runtime.workers.drain(..) {
-            assert_eq!(handle.join().unwrap(), Ok(()));
-        }
+    fn finish_test_runtime(runtime: Runtime<u64, (), ()>) {
+        let report = runtime.shutdown();
+        assert!(report.routers.iter().all(|outcome| matches!(outcome, crate::ThreadOutcome::Completed)));
+        assert!(report.workers.iter().all(|outcome| matches!(outcome, crate::ThreadOutcome::Completed)));
     }
 
     #[test]
@@ -106,7 +89,7 @@ mod tests {
         let counts = Arc::new(vec![AtomicUsize::new(0)]);
         let runtime = test_runtime(1, Arc::clone(&received), counts);
 
-        runtime.send(0, 42).unwrap();
+        runtime.send(42).unwrap();
         finish_test_runtime(runtime);
 
         assert_eq!(*received.lock().unwrap(), vec![42]);
@@ -118,50 +101,47 @@ mod tests {
         let counts = Arc::new(vec![AtomicUsize::new(0)]);
         let runtime = test_runtime(1, Arc::clone(&received), counts);
 
-        runtime.input(0).unwrap().send(7).unwrap();
+        runtime.input().send(7).unwrap();
         finish_test_runtime(runtime);
 
         assert_eq!(*received.lock().unwrap(), vec![7]);
     }
 
     #[test]
-    fn inputs_exposes_one_sender_per_router() {
+    fn one_input_sender_feeds_every_router() {
         let received = Arc::new(Mutex::new(Vec::new()));
         let counts = Arc::new(vec![AtomicUsize::new(0), AtomicUsize::new(0)]);
         let runtime = test_runtime(2, received, counts);
 
-        assert_eq!(runtime.inputs().len(), 2);
+        runtime.input().send(7).unwrap();
         finish_test_runtime(runtime);
     }
 
     #[test]
-    fn send_returns_the_input_when_the_router_index_is_invalid() {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let counts = Arc::new(vec![AtomicUsize::new(0)]);
-        let runtime = test_runtime(1, received, counts);
+    fn send_returns_the_input_when_the_shared_queue_is_closed() {
+        let (input, receiver) = crossbeam_channel::unbounded();
+        drop(receiver);
+        let runtime = Runtime::<u64, (), ()> { input, routers: Vec::new(), workers: Vec::new() };
 
-        let error = runtime.send(1, 42).unwrap_err();
+        let error = runtime.send(42).unwrap_err();
 
-        assert_eq!(error.router_index, 1);
         assert_eq!(error.input, 42);
-        finish_test_runtime(runtime);
     }
 
     #[test]
-    fn indexed_router_queues_deliver_every_input_to_the_selected_router() {
+    fn shared_router_queue_delivers_every_input_exactly_once() {
         let received = Arc::new(Mutex::new(Vec::new()));
         let counts = Arc::new(vec![AtomicUsize::new(0), AtomicUsize::new(0)]);
         let runtime = test_runtime(2, Arc::clone(&received), Arc::clone(&counts));
 
         for value in 0..1_000 {
-            runtime.send(value as usize % 2, value).unwrap();
+            runtime.send(value).unwrap();
         }
         finish_test_runtime(runtime);
 
         let mut received = received.lock().unwrap();
         received.sort_unstable();
         assert_eq!(*received, (0..1_000).collect::<Vec<_>>());
-        assert_eq!(counts[0].load(Ordering::Relaxed), 500);
-        assert_eq!(counts[1].load(Ordering::Relaxed), 500);
+        assert_eq!(counts.iter().map(|count| count.load(Ordering::Relaxed)).sum::<usize>(), 1_000);
     }
 }

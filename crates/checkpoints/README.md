@@ -20,11 +20,10 @@ independent traits.
 - Preserve a full tip as a fixed checkpoint and append the next tip.
 - Correct existing checkpoints in place when late events require replay.
 - Never insert a new checkpoint between existing checkpoints.
-- Report the conservative retained checkpoint-memory delta.
 
 Historical queries, horizon pruning, worker scheduling, event mutation,
-completion handling, and memory-limit enforcement are intentionally deferred.
-The worker owns its memory limit; this crate reports checkpoint deltas.
+completion handling, memory accounting, and memory-limit enforcement are
+intentionally deferred. Consumers select snapshot ownership and memory policy.
 
 ## Unit benchmark snapshot
 
@@ -44,9 +43,8 @@ outside the measurement.
 
 The checkpoint-store benchmark performs 1,000 independent sequential replay
 sessions with an interval of 100. It includes base-checkpoint cloning, interval
-accounting, in-place tip movement, checkpoint appends, and retained-memory
-delta calculation. Store construction and final destruction are outside the
-measurement.
+accounting, in-place tip movement, and checkpoint appends. Store construction
+and final destruction are outside the measurement.
 
 The replay benchmarks include canonical iteration, timestamp grouping,
 wrapper application, checkpoint interval handling, and final tip commit. Their

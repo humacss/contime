@@ -78,10 +78,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::hint::black_box;
-    use std::sync::Arc;
-
     use criterion::{BatchSize, Criterion};
+    use std::hint::black_box;
 
     use super::EventHistory;
     use crate::{Event, EventKey};
@@ -103,8 +101,8 @@ mod tests {
         }
     }
 
-    fn event(id: u128, time: i64) -> Arc<TestEvent> {
-        Arc::new(TestEvent { id, time })
+    fn event(id: u128, time: i64) -> TestEvent {
+        TestEvent { id, time }
     }
 
     fn populated_history() -> EventHistory<TestEvent> {

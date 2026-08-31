@@ -1,6 +1,5 @@
 use std::collections::{btree_map, vec_deque, BTreeMap, VecDeque};
 use std::iter::Peekable;
-use std::sync::Arc;
 
 use ahash::AHashSet;
 
@@ -47,8 +46,8 @@ pub struct EventHistory<E>
 where
     E: Event,
 {
-    pub(crate) ordered: VecDeque<(EventKey<E::Time>, Arc<E>)>,
-    pub(crate) late: BTreeMap<EventKey<E::Time>, Arc<E>>,
+    pub(crate) ordered: VecDeque<(EventKey<E::Time>, E)>,
+    pub(crate) late: BTreeMap<EventKey<E::Time>, E>,
     pub(crate) retained_ids: AHashSet<u128>,
     pub(crate) dirty_time: E::Time,
 }
@@ -67,8 +66,8 @@ pub struct EventHistoryIter<'a, E>
 where
     E: Event,
 {
-    pub(crate) ordered: Peekable<vec_deque::Iter<'a, (EventKey<E::Time>, Arc<E>)>>,
-    pub(crate) late: Peekable<btree_map::Iter<'a, EventKey<E::Time>, Arc<E>>>,
+    pub(crate) ordered: Peekable<vec_deque::Iter<'a, (EventKey<E::Time>, E)>>,
+    pub(crate) late: Peekable<btree_map::Iter<'a, EventKey<E::Time>, E>>,
 }
 
 /// A canonical merged view beginning at a history boundary.
@@ -76,6 +75,6 @@ pub struct EventHistoryRangeIter<'a, E>
 where
     E: Event,
 {
-    pub(crate) ordered: Peekable<vec_deque::Iter<'a, (EventKey<E::Time>, Arc<E>)>>,
-    pub(crate) late: Peekable<btree_map::Range<'a, EventKey<E::Time>, Arc<E>>>,
+    pub(crate) ordered: Peekable<vec_deque::Iter<'a, (EventKey<E::Time>, E)>>,
+    pub(crate) late: Peekable<btree_map::Range<'a, EventKey<E::Time>, E>>,
 }

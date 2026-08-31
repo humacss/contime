@@ -2,11 +2,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// Worker-local scheduling and memory policy.
+/// Worker-local replay scheduling policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkerConfig {
-    /// Maximum retained bytes owned by this worker's event and checkpoint stores.
-    pub memory_limit: u64,
     /// Maximum time changed events may wait before their snapshot is replayed.
     pub maximum_dirty_age: Duration,
     /// Maximum non-overdue snapshots replayed after each received batch.
@@ -24,24 +22,43 @@ pub struct RoutedInput<I> {
     pub input: I,
 }
 
-/// One independently admitted worker message.
+/// A caller-selected route consumed by a worker.
+pub trait RouteInput {
+    type Input;
+
+    fn into_parts(self) -> (u128, Self::Input);
+}
+
+impl<I> RouteInput for RoutedInput<I> {
+    type Input = I;
+
+    fn into_parts(self) -> (u128, Self::Input) {
+        (self.snapshot_id, self.input)
+    }
+}
+
+/// One worker apply message.
 #[derive(Debug)]
 pub struct ApplyBatch<I, C> {
     pub inputs: Vec<RoutedInput<I>>,
     pub completion: C,
 }
 
-/// The event information required for worker-local memory admission.
-pub trait WorkerInput {
-    fn input_id(&self) -> u128;
-    fn conservative_size(&self) -> u64;
+/// A caller-selected apply message consumed by a worker.
+pub trait ApplyInput {
+    type Route: RouteInput;
+    type Completion;
+
+    fn into_parts(self) -> (Vec<Self::Route>, Self::Completion);
 }
 
-/// A rejection owned either by worker admission or by the event store.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WorkerRejection<R> {
-    MemoryFull { input_id: u128 },
-    Event(R),
+impl<I, C> ApplyInput for ApplyBatch<I, C> {
+    type Route = RoutedInput<I>;
+    type Completion = C;
+
+    fn into_parts(self) -> (Vec<Self::Route>, Self::Completion) {
+        (self.inputs, self.completion)
+    }
 }
 
 /// A request-scoped response handle forwarded opaquely through the router.
@@ -49,26 +66,18 @@ pub enum WorkerRejection<R> {
 /// Successful completion is represented by dropping the handle without
 /// calling `reject`.
 pub trait Completion<R> {
-    fn reject(self, rejections: Vec<WorkerRejection<R>>);
+    fn reject(self, rejections: Vec<R>);
 }
 
-impl<R> Completion<R> for crossbeam_channel::Sender<Vec<WorkerRejection<R>>> {
-    fn reject(self, rejections: Vec<WorkerRejection<R>>) {
+impl<R> Completion<R> for crossbeam_channel::Sender<Vec<R>> {
+    fn reject(self, rejections: Vec<R>) {
         let _ = self.send(rejections);
     }
-}
-
-/// A newly initialized event store and its retained-memory change.
-#[derive(Debug)]
-pub struct EventsCreated<S> {
-    pub events: S,
-    pub retained_bytes_delta: i64,
 }
 
 /// The result of inserting one input into the canonical event store.
 #[derive(Debug)]
 pub struct EventInsert<R> {
-    pub retained_bytes_delta: i64,
     pub changed: bool,
     pub rejections: Vec<R>,
 }
@@ -78,16 +87,9 @@ pub trait Events<I>: Sized {
     type Config;
     type Rejection;
 
-    fn create(snapshot_id: u128, config: &Self::Config, retained_bytes_limit: u64) -> Option<EventsCreated<Self>>;
+    fn create(snapshot_id: u128, config: &Self::Config) -> Self;
 
-    fn insert(&mut self, input: I, retained_bytes_limit: u64) -> EventInsert<Self::Rejection>;
-}
-
-/// A newly initialized checkpoint store and its retained-memory change.
-#[derive(Debug)]
-pub struct CheckpointsCreated<S> {
-    pub checkpoints: S,
-    pub retained_bytes_delta: i64,
+    fn insert(&mut self, input: I) -> EventInsert<Self::Rejection>;
 }
 
 /// Materialized per-snapshot checkpoint storage.
@@ -97,15 +99,9 @@ pub trait Checkpoints<S>: Sized {
     type Config;
     type Context;
 
-    fn create(snapshot_id: u128, config: &Self::Config, retained_bytes_limit: u64) -> CheckpointsCreated<Self>;
+    fn create(snapshot_id: u128, config: &Self::Config) -> Self;
 
-    fn update(&mut self, events: &S, context: &mut Self::Context, retained_bytes_limit: u64) -> CheckpointResult;
-}
-
-/// The retained-memory change produced by one checkpoint update.
-#[derive(Debug)]
-pub struct CheckpointResult {
-    pub retained_bytes_delta: i64,
+    fn update(&mut self, events: &mut S, context: &mut Self::Context);
 }
 
 pub(crate) type Request<C, R> = Rc<RefCell<PendingRequest<C, R>>>;
@@ -119,7 +115,7 @@ pub(crate) struct SnapshotSlot<S, K, C, R> {
 pub(crate) struct PendingRequest<C, R> {
     pub(crate) completion: Option<C>,
     pub(crate) pending_snapshots: usize,
-    pub(crate) rejections: Vec<WorkerRejection<R>>,
+    pub(crate) rejections: Vec<R>,
 }
 
 pub(crate) fn new_request<C, R>(completion: C) -> Request<C, R> {

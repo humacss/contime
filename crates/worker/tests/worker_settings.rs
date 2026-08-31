@@ -1,23 +1,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use contime_worker::{
-    work, ApplyBatch, CheckpointResult, Checkpoints, CheckpointsCreated, EventInsert, Events, EventsCreated, RoutedInput, WorkerConfig,
-    WorkerInput, WorkerRejection,
-};
+use contime_worker::{work, ApplyBatch, Checkpoints, EventInsert, Events, RoutedInput, WorkerConfig};
 use crossbeam_channel::unbounded;
 
 struct TestInput(u128);
-
-impl WorkerInput for TestInput {
-    fn input_id(&self) -> u128 {
-        self.0
-    }
-
-    fn conservative_size(&self) -> u64 {
-        32
-    }
-}
 
 #[derive(Default)]
 struct TestEvents(Vec<u128>);
@@ -26,13 +13,13 @@ impl Events<TestInput> for TestEvents {
     type Config = ();
     type Rejection = ();
 
-    fn create(_snapshot_id: u128, _config: &(), _limit: u64) -> Option<EventsCreated<Self>> {
-        Some(EventsCreated { events: Self::default(), retained_bytes_delta: 0 })
+    fn create(_snapshot_id: u128, _config: &()) -> Self {
+        Self::default()
     }
 
-    fn insert(&mut self, input: TestInput, _limit: u64) -> EventInsert<()> {
+    fn insert(&mut self, input: TestInput) -> EventInsert<()> {
         self.0.push(input.0);
-        EventInsert { retained_bytes_delta: 32, changed: true, rejections: Vec::new() }
+        EventInsert { changed: true, rejections: Vec::new() }
     }
 }
 
@@ -42,17 +29,16 @@ impl Checkpoints<TestEvents> for TestCheckpoints {
     type Config = ();
     type Context = Arc<Mutex<Vec<Vec<u128>>>>;
 
-    fn create(_snapshot_id: u128, _config: &(), _limit: u64) -> CheckpointsCreated<Self> {
-        CheckpointsCreated { checkpoints: Self, retained_bytes_delta: 0 }
+    fn create(_snapshot_id: u128, _config: &()) -> Self {
+        Self
     }
 
-    fn update(&mut self, events: &TestEvents, context: &mut Self::Context, _limit: u64) -> CheckpointResult {
+    fn update(&mut self, events: &mut TestEvents, context: &mut Self::Context) {
         context.lock().unwrap().push(events.0.clone());
-        CheckpointResult { retained_bytes_delta: 0 }
     }
 }
 
-type TestCompletion = crossbeam_channel::Sender<Vec<WorkerRejection<()>>>;
+type TestCompletion = crossbeam_channel::Sender<Vec<()>>;
 
 fn batch(input_id: u128) -> ApplyBatch<TestInput, TestCompletion> {
     batch_for_snapshots(input_id, &[7])
@@ -68,7 +54,6 @@ fn batch_for_snapshots(input_id: u128, snapshot_ids: &[u128]) -> ApplyBatch<Test
 
 fn config(replays_per_receive: usize) -> WorkerConfig {
     WorkerConfig {
-        memory_limit: 1_000_000,
         maximum_dirty_age: Duration::from_secs(60),
         replays_per_receive,
         deadline_compaction_minimum: 4,
@@ -84,7 +69,7 @@ fn run_hot_snapshot(replays_per_receive: usize) -> Vec<Vec<u128>> {
     drop(sender);
 
     let context = Arc::new(Mutex::new(Vec::new()));
-    work::<TestInput, TestEvents, TestCheckpoints, _>(receiver, config(replays_per_receive), (), (), Arc::clone(&context));
+    work::<_, TestEvents, TestCheckpoints>(receiver, config(replays_per_receive), (), (), Arc::clone(&context));
 
     Arc::try_unwrap(context).unwrap().into_inner().unwrap()
 }
@@ -111,7 +96,7 @@ fn replay_budget_controls_updates_across_four_hot_snapshots() {
         drop(sender);
 
         let context = Arc::new(Mutex::new(Vec::new()));
-        work::<TestInput, TestEvents, TestCheckpoints, _>(receiver, config(replays_per_receive), (), (), Arc::clone(&context));
+        work::<_, TestEvents, TestCheckpoints>(receiver, config(replays_per_receive), (), (), Arc::clone(&context));
         let replay_count = context.lock().unwrap().len();
         replay_count
     }
@@ -131,7 +116,7 @@ fn zero_dirty_age_replays_without_an_additional_input() {
     worker_config.maximum_dirty_age = Duration::ZERO;
 
     let worker = std::thread::spawn(move || {
-        work::<TestInput, TestEvents, TestCheckpoints, _>(receiver, worker_config, (), (), worker_context);
+        work::<_, TestEvents, TestCheckpoints>(receiver, worker_config, (), (), worker_context);
     });
 
     sender.send(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestInput(1) }], completion }).unwrap();

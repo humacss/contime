@@ -25,33 +25,51 @@ impl<const PAYLOAD_BYTES: usize> Event for BenchmarkEvent<PAYLOAD_BYTES> {
     }
 }
 
+#[derive(Clone)]
+struct SharedEvent<const PAYLOAD_BYTES: usize>(Arc<BenchmarkEvent<PAYLOAD_BYTES>>);
+
+impl<const PAYLOAD_BYTES: usize> Event for SharedEvent<PAYLOAD_BYTES> {
+    type Time = i64;
+
+    fn event_id(&self) -> u128 {
+        self.0.id
+    }
+
+    fn time(&self) -> Self::Time {
+        self.0.time
+    }
+}
+
 const _: () = assert!(std::mem::size_of::<BenchmarkEvent<8>>() == 32);
 const _: () = assert!(std::mem::size_of::<BenchmarkEvent<40>>() == 64);
 const _: () = assert!(std::mem::size_of::<BenchmarkEvent<184>>() == 208);
 const _: () = assert!(std::mem::size_of::<BenchmarkEvent<984>>() == 1_008);
 
-fn events<const PAYLOAD_BYTES: usize>() -> Vec<Arc<BenchmarkEvent<PAYLOAD_BYTES>>> {
+fn events<const PAYLOAD_BYTES: usize>() -> Vec<SharedEvent<PAYLOAD_BYTES>> {
     (0..EVENT_COUNT)
-        .map(|index| Arc::new(BenchmarkEvent { id: index as u128, time: index as i64, payload: [index as u8; PAYLOAD_BYTES] }))
+        .map(|index| SharedEvent(Arc::new(BenchmarkEvent { id: index as u128, time: index as i64, payload: [index as u8; PAYLOAD_BYTES] })))
         .collect()
 }
 
-fn ordered_fixture<const PAYLOAD_BYTES: usize>() -> (EventHistory<BenchmarkEvent<PAYLOAD_BYTES>>, Vec<Arc<BenchmarkEvent<PAYLOAD_BYTES>>>) {
+fn ordered_fixture<const PAYLOAD_BYTES: usize>() -> (EventHistory<SharedEvent<PAYLOAD_BYTES>>, Vec<SharedEvent<PAYLOAD_BYTES>>) {
     (EventHistory::with_capacity(EVENT_COUNT), events())
 }
 
-fn late_fixture<const PAYLOAD_BYTES: usize>() -> (EventHistory<BenchmarkEvent<PAYLOAD_BYTES>>, Vec<Arc<BenchmarkEvent<PAYLOAD_BYTES>>>) {
+fn late_fixture<const PAYLOAD_BYTES: usize>() -> (EventHistory<SharedEvent<PAYLOAD_BYTES>>, Vec<SharedEvent<PAYLOAD_BYTES>>) {
     let mut history = EventHistory::with_capacity(EVENT_COUNT + 1);
-    history.insert(Arc::new(BenchmarkEvent { id: EVENT_COUNT as u128, time: EVENT_COUNT as i64, payload: [0; PAYLOAD_BYTES] }));
+    history.insert(SharedEvent(Arc::new(BenchmarkEvent {
+        id: EVENT_COUNT as u128,
+        time: EVENT_COUNT as i64,
+        payload: [0; PAYLOAD_BYTES],
+    })));
     (history, events())
 }
 
-fn duplicate_fixture<const PAYLOAD_BYTES: usize>() -> (EventHistory<BenchmarkEvent<PAYLOAD_BYTES>>, Vec<Arc<BenchmarkEvent<PAYLOAD_BYTES>>>)
-{
+fn duplicate_fixture<const PAYLOAD_BYTES: usize>() -> (EventHistory<SharedEvent<PAYLOAD_BYTES>>, Vec<SharedEvent<PAYLOAD_BYTES>>) {
     let events = events();
     let mut history = EventHistory::with_capacity(EVENT_COUNT);
     for event in &events {
-        history.insert(Arc::clone(event));
+        history.insert(event.clone());
     }
     (history, events)
 }
@@ -60,7 +78,7 @@ fn benchmark_insertion_workload<const PAYLOAD_BYTES: usize>(
     criterion: &mut Criterion,
     event_size: usize,
     workload: &str,
-    fixture: fn() -> (EventHistory<BenchmarkEvent<PAYLOAD_BYTES>>, Vec<Arc<BenchmarkEvent<PAYLOAD_BYTES>>>),
+    fixture: fn() -> (EventHistory<SharedEvent<PAYLOAD_BYTES>>, Vec<SharedEvent<PAYLOAD_BYTES>>),
 ) {
     let mut group = criterion.benchmark_group(format!("events/insertion/{workload}"));
     group.throughput(Throughput::Elements(EVENT_COUNT as u64));
@@ -92,7 +110,7 @@ fn insertion_matrix(criterion: &mut Criterion) {
     benchmark_insertion_size::<984>(criterion, 1_008);
 }
 
-fn populated_history() -> EventHistory<BenchmarkEvent<184>> {
+fn populated_history() -> EventHistory<SharedEvent<184>> {
     let mut history = EventHistory::with_capacity(EVENT_COUNT);
     for event in events() {
         history.insert(event);

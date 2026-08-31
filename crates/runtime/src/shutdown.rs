@@ -5,7 +5,7 @@ use crate::{Runtime, ShutdownReport, ThreadOutcome};
 impl<I, RE, WE> Runtime<I, RE, WE> {
     /// Closes the apply path and joins every router and worker thread.
     pub fn shutdown(mut self) -> ShutdownReport<RE, WE> {
-        self.inputs.clear();
+        drop(self.input);
         let routers = join_all(std::mem::take(&mut self.routers));
         let workers = join_all(std::mem::take(&mut self.workers));
         ShutdownReport { routers, workers }
@@ -30,7 +30,7 @@ mod tests {
 
     use crossbeam_channel::{Receiver, Sender};
 
-    use crate::{Router, Runtime, RuntimeConfig, ThreadOutcome, Worker};
+    use crate::{Router, Runtime, ThreadOutcome, Worker};
 
     struct FailingRouter(usize);
 
@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn shutdown_collects_every_returned_error_without_returning_early() {
-        let runtime = Runtime::start(RuntimeConfig { router_count: 2, worker_count: 2 }, FailingRouter, FailingWorker).unwrap();
+        let runtime = Runtime::start(vec![FailingRouter(0), FailingRouter(1)], vec![FailingWorker(0), FailingWorker(1)]).unwrap();
 
         let report = runtime.shutdown();
 
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn shutdown_distinguishes_router_and_worker_panics() {
-        let runtime = Runtime::start(RuntimeConfig { router_count: 1, worker_count: 1 }, |_| PanickingRouter, |_| PanickingWorker).unwrap();
+        let runtime = Runtime::start(vec![PanickingRouter], vec![PanickingWorker]).unwrap();
 
         let report = runtime.shutdown();
 
@@ -142,9 +142,11 @@ mod tests {
         let routers_for_worker = Arc::clone(&routers_returned);
         let observed_for_worker = Arc::clone(&worker_observed);
         let runtime = Runtime::start(
-            RuntimeConfig { router_count: 2, worker_count: 1 },
-            move |_| OrderedRouter { returned: Arc::clone(&routers_for_factory) },
-            move |_| OrderedWorker { routers_returned: Arc::clone(&routers_for_worker), observed: Arc::clone(&observed_for_worker) },
+            vec![
+                OrderedRouter { returned: Arc::clone(&routers_for_factory) },
+                OrderedRouter { returned: Arc::clone(&routers_for_factory) },
+            ],
+            vec![OrderedWorker { routers_returned: Arc::clone(&routers_for_worker), observed: Arc::clone(&observed_for_worker) }],
         )
         .unwrap();
 

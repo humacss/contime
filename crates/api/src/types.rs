@@ -1,10 +1,21 @@
 use crossbeam_channel::Sender;
 
+/// Constructs the caller-selected message forwarded across the API boundary.
+pub trait ApplyOutput<I, R>: Sized {
+    fn create(inputs: Vec<I>, rejection_sender: Sender<RejectionMessage<R>>) -> Self;
+}
+
 /// One batch of inputs forwarded across the API boundary.
 #[derive(Debug)]
 pub struct InputBatch<I, R> {
     pub inputs: Vec<I>,
     pub rejection_sender: Sender<RejectionMessage<R>>,
+}
+
+impl<I, R> ApplyOutput<I, R> for InputBatch<I, R> {
+    fn create(inputs: Vec<I>, rejection_sender: Sender<RejectionMessage<R>>) -> Self {
+        Self { inputs, rejection_sender }
+    }
 }
 
 /// One rejected input returned across the API boundary.

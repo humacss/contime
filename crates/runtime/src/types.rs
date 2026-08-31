@@ -4,13 +4,6 @@ use std::thread::JoinHandle;
 
 use crossbeam_channel::{Receiver, Sender};
 
-/// Process-local execution topology.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RuntimeConfig {
-    pub router_count: usize,
-    pub worker_count: usize,
-}
-
 /// Opaque router execution owned by one runtime thread.
 pub trait Router: Send + 'static {
     type Input: Send + 'static;
@@ -81,21 +74,14 @@ pub struct ShutdownReport<RE, WE> {
 
 /// A running apply topology.
 pub struct Runtime<I, RE, WE> {
-    pub(crate) inputs: Vec<Sender<I>>,
+    pub(crate) input: Sender<I>,
     pub(crate) routers: Vec<JoinHandle<Result<(), RE>>>,
     pub(crate) workers: Vec<JoinHandle<Result<(), WE>>>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeConfig, ShutdownReport, ThreadOutcome};
-
-    #[test]
-    fn configuration_preserves_topology_counts() {
-        let config = RuntimeConfig { router_count: 2, worker_count: 4 };
-        assert_eq!(config.router_count, 2);
-        assert_eq!(config.worker_count, 4);
-    }
+    use super::{ShutdownReport, ThreadOutcome};
 
     #[test]
     fn shutdown_report_preserves_every_ordered_outcome() {
