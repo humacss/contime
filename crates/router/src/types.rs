@@ -68,3 +68,45 @@ pub enum RouterError {
 pub trait RoutableInput {
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128));
 }
+
+/// Caller-selected historical snapshot query consumed by the router.
+pub trait SnapshotQueryInput {
+    type Time;
+    type Response: Clone;
+
+    fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Response);
+}
+
+/// Caller-selected event-history query consumed by the router.
+pub trait EventQueryInput {
+    type Time;
+    type Response;
+
+    fn into_parts(self) -> (u128, Self::Time, Self::Time, Self::Response);
+}
+
+/// Constructs a caller-selected worker snapshot-query message.
+pub trait SnapshotQueryWorkerOutput<T, R>: Sized {
+    fn snapshot_query(time: T, snapshot_ids: Vec<u128>, response: R) -> Self;
+}
+
+/// Constructs a caller-selected worker event-query message.
+pub trait EventQueryWorkerOutput<T, R>: Sized {
+    fn event_query(snapshot_id: u128, from: T, to: T, response: R) -> Self;
+}
+
+/// One of the operations accepted by a unified router queue.
+pub enum RouteInputKind<A, SQ, EQ> {
+    Apply(A),
+    SnapshotQuery(SQ),
+    EventQuery(EQ),
+}
+
+/// Converts a caller-selected router message into its static operation kind.
+pub trait RouteInput {
+    type Apply;
+    type SnapshotQuery;
+    type EventQuery;
+
+    fn into_kind(self) -> RouteInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery>;
+}
