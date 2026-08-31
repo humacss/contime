@@ -13,6 +13,9 @@ it is not a workspace member. It has no dependency on `contime` or
 - Hash snapshot IDs from a caller-provided seed.
 - Flatten directly into final worker vectors.
 - Send one batch per affected worker.
+- Partition snapshot queries into one message per affected worker.
+- Route single-history event queries directly to one worker.
+- Dispatch apply and both query kinds over one unified queue.
 
 The router is generic over input ownership. A single snapshot route moves the
 existing input without cloning it; each additional snapshot route calls
@@ -30,8 +33,8 @@ the adjacent API and worker boundaries.
 
 ## Exclusions
 
-The crate owns no threads, workers, memory accounting, queries, time
-advancement, rejection semantics, response waiting, or recovery orchestration.
+The crate owns no threads, workers, memory accounting, time advancement,
+rejection semantics, response waiting, or recovery orchestration.
 
 ## Verification
 
@@ -52,6 +55,7 @@ Run the sustained integration benchmark:
 
 ```bash
 cargo bench --manifest-path crates/router/Cargo.toml --bench router
+cargo bench --manifest-path crates/router/Cargo.toml --bench query
 ```
 
 Generate its CPU flame graph with optimized code and full symbols:
@@ -65,6 +69,21 @@ Criterion writes the graph to
 inside this crate.
 
 ## Benchmarks
+
+Query routing results recorded on 2026-09-01:
+
+| Workload | 1 worker | 8 workers | 10 workers |
+| --- | ---: | ---: | ---: |
+| 1 snapshot ID | 164.05 ns | 586.15 ns | 888.58 ns |
+| 10 snapshot IDs | 198.86 ns | 902.59 ns | 995.44 ns |
+| 100 snapshot IDs | 404.68 ns | 1.342 us | 1.418 us |
+| 1,000 snapshot IDs | 2.502 us | 3.630 us | 4.216 us |
+| One event-history query | 74.15 ns | 513.43 ns | 513.39 ns |
+
+Snapshot-query routing includes worker partition allocation, one hash per ID
+when multiple workers exist, response-sender cloning across affected workers,
+and one real Crossbeam send per affected worker. Event queries hash one snapshot
+ID and send exactly one message.
 
 The following measurement was recorded locally in release mode on 2026-08-28:
 

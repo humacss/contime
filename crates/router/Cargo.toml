@@ -18,3 +18,7 @@ pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
 [[bench]]
 name = "router"
 harness = false
+
+[[bench]]
+name = "query"
+harness = false
