@@ -5,8 +5,12 @@ use crossbeam_channel::{Receiver, RecvTimeoutError};
 
 use crate::checkpoints::update_snapshot;
 use crate::events::insert_batch;
+use crate::query::{query_events, query_snapshots};
 use crate::schedule::Schedule;
-use crate::types::{ApplyInput, Checkpoints, Completion, Events, RouteInput, SnapshotSlot, WorkerConfig};
+use crate::types::{
+    ApplyInput, Checkpoints, Completion, EventQueryInput, EventQueryResponse, Events, QueryCheckpoints, QueryEvents, RouteInput,
+    SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, WorkInput, WorkInputKind, WorkerConfig,
+};
 
 /// Receives event batches and schedules their checkpoint updates.
 ///
@@ -17,7 +21,7 @@ pub fn work<B, S, K>(
     config: WorkerConfig,
     events_config: S::Config,
     checkpoints_config: K::Config,
-    mut checkpoints_context: K::Context,
+    mut checkpoints_context: <K as Checkpoints<S>>::Context,
 ) where
     B: ApplyInput,
     S: Events<<B::Route as RouteInput>::Input>,
@@ -72,6 +76,76 @@ pub fn work<B, S, K>(
             }
             Err(RecvTimeoutError::Disconnected) => {
                 update_all::<S, K, B::Completion, S::Rejection>(
+                    &mut snapshots,
+                    &mut schedule,
+                    &checkpoints_config,
+                    &mut checkpoints_context,
+                );
+                break;
+            }
+        }
+    }
+}
+
+/// Receives apply and query messages on one worker-local queue.
+pub fn work_messages<M, S, K>(
+    input: Receiver<M>,
+    config: WorkerConfig,
+    events_config: S::Config,
+    checkpoints_config: K::Config,
+    mut checkpoints_context: <K as Checkpoints<S>>::Context,
+) where
+    M: WorkInput,
+    M::Apply: ApplyInput,
+    S: Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input> + QueryEvents<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>,
+    K: Checkpoints<S> + QueryCheckpoints<S, Context = <K as Checkpoints<S>>::Context>,
+    <M::Apply as ApplyInput>::Completion: Completion<S::Rejection>,
+    M::SnapshotQuery: SnapshotQueryInput<Time = <K as QueryCheckpoints<S>>::Time>,
+    <M::SnapshotQuery as SnapshotQueryInput>::Response: SnapshotQueryResponse<<K as QueryCheckpoints<S>>::Snapshot>,
+    M::EventQuery: EventQueryInput<Time = <S as QueryEvents<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
+    <M::EventQuery as EventQueryInput>::Response: EventQueryResponse<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>,
+    <<M::Apply as ApplyInput>::Route as RouteInput>::Input: Clone,
+{
+    type ApplyRoute<M> = <<M as WorkInput>::Apply as ApplyInput>::Route;
+    type ApplyCompletion<M> = <<M as WorkInput>::Apply as ApplyInput>::Completion;
+    type ApplyEvent<M> = <ApplyRoute<M> as RouteInput>::Input;
+
+    let mut snapshots = AHashMap::<u128, SnapshotSlot<S, K, ApplyCompletion<M>, S::Rejection>>::new();
+    let mut schedule = Schedule::new(config.deadline_compaction_minimum, config.deadline_compaction_multiplier);
+
+    loop {
+        let received = if schedule.is_empty() {
+            input.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        } else {
+            let deadline = schedule.next_deadline(config.maximum_dirty_age).expect("dirty schedule had no deadline");
+            input.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        };
+
+        match received {
+            Ok(message) => match message.into_kind() {
+                WorkInputKind::Apply(batch) => {
+                    insert_batch(batch, &mut snapshots, &mut schedule, &events_config, Instant::now());
+                    update_budget::<S, K, ApplyCompletion<M>, S::Rejection>(
+                        &mut snapshots,
+                        &mut schedule,
+                        &checkpoints_config,
+                        &mut checkpoints_context,
+                        config.replays_per_receive,
+                        config.maximum_dirty_age,
+                    );
+                }
+                WorkInputKind::SnapshotQuery(query) => query_snapshots(query, &snapshots, &checkpoints_config, &mut checkpoints_context),
+                WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _, _, _, _>(query, &snapshots),
+            },
+            Err(RecvTimeoutError::Timeout) => update_overdue::<S, K, ApplyCompletion<M>, S::Rejection>(
+                &mut snapshots,
+                &mut schedule,
+                &checkpoints_config,
+                &mut checkpoints_context,
+                config.maximum_dirty_age,
+            ),
+            Err(RecvTimeoutError::Disconnected) => {
+                update_all::<S, K, ApplyCompletion<M>, S::Rejection>(
                     &mut snapshots,
                     &mut schedule,
                     &checkpoints_config,
