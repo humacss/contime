@@ -21,9 +21,12 @@ independent traits.
 - Correct existing checkpoints in place when late events require replay.
 - Never insert a new checkpoint between existing checkpoints.
 
-Historical queries, horizon pruning, worker scheduling, event mutation,
-completion handling, memory accounting, and memory-limit enforcement are
-intentionally deferred. Consumers select snapshot ownership and memory policy.
+Historical snapshot queries clone the nearest checkpoint at or before the
+requested time and replay complete canonical event buckets through that time.
+The query-local replay does not mutate retained checkpoints or acknowledge
+event history. Horizon pruning, worker scheduling, event mutation, completion
+handling, memory accounting, and memory-limit enforcement remain deferred.
+Consumers select snapshot ownership and memory policy.
 
 ## Unit benchmark snapshot
 
@@ -35,6 +38,15 @@ Local release-mode Criterion results on 2026-08-29:
 | Manage sequential tip updates | 20.704 us | 20.70 | 48.3 million updates/s |
 | Replay one shared timestamp | 1.524 us | 1.52 | 656.3 million events/s |
 | Replay 1,000 unique timestamps | 3.797 us | 3.80 | 263.4 million events/s |
+
+Historical query results on 2026-09-01:
+
+| Query workload | Total | Approximate replay cost |
+| --- | ---: | ---: |
+| Exact checkpoint | 42.40 ns | checkpoint clone only |
+| Replay 10 events | 82.52 ns | 8.25 ns/event |
+| Replay 100 events | 270.07 ns | 2.70 ns/event |
+| Replay 1,000 events | 2.112 us | 2.11 ns/event |
 
 The apply benchmark includes the default wrapper, `ApplyInner`, one effective
 snapshot application, snapshot-time advancement, and a consumer loop over all

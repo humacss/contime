@@ -3,10 +3,12 @@
 
 mod apply;
 mod checkpoints;
+mod query;
 mod replay;
 mod types;
 
 pub use apply::apply;
+pub use query::query_at;
 pub use replay::replay;
 pub use types::{
     ApplyBatch, ApplyEvents, ApplyInner, ApplyResult, ApplyWrapper, Checkpoint, CheckpointConfig, CheckpointKey, CheckpointStore,
