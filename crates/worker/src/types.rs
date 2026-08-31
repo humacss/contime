@@ -92,6 +92,15 @@ pub trait Events<I>: Sized {
     fn insert(&mut self, input: I) -> EventInsert<Self::Rejection>;
 }
 
+/// Read-only event-history access required by worker queries.
+pub trait QueryEvents<I> {
+    type Time: Clone + Ord;
+
+    fn clone_between(&self, from: &Self::Time, to: &Self::Time) -> Vec<I>
+    where
+        I: Clone;
+}
+
 /// Materialized per-snapshot checkpoint storage.
 ///
 /// Checkpoint updates can inspect canonical events but cannot modify them.
@@ -102,6 +111,63 @@ pub trait Checkpoints<S>: Sized {
     fn create(snapshot_id: u128, config: &Self::Config) -> Self;
 
     fn update(&mut self, events: &mut S, context: &mut Self::Context);
+}
+
+/// Read-only checkpoint reconstruction required by worker queries.
+pub trait QueryCheckpoints<E> {
+    type Context;
+    type Time: Clone + Ord;
+    type Snapshot;
+
+    fn query_at(&self, events: &E, context: &mut Self::Context, time: Self::Time) -> Option<Box<Self::Snapshot>>;
+}
+
+pub trait SnapshotQueryInput {
+    type Time;
+    type Response;
+
+    fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Response);
+}
+
+pub trait EventQueryInput {
+    type Time;
+    type Response;
+
+    fn into_parts(self) -> (u128, Self::Time, Self::Time, Self::Response);
+}
+
+pub trait SnapshotQueryResponse<S> {
+    fn send(self, snapshots: Vec<Box<S>>);
+}
+
+impl<S> SnapshotQueryResponse<S> for crossbeam_channel::Sender<Vec<Box<S>>> {
+    fn send(self, snapshots: Vec<Box<S>>) {
+        let _ = crossbeam_channel::Sender::send(&self, snapshots);
+    }
+}
+
+pub trait EventQueryResponse<I> {
+    fn send(self, events: Vec<I>);
+}
+
+impl<I> EventQueryResponse<I> for crossbeam_channel::Sender<Vec<I>> {
+    fn send(self, events: Vec<I>) {
+        let _ = crossbeam_channel::Sender::send(&self, events);
+    }
+}
+
+pub enum WorkInputKind<A, SQ, EQ> {
+    Apply(A),
+    SnapshotQuery(SQ),
+    EventQuery(EQ),
+}
+
+pub trait WorkInput {
+    type Apply;
+    type SnapshotQuery;
+    type EventQuery;
+
+    fn into_kind(self) -> WorkInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery>;
 }
 
 pub(crate) type Request<C, R> = Rc<RefCell<PendingRequest<C, R>>>;

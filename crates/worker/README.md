@@ -36,6 +36,9 @@ for adapting independently defined message types and choosing where
 - Replay a configurable number of non-overdue snapshots after each received
   batch. Deadlines and disconnected-input draining remain mandatory.
 - Complete a request only after every snapshot changed by it has replayed.
+- Serve snapshot and event-history queries from the same worker queue.
+- Reconstruct query-local snapshots without forcing or reprioritizing replay.
+- Clone event handles before returning them across a thread boundary.
 
 Input and checkpoint ownership, memory accounting, and admission policy remain
 orchestrator concerns. The worker only coordinates the implementations supplied
@@ -46,7 +49,7 @@ arrival inserts its history and triggers up to `replays_per_receive` replays. A
 timeout replays every snapshot whose deadline has passed before calculating the
 next deadline.
 
-Queries and time advancement are intentionally deferred.
+Time advancement is intentionally deferred.
 
 ## Worker configuration
 
@@ -61,6 +64,18 @@ does not return high-water capacity to the allocator. Capacity shrinking is a
 separate policy that remains deferred.
 
 ## Benchmark snapshot
+
+Query unit results recorded on 2026-09-01:
+
+| Worker-local query | Total | Amortized |
+| --- | ---: | ---: |
+| One found snapshot | 59.66 ns | 59.66 ns/result |
+| 1,000 found event handles | 1.571 us | 1.57 ns/result |
+
+The snapshot case includes one history lookup, query-local reconstruction by
+the supplied checkpoint implementation, boxing, and the response callback. The
+event case includes one history lookup, range filtering, cloning 1,000 handles,
+and the response callback. Neither case includes router or API transport.
 
 Local release-mode Criterion results on 2026-08-29:
 

@@ -3,10 +3,14 @@
 
 mod checkpoints;
 mod events;
+mod query;
 mod queue;
 mod schedule;
 mod types;
 mod work;
 
-pub use types::{ApplyBatch, ApplyInput, Checkpoints, Completion, EventInsert, Events, RouteInput, RoutedInput, WorkerConfig};
-pub use work::work;
+pub use types::{
+    ApplyBatch, ApplyInput, Checkpoints, Completion, EventInsert, EventQueryInput, EventQueryResponse, Events, QueryCheckpoints,
+    QueryEvents, RouteInput, RoutedInput, SnapshotQueryInput, SnapshotQueryResponse, WorkInput, WorkInputKind, WorkerConfig,
+};
+pub use work::{work, work_messages};
