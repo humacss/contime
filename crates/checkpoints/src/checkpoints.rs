@@ -1,6 +1,4 @@
-use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::mem::size_of;
 
 use crate::types::ReplaySession;
 use crate::{ApplyResult, Checkpoint, CheckpointConfig, CheckpointKey, CheckpointStore, Snapshot};
@@ -11,7 +9,7 @@ where
 {
     /// Creates an empty checkpoint store for one snapshot ID.
     pub fn new(snapshot_id: u128, config: CheckpointConfig) -> Self {
-        Self { snapshot_id, interval: config.interval, retained_bytes: 0, checkpoints: VecDeque::new() }
+        Self { snapshot_id, interval: config.interval, checkpoints: VecDeque::new() }
     }
 
     pub fn snapshot_id(&self) -> u128 {
@@ -30,10 +28,6 @@ where
         self.checkpoints.is_empty()
     }
 
-    pub fn retained_bytes(&self) -> u64 {
-        self.retained_bytes
-    }
-
     pub fn current(&self) -> Option<&Checkpoint<S>> {
         self.checkpoints.back()
     }
@@ -48,7 +42,6 @@ where
     }
 
     pub(crate) fn begin_replay(&mut self, dirty_time: &S::Time) -> ReplaySession<'_, S> {
-        let retained_bytes_before = self.retained_bytes;
         let dirty_boundary = CheckpointKey { time: dirty_time.clone(), event_id: u128::MIN };
         let base_index = self.latest_before_index(&dirty_boundary);
         let working_snapshot = base_index.map(|index| self.checkpoints[index].snapshot.clone());
@@ -66,7 +59,6 @@ where
             applied_events: 0,
             events_since_checkpoint,
             next_checkpoint_index,
-            retained_bytes_before,
         }
     }
 
@@ -132,27 +124,20 @@ where
             self.append_moved_checkpoint(key, snapshot);
         }
 
-        ApplyResult {
-            retained_bytes_delta: signed_delta(self.store.retained_bytes, self.retained_bytes_before),
-            applied_events: self.applied_events,
-            retained_checkpoints: self.store.len(),
-        }
+        ApplyResult { applied_events: self.applied_events, retained_checkpoints: self.store.len() }
     }
 
     pub(crate) fn unchanged(self) -> ApplyResult {
-        ApplyResult { retained_bytes_delta: 0, applied_events: 0, retained_checkpoints: self.store.len() }
+        ApplyResult { applied_events: 0, retained_checkpoints: self.store.len() }
     }
 
     fn store_intermediate(&mut self, key: CheckpointKey<S::Time>) {
         let snapshot = self.working_snapshot.as_ref().expect("replay snapshot must be initialized");
         if self.next_checkpoint_index < self.store.checkpoints.len() {
             let checkpoint = &mut self.store.checkpoints[self.next_checkpoint_index];
-            let previous_bytes = checkpoint.retained_bytes;
             checkpoint.snapshot.clone_from(snapshot);
             checkpoint.key = key;
             checkpoint.history_event_count = self.history_event_count;
-            checkpoint.retained_bytes = checkpoint_retained_bytes(&checkpoint.snapshot);
-            apply_size_change(&mut self.store.retained_bytes, previous_bytes, checkpoint.retained_bytes);
         } else {
             debug_assert_eq!(self.next_checkpoint_index, self.store.checkpoints.len());
             let snapshot = snapshot.clone();
@@ -161,39 +146,11 @@ where
     }
 
     fn move_working_into_checkpoint(&mut self, index: usize, key: CheckpointKey<S::Time>, snapshot: S) {
-        let previous_bytes = self.store.checkpoints[index].retained_bytes;
-        let retained_bytes = checkpoint_retained_bytes(&snapshot);
-        self.store.checkpoints[index] = Checkpoint { key, snapshot, history_event_count: self.history_event_count, retained_bytes };
-        apply_size_change(&mut self.store.retained_bytes, previous_bytes, retained_bytes);
+        self.store.checkpoints[index] = Checkpoint { key, snapshot, history_event_count: self.history_event_count };
     }
 
     fn append_moved_checkpoint(&mut self, key: CheckpointKey<S::Time>, snapshot: S) {
-        let retained_bytes = checkpoint_retained_bytes(&snapshot);
-        self.store.retained_bytes = self.store.retained_bytes.saturating_add(retained_bytes);
-        self.store.checkpoints.push_back(Checkpoint { key, snapshot, history_event_count: self.history_event_count, retained_bytes });
-    }
-}
-
-pub(crate) fn checkpoint_retained_bytes<S>(snapshot: &S) -> u64
-where
-    S: Snapshot,
-{
-    snapshot.conservative_size().saturating_add(size_of::<CheckpointKey<S::Time>>() as u64).saturating_add(size_of::<u64>() as u64)
-}
-
-fn apply_size_change(total: &mut u64, before: u64, after: u64) {
-    if after >= before {
-        *total = total.saturating_add(after - before);
-    } else {
-        *total = total.saturating_sub(before - after);
-    }
-}
-
-fn signed_delta(after: u64, before: u64) -> i64 {
-    match after.cmp(&before) {
-        Ordering::Greater => i64::try_from(after - before).unwrap_or(i64::MAX),
-        Ordering::Less => -i64::try_from(before - after).unwrap_or(i64::MAX),
-        Ordering::Equal => 0,
+        self.store.checkpoints.push_back(Checkpoint { key, snapshot, history_event_count: self.history_event_count });
     }
 }
 
@@ -216,10 +173,6 @@ mod tests {
 
         fn set_time(&mut self, time: Self::Time) {
             self.time = time;
-        }
-
-        fn conservative_size(&self) -> u64 {
-            32
         }
     }
 
@@ -276,20 +229,6 @@ mod tests {
         assert_eq!(store.len(), retained_count);
         assert_eq!(store.iter().map(|checkpoint| checkpoint.key.clone()).collect::<Vec<_>>(), vec![key(20), key(40)]);
         assert_eq!(store.iter().map(|checkpoint| checkpoint.snapshot.value).collect::<Vec<_>>(), vec![30, 50]);
-    }
-
-    #[test]
-    fn replay_reports_the_exact_retained_checkpoint_memory_delta() {
-        let mut store = CheckpointStore::new(7, CheckpointConfig { interval: 3 });
-
-        finish_event(&mut store, 0);
-        let first_retained_bytes = store.retained_bytes();
-        finish_event(&mut store, 1);
-        assert_eq!(store.retained_bytes(), first_retained_bytes);
-        finish_event(&mut store, 2);
-        finish_event(&mut store, 3);
-
-        assert_eq!(store.retained_bytes(), first_retained_bytes * 2);
     }
 
     #[test]

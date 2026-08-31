@@ -10,8 +10,10 @@ depends only on Crossbeam and defines its own generic rejection contract.
 ## Responsibilities
 
 `send` converts each input into the caller-selected input type, collects one
-ordinary `Vec<I>`, and forwards one `InputBatch` through an opaque output
-channel. The API does not prescribe whether `I` is an owned value, shared
+ordinary `Vec<I>`, and asks the caller-selected `ApplyOutput` implementation to
+construct the message forwarded through an opaque output channel. `InputBatch`
+remains an optional default implementation. The API does not prescribe whether
+`I` is an owned value, shared
 pointer, tracked pointer, or another ownership type. The batch owns one
 rejection sender. An empty input sequence forwards nothing and drops the
 sender immediately.
@@ -24,9 +26,9 @@ defines their meaning while this crate only requires them to be ordered.
 
 The crate does not inspect snapshot IDs, flatten inputs by route, hash routes,
 partition work, manage memory, or process events. Its output contract is
-defined locally; it does not know that a router exists. An orchestrator chooses
-the ownership type and bridges this batch into another independently defined
-boundary.
+defined locally; it does not know that a router exists. An orchestrator can
+implement `ApplyOutput` on a type that also implements another crate's input
+trait, making the handoff compile-time checked without an API dependency.
 
 ## Verification
 

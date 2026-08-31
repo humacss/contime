@@ -1,11 +1,16 @@
 # contime-worker
 
-`contime-worker` owns the blocking worker receive loop, worker-local memory
-limits, event-store insertion scheduling, and checkpoint orchestration.
+`contime-worker` owns the blocking worker receive loop, event-store insertion
+scheduling, and checkpoint orchestration.
 
 Routed input ownership is generic. The worker moves the caller-selected input
 type into its event-store implementation and does not know whether the value is
 owned, shared, tracked, or represented another way.
+
+Transport ownership is generic as well. `ApplyInput` consumes one complete
+worker message and `RouteInput` consumes each routed item. `ApplyBatch` and
+`RoutedInput` remain optional default implementations; an orchestrator can use
+one adapter type for the router output and worker input contracts.
 
 The crate is isolated. It does not depend on `contime`, `contime-api`,
 `contime-router`, or a replay implementation. An orchestrator is responsible
@@ -15,7 +20,6 @@ for adapting independently defined message types and choosing where
 ## Initial scope
 
 - Receive complete apply batches without owning the worker thread.
-- Reserve each batch's conservative retained-event size.
 - Insert each routed input directly into its snapshot event store.
 - Keep canonical event insertion separate from checkpoint materialization.
 - Prefer the dirty snapshot with the largest pending input count.
@@ -32,7 +36,10 @@ for adapting independently defined message types and choosing where
 - Replay a configurable number of non-overdue snapshots after each received
   batch. Deadlines and disconnected-input draining remain mandatory.
 - Complete a request only after every snapshot changed by it has replayed.
-- Reconcile event- and checkpoint-reported retained-memory deltas.
+
+Input and checkpoint ownership, memory accounting, and admission policy remain
+orchestrator concerns. The worker only coordinates the implementations supplied
+through its event-store and checkpoint traits.
 
 The receive timeout is always derived from the oldest dirty timestamp. A batch
 arrival inserts its history and triggers up to `replays_per_receive` replays. A
@@ -43,8 +50,8 @@ Queries and time advancement are intentionally deferred.
 
 ## Worker configuration
 
-`WorkerConfig` supplies the retained-memory limit, maximum dirty age, replay
-budget per received batch, deadline-compaction lower bound, and
+`WorkerConfig` supplies the maximum dirty age, replay budget per received
+batch, deadline-compaction lower bound, and
 deadline-compaction multiplier. A replay budget of zero accumulates work until
 a deadline or disconnection. Larger budgets make more checkpoint progress per
 received batch.
@@ -87,7 +94,7 @@ timed routine. `shared` is a benchmark-local one-pointer wrapper around
 
 The worker does not fan inputs out or clone them, so these results show no
 stable relationship between payload size and ownership strategy. Scheduling,
-event insertion, memory bookkeeping, checkpoint updates, and completion
+event insertion, checkpoint updates, and completion
 dominate this workload. Pointer ownership is selected for efficient router
 fan-out and retained event history, not because it intrinsically accelerates
 the worker loop.
@@ -125,7 +132,6 @@ us respectively; 1,024 is the best current starting point.
 
 - `queue.rs`: keyed priority-queue operations and their isolated unit
   benchmarks.
-- `memory.rs`: worker-local byte accounting.
 - `schedule.rs`: dirty-time and pending-count scheduling policy.
 - `events.rs`: event-store creation, insertion, and dirty scheduling.
 - `checkpoints.rs`: checkpoint materialization and request completion.

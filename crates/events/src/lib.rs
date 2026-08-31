@@ -1,4 +1,4 @@
-//! Canonical Arc-owned event storage independent of ConTime orchestration.
+//! Canonical ownership-generic event storage independent of ConTime orchestration.
 
 mod history;
 mod insert;

@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use contime_runtime::{Router, Runtime, RuntimeConfig, ThreadOutcome, Worker};
+use contime_runtime::{Router, Runtime, ThreadOutcome, Worker};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
@@ -16,7 +16,6 @@ struct Event {
 
 #[derive(Clone)]
 struct EventBatch {
-    router_index: usize,
     worker_index: usize,
     events: Arc<[Event]>,
 }
@@ -87,13 +86,14 @@ struct PreparedRun {
 
 impl Harness {
     fn new(router_count: usize, worker_count: usize, batches_per_worker: usize, events_per_batch: usize) -> Self {
-        let runtime = Runtime::start(RuntimeConfig { router_count, worker_count }, |_| BatchRouter, |_| BatchWorker).unwrap();
+        let runtime =
+            Runtime::start((0..router_count).map(|_| BatchRouter).collect(), (0..worker_count).map(|_| BatchWorker).collect()).unwrap();
         let batches = (0..worker_count)
             .flat_map(|worker_index| {
                 (0..batches_per_worker).map(move |batch_index| {
                     let first_value = (worker_index * batches_per_worker + batch_index) * events_per_batch;
                     let events = (first_value..first_value + events_per_batch).map(|value| Event { value }).collect::<Vec<_>>().into();
-                    EventBatch { router_index: worker_index % router_count, worker_index, events }
+                    EventBatch { worker_index, events }
                 })
             })
             .collect();
@@ -109,7 +109,7 @@ impl Harness {
 
     fn run(&self, prepared: PreparedRun) {
         for pending in prepared.batches {
-            self.runtime.inputs()[pending.batch.router_index].send(RouterInput::Batch(pending)).unwrap();
+            self.runtime.input().send(RouterInput::Batch(pending)).unwrap();
         }
         assert!(prepared.completed.recv().is_err());
     }

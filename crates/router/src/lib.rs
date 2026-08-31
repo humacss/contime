@@ -5,4 +5,4 @@ mod route;
 mod types;
 
 pub use route::route;
-pub use types::{InputBatch, RoutableInput, RoutedInput, RouterError, WorkerBatch};
+pub use types::{InputBatch, RoutableInput, RouteInputBatch, RouteOutput, RoutedInput, RouterError, WorkerBatch, WorkerOutput};

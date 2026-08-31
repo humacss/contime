@@ -1,5 +1,5 @@
 use std::collections::{btree_map, vec_deque};
-use std::sync::Arc;
+use std::ops::Bound;
 
 use crate::{Event, EventHistoryIter, EventHistoryRangeIter, EventKey};
 
@@ -7,10 +7,7 @@ impl<'a, E> EventHistoryIter<'a, E>
 where
     E: Event,
 {
-    pub(crate) fn new(
-        ordered: vec_deque::Iter<'a, (EventKey<E::Time>, Arc<E>)>,
-        late: btree_map::Iter<'a, EventKey<E::Time>, Arc<E>>,
-    ) -> Self {
+    pub(crate) fn new(ordered: vec_deque::Iter<'a, (EventKey<E::Time>, E)>, late: btree_map::Iter<'a, EventKey<E::Time>, E>) -> Self {
         Self { ordered: ordered.peekable(), late: late.peekable() }
     }
 }
@@ -26,16 +23,22 @@ where
         let ordered_start = self.ordered.partition_point(|(key, _event)| key < &boundary);
         EventHistoryRangeIter::new(self.ordered.range(ordered_start..), self.late.range(boundary..))
     }
+
+    /// Iterates canonically strictly after an exact `(time, event ID)` key.
+    pub fn iter_after(&self, boundary: &EventKey<E::Time>) -> EventHistoryRangeIter<'_, E> {
+        let ordered_start = self.ordered.partition_point(|(key, _event)| key <= boundary);
+        EventHistoryRangeIter::new(
+            self.ordered.range(ordered_start..),
+            self.late.range((Bound::Excluded(boundary.clone()), Bound::Unbounded)),
+        )
+    }
 }
 
 impl<'a, E> EventHistoryRangeIter<'a, E>
 where
     E: Event,
 {
-    pub(crate) fn new(
-        ordered: vec_deque::Iter<'a, (EventKey<E::Time>, Arc<E>)>,
-        late: btree_map::Range<'a, EventKey<E::Time>, Arc<E>>,
-    ) -> Self {
+    pub(crate) fn new(ordered: vec_deque::Iter<'a, (EventKey<E::Time>, E)>, late: btree_map::Range<'a, EventKey<E::Time>, E>) -> Self {
         Self { ordered: ordered.peekable(), late: late.peekable() }
     }
 }
@@ -50,10 +53,10 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         match (self.ordered.peek(), self.late.peek()) {
             (Some((ordered_key, _ordered_event)), Some((late_key, _late_event))) if ordered_key < *late_key => {
-                self.ordered.next().map(|(key, event)| (key, event.as_ref()))
+                self.ordered.next().map(|(key, event)| (key, event))
             }
-            (Some(_), Some(_)) | (None, Some(_)) => self.late.next().map(|(key, event)| (key, event.as_ref())),
-            (Some(_), None) => self.ordered.next().map(|(key, event)| (key, event.as_ref())),
+            (Some(_), Some(_)) | (None, Some(_)) => self.late.next().map(|(key, event)| (key, event)),
+            (Some(_), None) => self.ordered.next().map(|(key, event)| (key, event)),
             (None, None) => None,
         }
     }
@@ -69,10 +72,10 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         match (self.ordered.peek(), self.late.peek()) {
             (Some((ordered_key, _ordered_event)), Some((late_key, _late_event))) if ordered_key < *late_key => {
-                self.ordered.next().map(|(key, event)| (key, event.as_ref()))
+                self.ordered.next().map(|(key, event)| (key, event))
             }
-            (Some(_), Some(_)) | (None, Some(_)) => self.late.next().map(|(key, event)| (key, event.as_ref())),
-            (Some(_), None) => self.ordered.next().map(|(key, event)| (key, event.as_ref())),
+            (Some(_), Some(_)) | (None, Some(_)) => self.late.next().map(|(key, event)| (key, event)),
+            (Some(_), None) => self.ordered.next().map(|(key, event)| (key, event)),
             (None, None) => None,
         }
     }
@@ -80,10 +83,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::hint::black_box;
-    use std::sync::Arc;
-
     use criterion::Criterion;
+    use std::hint::black_box;
 
     use crate::{Event, EventHistory};
 
@@ -104,8 +105,8 @@ mod tests {
         }
     }
 
-    fn event(id: u128, time: i64) -> Arc<TestEvent> {
-        Arc::new(TestEvent { id, time })
+    fn event(id: u128, time: i64) -> TestEvent {
+        TestEvent { id, time }
     }
 
     #[test]
@@ -139,6 +140,22 @@ mod tests {
         let keys = history.iter_from_dirty().map(|(key, _event)| (key.time, key.event_id)).collect::<Vec<_>>();
 
         assert_eq!(keys, vec![(10, 10), (10, 20), (20, 40)]);
+    }
+
+    #[test]
+    fn boundary_iteration_starts_strictly_after_time_and_event_id() {
+        let mut history = EventHistory::new();
+        history.insert(event(20, 10));
+        history.insert(event(40, 20));
+        history.insert(event(10, 10));
+        history.insert(event(30, 15));
+
+        let keys = history
+            .iter_after(&crate::EventKey { time: 10, event_id: 10 })
+            .map(|(key, _event)| (key.time, key.event_id))
+            .collect::<Vec<_>>();
+
+        assert_eq!(keys, vec![(10, 20), (15, 30), (20, 40)]);
     }
 
     fn history_with_late_percentage(late_percentage: usize) -> EventHistory<TestEvent> {

@@ -1,8 +1,8 @@
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use crate::types::{ApiError, ApplyResponse, InputBatch, RejectionMessage};
+use crate::types::{ApiError, ApplyOutput, ApplyResponse, RejectionMessage};
 
-trait Deps<I, R> {
+trait Deps<O, I, R> {
     type Error;
 
     fn send<Input, Inputs>(&self, inputs: Inputs, rejection_sender: Sender<RejectionMessage<R>>) -> Result<(), Self::Error>
@@ -11,17 +11,20 @@ trait Deps<I, R> {
         Input: Into<I>;
 }
 
-struct DefaultDeps<'a, IL, R> {
-    output: &'a Sender<InputBatch<IL, R>>,
+struct DefaultDeps<'a, O> {
+    output: &'a Sender<O>,
 }
 
-impl<IL, R> Deps<IL, R> for DefaultDeps<'_, IL, R> {
+impl<O, I, R> Deps<O, I, R> for DefaultDeps<'_, O>
+where
+    O: ApplyOutput<I, R>,
+{
     type Error = ApiError;
 
     fn send<Input, Inputs>(&self, inputs: Inputs, rejection_sender: Sender<RejectionMessage<R>>) -> Result<(), Self::Error>
     where
         Inputs: IntoIterator<Item = Input>,
-        Input: Into<IL>,
+        Input: Into<I>,
     {
         crate::send::send(self.output, inputs, rejection_sender)
     }
@@ -29,18 +32,19 @@ impl<IL, R> Deps<IL, R> for DefaultDeps<'_, IL, R> {
 
 /// Sends inputs and waits until all downstream copies have either finished or
 /// reported a rejection.
-pub fn apply<I, R, Input, Inputs>(output: &Sender<InputBatch<I, R>>, inputs: Inputs) -> Result<ApplyResponse<R>, ApiError>
+pub fn apply<O, I, R, Input, Inputs>(output: &Sender<O>, inputs: Inputs) -> Result<ApplyResponse<R>, ApiError>
 where
     Inputs: IntoIterator<Item = Input>,
     Input: Into<I>,
+    O: ApplyOutput<I, R>,
     R: Ord,
 {
     apply_with_deps(&DefaultDeps { output }, inputs)
 }
 
-fn apply_with_deps<D, I, R, Input, Inputs>(deps: &D, inputs: Inputs) -> Result<ApplyResponse<R>, D::Error>
+fn apply_with_deps<D, O, I, R, Input, Inputs>(deps: &D, inputs: Inputs) -> Result<ApplyResponse<R>, D::Error>
 where
-    D: Deps<I, R>,
+    D: Deps<O, I, R>,
     Inputs: IntoIterator<Item = Input>,
     Input: Into<I>,
     R: Ord,
@@ -84,7 +88,7 @@ mod tests {
         responses: Vec<RejectionMessage<TestReason>>,
     }
 
-    impl Deps<u128, TestReason> for StubDeps {
+    impl Deps<(), u128, TestReason> for StubDeps {
         type Error = StubError;
 
         fn send<Input, Inputs>(&self, inputs: Inputs, rejection_sender: Sender<RejectionMessage<TestReason>>) -> Result<(), Self::Error>
@@ -102,7 +106,7 @@ mod tests {
 
     struct FailingDeps;
 
-    impl Deps<u128, TestReason> for FailingDeps {
+    impl Deps<(), u128, TestReason> for FailingDeps {
         type Error = StubError;
 
         fn send<Input, Inputs>(&self, _inputs: Inputs, _rejection_sender: Sender<RejectionMessage<TestReason>>) -> Result<(), Self::Error>
@@ -116,7 +120,7 @@ mod tests {
 
     struct NoopDeps;
 
-    impl Deps<(), TestReason> for NoopDeps {
+    impl Deps<(), (), TestReason> for NoopDeps {
         type Error = StubError;
 
         fn send<Input, Inputs>(&self, _inputs: Inputs, _rejection_sender: Sender<RejectionMessage<TestReason>>) -> Result<(), Self::Error>

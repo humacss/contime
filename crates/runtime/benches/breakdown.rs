@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use contime_runtime::{Router, Runtime, RuntimeConfig, ThreadOutcome, Worker};
+use contime_runtime::{Router, Runtime, ThreadOutcome, Worker};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
@@ -11,7 +11,6 @@ const INPUT_COUNTS: [usize; 5] = [1, 10, 100, 1_000, 10_000];
 
 #[derive(Clone, Copy)]
 struct Event {
-    router_index: usize,
     worker_index: usize,
     value: usize,
 }
@@ -73,7 +72,7 @@ fn drain_worker(input: Receiver<WorkerInput>) {
 }
 
 fn events(input_count: usize) -> Vec<Event> {
-    (0..input_count).map(|value| Event { router_index: 0, worker_index: 0, value }).collect()
+    (0..input_count).map(|value| Event { worker_index: 0, value }).collect()
 }
 
 struct Prepared<T> {
@@ -201,14 +200,13 @@ struct TwoHopHarness {
 
 impl TwoHopHarness {
     fn new(input_count: usize) -> Self {
-        let runtime = Runtime::start(RuntimeConfig { router_count: 1, worker_count: 1 }, |_| RelayRouter, |_| DrainWorker).unwrap();
+        let runtime = Runtime::start(vec![RelayRouter], vec![DrainWorker]).unwrap();
         Self { runtime, events: events(input_count) }
     }
 
     fn run(&self, prepared: Prepared<RouterInput>) {
         for input in prepared.inputs {
-            let RouterInput::Event(ref pending) = input;
-            self.runtime.inputs()[pending.event.router_index].send(input).unwrap();
+            self.runtime.input().send(input).unwrap();
         }
         assert!(prepared.completed.recv().is_err());
     }

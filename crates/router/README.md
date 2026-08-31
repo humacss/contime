@@ -21,6 +21,13 @@ existing input without cloning it; each additional snapshot route calls
 router does not know whether cloning copies an owned value, increments a shared
 pointer, or updates a tracked pointer.
 
+Message ownership is also caller-selected. `RouteInputBatch` consumes the
+router input, `RouteOutput` constructs each snapshot route, and `WorkerOutput`
+constructs each affected worker's message. The crate's `InputBatch`,
+`RoutedInput`, and `WorkerBatch` structs are optional default implementations.
+An orchestrator may instead implement these traits on adapter types shared with
+the adjacent API and worker boundaries.
+
 ## Exclusions
 
 The crate owns no threads, workers, memory accounting, queries, time

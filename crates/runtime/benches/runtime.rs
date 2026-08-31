@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use contime_runtime::{Router, Runtime, RuntimeConfig, Worker};
+use contime_runtime::{Router, Runtime, Worker};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
@@ -10,7 +10,6 @@ const INPUT_COUNT: usize = 1_000;
 
 #[derive(Clone, Copy)]
 struct BenchmarkEvent {
-    router_index: usize,
     worker_index: usize,
     value: usize,
 }
@@ -79,10 +78,10 @@ struct PreparedRun {
 
 impl Harness {
     fn new(router_count: usize, worker_count: usize) -> Self {
-        let runtime = Runtime::start(RuntimeConfig { router_count, worker_count }, |_| BenchmarkRouter, |_| BenchmarkWorker).unwrap();
-        let events = (0..INPUT_COUNT)
-            .map(|value| BenchmarkEvent { router_index: value % router_count, worker_index: value % worker_count, value })
-            .collect();
+        let runtime =
+            Runtime::start((0..router_count).map(|_| BenchmarkRouter).collect(), (0..worker_count).map(|_| BenchmarkWorker).collect())
+                .unwrap();
+        let events = (0..INPUT_COUNT).map(|value| BenchmarkEvent { worker_index: value % worker_count, value }).collect();
         Self { runtime, events }
     }
 
@@ -95,7 +94,7 @@ impl Harness {
 
     fn run(&self, prepared: PreparedRun) {
         for pending in prepared.events {
-            self.runtime.inputs()[pending.event.router_index].send(RouterInput::Event(pending)).unwrap();
+            self.runtime.input().send(RouterInput::Event(pending)).unwrap();
         }
         assert!(prepared.completed.recv().is_err());
     }

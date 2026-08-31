@@ -11,4 +11,4 @@ mod types;
 
 pub use apply::apply;
 pub use send::send;
-pub use types::{ApiError, ApplyResponse, InputBatch, RejectionMessage};
+pub use types::{ApiError, ApplyOutput, ApplyResponse, InputBatch, RejectionMessage};

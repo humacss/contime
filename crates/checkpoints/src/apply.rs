@@ -85,10 +85,6 @@ mod tests {
         fn set_time(&mut self, time: Self::Time) {
             self.time = time;
         }
-
-        fn conservative_size(&self) -> u64 {
-            64
-        }
     }
 
     impl ApplyEvents<TestEvent> for TestSnapshot {

@@ -10,7 +10,7 @@ worker boundary.
 
 ## Initial scope
 
-- Accept events already owned by `Arc`.
+- Accept any event ownership representation selected by the consumer.
 - Deduplicate retained events by event ID, independently of timestamp.
 - Append canonically ordered events to a `VecDeque`.
 - Store out-of-order events in a `BTreeMap`.
@@ -27,7 +27,8 @@ materialization, and integration tests are intentionally deferred.
 
 Consumers implement the local `Event` trait by providing an ordered time and a
 `u128` event ID. The time type's `Default` value is its zero timestamp.
-`EventHistory<E>` is the per-snapshot state object. It does not store a snapshot
+`EventHistory<E>` stores `E` directly as its consumer-selected ownership type
+and is the per-snapshot state object. It does not store a snapshot
 ID; the eventual worker owns the mapping from snapshot IDs to histories.
 
 An empty history starts dirty at zero. Its first unique event sets the dirty
@@ -65,11 +66,12 @@ merged iterator abstraction.
 
 ## Integration benchmark snapshot
 
-The public-API integration benchmark measures batches of 1,000 already
-`Arc`-owned events. Event construction, `Arc` allocation, fixture preparation,
+The public-API integration benchmark measures batches of 1,000 events behind
+a benchmark-local `Arc` wrapper. Production event storage does not prescribe
+that wrapper. Event construction, `Arc` allocation, fixture preparation,
 and fixture destruction are outside the timed section. Each result includes
-moving every `Arc` from the prepared input vector through `EventHistory::insert`;
-duplicate insertion also includes dropping the rejected incoming `Arc`.
+moving every wrapper from the prepared input vector through `EventHistory::insert`;
+duplicate insertion also includes dropping the rejected incoming wrapper.
 
 Local release-mode Criterion results on 2026-08-29:
 

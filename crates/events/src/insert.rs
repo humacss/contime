@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{Event, EventHistory, EventKey, Insert};
 
 impl Insert {
@@ -18,14 +16,14 @@ where
     /// In-order events append to the ordered deque. Events before the current
     /// tail enter the late-event tree. Identity is independent of timestamp:
     /// a retained event ID always makes a later insertion a no-op.
-    pub fn insert(&mut self, event: Arc<E>) -> Insert {
+    pub fn insert(&mut self, event: E) -> Insert {
         let event_id = event.event_id();
         if !self.retained_ids.insert(event_id) {
             return Insert::Duplicate;
         }
 
         let was_empty = self.is_empty();
-        let key = EventKey::from_event(event.as_ref());
+        let key = EventKey::from_event(&event);
         if was_empty || key.time < self.dirty_time {
             self.dirty_time = key.time.clone();
         }
@@ -43,13 +41,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::hint::black_box;
-    use std::sync::Arc;
-
     use criterion::{BatchSize, Criterion};
+    use std::hint::black_box;
 
     use crate::{Event, EventHistory, EventKey, Insert};
 
+    #[derive(Clone)]
     struct TestEvent {
         id: u128,
         time: i64,
@@ -67,8 +64,19 @@ mod tests {
         }
     }
 
-    fn event(id: u128, time: i64) -> Arc<TestEvent> {
-        Arc::new(TestEvent { id, time })
+    fn event(id: u128, time: i64) -> TestEvent {
+        TestEvent { id, time }
+    }
+
+    #[test]
+    fn history_retains_the_selected_event_ownership_type_directly() {
+        let mut history = EventHistory::new();
+
+        history.insert(TestEvent { id: 7, time: 11 });
+
+        let (_key, retained) = history.iter().next().unwrap();
+        assert_eq!(retained.id, 7);
+        assert_eq!(retained.time, 11);
     }
 
     #[test]
@@ -120,28 +128,28 @@ mod tests {
         assert_eq!(history.dirty_time(), &10);
     }
 
-    fn ordered_fixture() -> (EventHistory<TestEvent>, Vec<Arc<TestEvent>>) {
+    fn ordered_fixture() -> (EventHistory<TestEvent>, Vec<TestEvent>) {
         let events = (0..1_000).map(|value| event(value, value as i64)).collect();
         (EventHistory::with_capacity(1_000), events)
     }
 
-    fn late_fixture() -> (EventHistory<TestEvent>, Vec<Arc<TestEvent>>) {
+    fn late_fixture() -> (EventHistory<TestEvent>, Vec<TestEvent>) {
         let mut history = EventHistory::with_capacity(1_001);
         history.insert(event(10_000, 10_000));
         let events = (0..1_000).map(|value| event(value, value as i64)).collect();
         (history, events)
     }
 
-    fn duplicate_fixture() -> (EventHistory<TestEvent>, Vec<Arc<TestEvent>>) {
+    fn duplicate_fixture() -> (EventHistory<TestEvent>, Vec<TestEvent>) {
         let events = (0..1_000).map(|value| event(value, value as i64)).collect::<Vec<_>>();
         let mut history = EventHistory::with_capacity(1_000);
         for event in &events {
-            history.insert(Arc::clone(event));
+            history.insert(event.clone());
         }
         (history, events)
     }
 
-    fn benchmark_fixture(criterion: &mut Criterion, name: &str, fixture: fn() -> (EventHistory<TestEvent>, Vec<Arc<TestEvent>>)) {
+    fn benchmark_fixture(criterion: &mut Criterion, name: &str, fixture: fn() -> (EventHistory<TestEvent>, Vec<TestEvent>)) {
         criterion.bench_function(&format!("events/insert/1000_{name}"), |bencher| {
             bencher.iter_batched(
                 fixture,
