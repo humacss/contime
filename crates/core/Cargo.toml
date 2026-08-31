@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 autobenches = false
 license = "MIT"
-description = "Apply-only composition of isolated ConTime subsystems"
+description = "Composed apply and query pipeline for isolated ConTime subsystems"
 publish = false
 
 [dependencies]
@@ -23,4 +23,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 name = "apply"
+harness = false
+
+[[bench]]
+name = "query"
 harness = false

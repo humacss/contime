@@ -1,7 +1,7 @@
 use crossbeam_channel::Sender;
 
 use crate::input::prepare_inputs;
-use crate::{ApiError, ConTime, Input, RejectionMessage, RejectionReason, RouterBatch};
+use crate::{ApiError, ConTime, Input, RejectionMessage, RejectionReason, RouterMessage};
 
 impl<I, S, W> ConTime<I, S, W>
 where
@@ -16,9 +16,9 @@ where
     }
 }
 
-fn send_to<I>(
+fn send_to<I, S>(
     budget: &crate::MemoryBudget,
-    output: &Sender<RouterBatch<I>>,
+    output: &Sender<RouterMessage<I, S>>,
     inputs: impl IntoIterator<Item = I>,
     rejection_sender: Sender<RejectionMessage<RejectionReason>>,
 ) -> Result<(), ApiError>
@@ -35,7 +35,7 @@ where
             return Ok(());
         }
     };
-    contime_api::send::<RouterBatch<I>, _, _, _, _>(output, inputs, rejection_sender)
+    contime_api::send::<RouterMessage<I, S>, _, _, _, _>(output, inputs, rejection_sender)
 }
 
 #[cfg(test)]
@@ -50,7 +50,7 @@ mod tests {
     use crossbeam_channel::unbounded;
 
     use super::send_to;
-    use crate::{ConTime, ConTimeConfig, Input, MemoryBudget, RejectionMessage, RejectionReason, RouterBatch};
+    use crate::{ConTime, ConTimeConfig, Input, MemoryBudget, RejectionMessage, RejectionReason, RouterMessage};
 
     struct TestInput {
         id: u128,
@@ -176,7 +176,7 @@ mod tests {
                     let budget = MemoryBudget::new(usize::MAX, 0);
                     let inputs = (0..1_000).map(|id| TestInput { id, value: 1 }).collect::<Vec<_>>();
                     let (rejection_sender, rejection_receiver) = unbounded();
-                    let (output, output_receiver) = unbounded::<RouterBatch<TestInput>>();
+                    let (output, output_receiver) = unbounded::<RouterMessage<TestInput, TestSnapshot>>();
                     (budget, inputs, rejection_sender, rejection_receiver, output, output_receiver)
                 },
                 |(budget, inputs, rejection_sender, rejection_receiver, output, output_receiver)| {

@@ -1,6 +1,6 @@
 # contime-core
 
-`contime-core` is the smallest complete apply-only composition of the isolated
+`contime-core` is the smallest complete apply-and-query composition of the isolated
 ConTime subcrates. It owns the process topology and memory budget while
 delegating API batching, deterministic routing, worker scheduling, canonical
 event storage, checkpoint replay, lane application, and ownership accounting
@@ -34,12 +34,41 @@ does not fit is rejected as a whole with one `MemoryFull` result per event ID.
 The first pass does not separately estimate unused capacity in internal event
 collections; the configured buffer covers that implementation overhead.
 
+## Query flow
+
+Snapshot and event-history queries use the same runtime, router queues, and
+worker queues as applies. Snapshot queries partition requested IDs across
+workers and return only found boxed snapshots. Event queries target one
+snapshot history and return cloned tracked handles over `[from, to)`. Receiver
+closure signals that every affected worker has completed.
+
+Query reconstruction is read-only: it does not modify retained checkpoints,
+acknowledge event history, force replay, or change worker scheduling.
+
 ## Deferred scope
 
-- Queries and historical reads
 - Advance, horizon pruning, and memory reclamation policy
 - Cross-worker transactional admission
 - Lane macros
+
+## End-to-end query benchmark snapshot
+
+Local optimized results recorded on 2026-09-01. Each runtime is populated
+before timing; the measured region contains one synchronous query from the
+public API through router and worker response-channel closure.
+
+| Routers | Workers | 1,000 snapshots | Snapshot throughput | 1,000 event handles | Event throughput |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 70.23 us | 14.24 M/s | 30.55 us | 32.73 M/s |
+| 1 | 4 | 63.77 us | 15.68 M/s | 31.11 us | 32.15 M/s |
+| 1 | 10 | 96.13 us | 10.40 M/s | 34.56 us | 28.94 M/s |
+| 2 | 10 | 94.30 us | 10.60 M/s | 28.77 us | 34.75 M/s |
+
+Snapshot queries partition 1,000 independent IDs and return 1,000 boxed exact
+checkpoint clones. Event queries target one history and clone 1,000 tracked
+handles over a half-open range. Additional workers only help the partitionable
+snapshot case when the parallel work exceeds added channel and completion
+overhead; a single-history event query always executes on one worker.
 
 ## Unit benchmark snapshot
 
@@ -165,6 +194,7 @@ Run the end-to-end send benchmark:
 
 ```bash
 cargo bench --manifest-path crates/core/Cargo.toml --bench apply
+cargo bench --manifest-path crates/core/Cargo.toml --bench query
 ```
 
 Run only the topology matrix:

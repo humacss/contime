@@ -58,6 +58,21 @@ where
     }
 }
 
+impl<I, S, W> contime_worker::QueryCheckpoints<History<I>> for CheckpointStorage<S, W>
+where
+    I: Input,
+    S: Snapshot<Time = I::Time> + ApplyEvents<I> + ConservativeTrackedSize,
+    W: ApplyWrapper<S, I>,
+{
+    type Context = W;
+    type Time = I::Time;
+    type Snapshot = S;
+
+    fn query_at(&self, events: &History<I>, context: &mut Self::Context, time: Self::Time) -> Option<Box<Self::Snapshot>> {
+        contime_checkpoints::query_at(&self.state.checkpoints, events, context, time)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::hint::black_box;

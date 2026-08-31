@@ -13,7 +13,7 @@ where
 {
     pub fn start(config: ConTimeConfig, wrapper: W) -> Result<Self, contime_runtime::StartError> {
         let budget = MemoryBudget::new(config.memory_limit, config.memory_buffer);
-        let routers = (0..config.router_count).map(|_| RouterProcess::new(config.router_seed)).collect();
+        let routers = (0..config.router_count).map(|_| RouterProcess::<I, S>::new(config.router_seed)).collect();
         let workers = (0..config.worker_count)
             .map(|_| WorkerProcess::new(config.worker, config.checkpoints, budget.clone(), wrapper.clone()))
             .collect();
