@@ -1,5 +1,8 @@
 # Arc-only Router Boundary Implementation Plan
 
+> Historical implementation plan: superseded by the ownership-generic router
+> boundary on 2026-08-31. It remains only as a record of the earlier design.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Require `Arc`-owned events at the isolated router boundary while preserving deterministic routing, completion behavior, and the single-worker hash shortcut.

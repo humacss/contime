@@ -1,20 +1,18 @@
-use std::sync::Arc;
-
 #[derive(Debug)]
-pub struct InputBatch<E, C> {
-    pub inputs: Vec<Arc<E>>,
+pub struct InputBatch<I, C> {
+    pub inputs: Vec<I>,
     pub completion: C,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct RoutedInput<E> {
+pub struct RoutedInput<I> {
     pub snapshot_id: u128,
-    pub input: Arc<E>,
+    pub input: I,
 }
 
 #[derive(Debug)]
-pub struct WorkerBatch<E, C> {
-    pub inputs: Vec<RoutedInput<E>>,
+pub struct WorkerBatch<I, C> {
+    pub inputs: Vec<RoutedInput<I>>,
     pub completion: C,
 }
 

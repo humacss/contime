@@ -1,45 +1,47 @@
-use std::sync::Arc;
-
 use crossbeam_channel::Sender;
 
 use crate::types::{ApiError, InputBatch, RejectionMessage};
 
-trait Deps<IL> {
+trait Deps<IL, R> {
     type Error;
 
-    fn forward(&self, batch: InputBatch<IL>) -> Result<(), Self::Error>;
+    fn forward(&self, batch: InputBatch<IL, R>) -> Result<(), Self::Error>;
 }
 
-struct DefaultDeps<'a, IL> {
-    output: &'a Sender<InputBatch<IL>>,
+struct DefaultDeps<'a, IL, R> {
+    output: &'a Sender<InputBatch<IL, R>>,
 }
 
-impl<IL> Deps<IL> for DefaultDeps<'_, IL> {
+impl<IL, R> Deps<IL, R> for DefaultDeps<'_, IL, R> {
     type Error = ApiError;
 
-    fn forward(&self, batch: InputBatch<IL>) -> Result<(), Self::Error> {
+    fn forward(&self, batch: InputBatch<IL, R>) -> Result<(), Self::Error> {
         self.output.send(batch).map_err(|_| ApiError::OutputChannelClosed)
     }
 }
 
-/// Normalizes owned or shared inputs into Arcs and forwards one batch.
+/// Converts inputs into the caller-selected ownership type and forwards one batch.
 ///
 /// The batch owns the rejection sender, allowing channel closure to signal
-/// that every downstream copy of the batch has finished processing. Existing
-/// Arcs preserve their allocation; owned values receive one Arc allocation.
-pub fn send<E, IL, I>(output: &Sender<InputBatch<E>>, inputs: I, rejection_sender: Sender<RejectionMessage>) -> Result<(), ApiError>
+/// that every downstream copy of the batch has finished processing. This API
+/// does not prescribe whether each input is owned, shared, or tracked.
+pub fn send<I, R, Input, Inputs>(
+    output: &Sender<InputBatch<I, R>>,
+    inputs: Inputs,
+    rejection_sender: Sender<RejectionMessage<R>>,
+) -> Result<(), ApiError>
 where
-    I: IntoIterator<Item = IL>,
-    IL: Into<Arc<E>>,
+    Inputs: IntoIterator<Item = Input>,
+    Input: Into<I>,
 {
     send_with_deps(&DefaultDeps { output }, inputs, rejection_sender)
 }
 
-fn send_with_deps<D, E, IL, I>(deps: &D, inputs: I, rejection_sender: Sender<RejectionMessage>) -> Result<(), D::Error>
+fn send_with_deps<D, I, R, Input, Inputs>(deps: &D, inputs: Inputs, rejection_sender: Sender<RejectionMessage<R>>) -> Result<(), D::Error>
 where
-    D: Deps<E>,
-    I: IntoIterator<Item = IL>,
-    IL: Into<Arc<E>>,
+    D: Deps<I, R>,
+    Inputs: IntoIterator<Item = Input>,
+    Input: Into<I>,
 {
     let inputs = inputs.into_iter().map(Into::into).collect::<Vec<_>>();
     if inputs.is_empty() {
@@ -82,7 +84,7 @@ mod tests {
                 || {
                     let inputs = (0..input_count).map(benchmark_event::<PAYLOAD_BYTES>).collect::<Vec<_>>();
                     let (rejection_sender, rejection_receiver) = unbounded();
-                    let (output, output_receiver) = unbounded::<InputBatch<BenchmarkEvent<PAYLOAD_BYTES>>>();
+                    let (output, output_receiver) = unbounded::<InputBatch<BenchmarkEvent<PAYLOAD_BYTES>, ()>>();
                     (inputs, rejection_sender, rejection_receiver, output, output_receiver)
                 },
                 |(inputs, rejection_sender, rejection_receiver, output, output_receiver)| {
@@ -100,7 +102,7 @@ mod tests {
                 || {
                     let inputs = (0..input_count).map(benchmark_event::<PAYLOAD_BYTES>).map(Arc::new).collect::<Vec<_>>();
                     let (rejection_sender, rejection_receiver) = unbounded();
-                    let (output, output_receiver) = unbounded::<InputBatch<BenchmarkEvent<PAYLOAD_BYTES>>>();
+                    let (output, output_receiver) = unbounded::<InputBatch<Arc<BenchmarkEvent<PAYLOAD_BYTES>>, ()>>();
                     (inputs, rejection_sender, rejection_receiver, output, output_receiver)
                 },
                 |(inputs, rejection_sender, rejection_receiver, output, output_receiver)| {
@@ -116,13 +118,13 @@ mod tests {
     struct StubError;
 
     struct StubDeps {
-        batches: RefCell<Vec<InputBatch<u128>>>,
+        batches: RefCell<Vec<InputBatch<u128, ()>>>,
     }
 
-    impl Deps<u128> for StubDeps {
+    impl Deps<u128, ()> for StubDeps {
         type Error = StubError;
 
-        fn forward(&self, batch: InputBatch<u128>) -> Result<(), Self::Error> {
+        fn forward(&self, batch: InputBatch<u128, ()>) -> Result<(), Self::Error> {
             self.batches.borrow_mut().push(batch);
             Ok(())
         }
@@ -130,12 +132,26 @@ mod tests {
 
     struct FailingDeps;
 
-    impl Deps<u128> for FailingDeps {
+    impl Deps<u128, ()> for FailingDeps {
         type Error = StubError;
 
-        fn forward(&self, _batch: InputBatch<u128>) -> Result<(), Self::Error> {
+        fn forward(&self, _batch: InputBatch<u128, ()>) -> Result<(), Self::Error> {
             Err(StubError)
         }
+    }
+
+    #[test]
+    fn send_preserves_the_input_ownership_type() {
+        struct NonClone(u128);
+
+        let (output, output_receiver) = unbounded::<InputBatch<NonClone, ()>>();
+        let (rejection_sender, _rejection_receiver) = unbounded();
+
+        send(&output, [NonClone(7)], rejection_sender).unwrap();
+
+        let batch = output_receiver.recv().unwrap();
+        let input: NonClone = batch.inputs.into_iter().next().unwrap();
+        assert_eq!(input.0, 7);
     }
 
     #[test]
@@ -143,11 +159,11 @@ mod tests {
         let deps = StubDeps { batches: RefCell::new(Vec::new()) };
         let (rejection_sender, _rejection_receiver) = unbounded();
 
-        send_with_deps(&deps, [3, 5, 8], rejection_sender).unwrap();
+        send_with_deps(&deps, [3_u128, 5, 8], rejection_sender).unwrap();
 
         let batches = deps.batches.borrow();
         assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].inputs.iter().map(|input| **input).collect::<Vec<_>>(), vec![3, 5, 8]);
+        assert_eq!(batches[0].inputs, vec![3, 5, 8]);
     }
 
     #[test]
@@ -155,7 +171,7 @@ mod tests {
         let deps = StubDeps { batches: RefCell::new(Vec::new()) };
         let (rejection_sender, rejection_receiver) = unbounded();
 
-        send_with_deps(&deps, [3, 5, 8], rejection_sender).unwrap();
+        send_with_deps(&deps, [3_u128, 5, 8], rejection_sender).unwrap();
         assert_eq!(rejection_receiver.try_recv(), Err(TryRecvError::Empty));
 
         deps.batches.borrow_mut().clear();
@@ -176,14 +192,14 @@ mod tests {
     fn send_propagates_dependency_errors() {
         let (rejection_sender, _rejection_receiver) = unbounded();
 
-        let result = send_with_deps(&FailingDeps, [3], rejection_sender);
+        let result = send_with_deps(&FailingDeps, [3_u128], rejection_sender);
 
         assert_eq!(result, Err(StubError));
     }
 
     #[test]
     fn send_reports_a_closed_output_channel() {
-        let (output, output_receiver) = unbounded();
+        let (output, output_receiver) = unbounded::<InputBatch<i32, ()>>();
         let (rejection_sender, _rejection_receiver) = unbounded();
         drop(output_receiver);
 
@@ -193,21 +209,30 @@ mod tests {
     }
 
     #[test]
-    fn send_wraps_owned_inputs_in_arcs() {
-        let (output, output_receiver) = unbounded::<InputBatch<u128>>();
+    fn send_can_convert_inputs_into_the_selected_type() {
+        #[derive(Debug, PartialEq, Eq)]
+        struct Converted(u128);
+
+        impl From<u128> for Converted {
+            fn from(value: u128) -> Self {
+                Self(value)
+            }
+        }
+
+        let (output, output_receiver) = unbounded::<InputBatch<Converted, ()>>();
         let (rejection_sender, _rejection_receiver) = unbounded();
 
         send(&output, [3_u128], rejection_sender).unwrap();
 
         let batch = output_receiver.recv().unwrap();
-        assert_eq!(*batch.inputs[0], 3);
+        assert_eq!(batch.inputs[0], Converted(3));
     }
 
     #[test]
     fn send_preserves_existing_arc_allocations() {
         let input = Arc::new(5_u128);
         let input_pointer = Arc::as_ptr(&input);
-        let (output, output_receiver) = unbounded::<InputBatch<u128>>();
+        let (output, output_receiver) = unbounded::<InputBatch<Arc<u128>, ()>>();
         let (rejection_sender, _rejection_receiver) = unbounded();
 
         send(&output, [input], rejection_sender).unwrap();

@@ -30,7 +30,7 @@ impl Events<TestInput> for TestEvents {
         Some(EventsCreated { events: Self::default(), retained_bytes_delta: 0 })
     }
 
-    fn insert(&mut self, input: Arc<TestInput>, _limit: u64) -> EventInsert<()> {
+    fn insert(&mut self, input: TestInput, _limit: u64) -> EventInsert<()> {
         self.0.push(input.0);
         EventInsert { retained_bytes_delta: 32, changed: true, rejections: Vec::new() }
     }
@@ -61,10 +61,7 @@ fn batch(input_id: u128) -> ApplyBatch<TestInput, TestCompletion> {
 fn batch_for_snapshots(input_id: u128, snapshot_ids: &[u128]) -> ApplyBatch<TestInput, TestCompletion> {
     let (completion, _responses) = unbounded();
     ApplyBatch {
-        inputs: snapshot_ids
-            .iter()
-            .map(|snapshot_id| RoutedInput { snapshot_id: *snapshot_id, input: Arc::new(TestInput(input_id)) })
-            .collect(),
+        inputs: snapshot_ids.iter().map(|snapshot_id| RoutedInput { snapshot_id: *snapshot_id, input: TestInput(input_id) }).collect(),
         completion,
     }
 }
@@ -137,7 +134,7 @@ fn zero_dirty_age_replays_without_an_additional_input() {
         work::<TestInput, TestEvents, TestCheckpoints, _>(receiver, worker_config, (), (), worker_context);
     });
 
-    sender.send(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: Arc::new(TestInput(1)) }], completion }).unwrap();
+    sender.send(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestInput(1) }], completion }).unwrap();
 
     assert_eq!(completed.recv_timeout(Duration::from_secs(1)), Err(crossbeam_channel::RecvTimeoutError::Disconnected),);
     drop(sender);

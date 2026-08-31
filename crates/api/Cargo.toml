@@ -8,7 +8,6 @@ description = "Isolated API-side request and response processing for ConTime"
 publish = false
 
 [dependencies]
-contime = { path = "../.." }
 crossbeam-channel = "0.5"
 
 [dev-dependencies]

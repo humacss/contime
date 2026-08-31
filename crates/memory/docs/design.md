@@ -1,263 +1,152 @@
-# Isolated Memory Ownership Design
+# Minimal Tracked Memory Design
 
 ## Purpose
 
-`contime-memory` is the only subsystem that performs memory accounting. Values
-describe their current size, per-item accounts measure mutations, tracked
-wrappers bind accounting to ownership, and a shared budget aggregates the
-result. API, router, worker, events, checkpoints, lanes, runtime, and core must
-not manually exchange retained-memory deltas after adopting this contract.
+`contime-memory` provides ownership types that replace ordinary `Arc` and
+`Box` where ConTime must account for retained memory automatically. The crate
+defines the compile-time contracts those wrappers need, but it does not choose
+how a runtime stores counters, enforces admission, reports diagnostics, or
+coordinates a memory process.
 
-This pass rewrites only the isolated memory crate. Core integration and removal
-of old downstream accounting are separate passes.
+Core owns runtime policy. The memory crate owns lifecycle behavior: measuring
+allocations and applying the correct deltas on creation, clone, mutation, and
+drop.
 
-## Design rules
+## Public contract
 
-- Use `usize` for all in-process memory sizes.
-- Use no mutexes. The concrete shared budget uses `AtomicUsize`.
-- Runtime accounting records reality and is infallible. It never rolls back or
-  drops a completed action because a threshold was crossed.
-- A configured action buffer protects allocations made between the before and
-  after measurements of synchronous worker actions.
-- Crossing the action ceiling blocks future memory-growing actions; it does not
-  invalidate the action that just completed.
-- A buffer violation is an operational diagnostic, not an event rejection.
-- Wrapper `Drop` implementations release memory automatically.
-- Standard `Clone` is supported: Arc cloning accounts another pointer, while
-  Box cloning deeply clones and separately accounts its pointee.
-- The tracked wrappers remain exactly one machine pointer wide.
-- `TrackedBox` exposes no unrestricted mutable dereference. Mutation occurs
-  only through its measured action closure.
-- No tracked wrapper implements `ConservativeTrackedSize`; that trait is for
-  the underlying `T` only.
-
-## Shared vocabulary
-
-### Conservative tracked size
+The complete contract consists of one enum and three traits.
 
 ```rust
-pub trait ConservativeTrackedSize {
-    fn conservative_tracked_size(&self) -> usize;
-}
-```
-
-The method returns the largest reasonable number of bytes currently
-attributable to the underlying value `T`. It does not predict unbounded future
-growth. Implementations use collection capacity rather than length and choose
-the larger current estimate when allocator or ownership details are ambiguous.
-Arithmetic that cannot be represented resolves conservatively to `usize::MAX`.
-
-The memory crate adds the outer tracked pointer, account, budget handle, Arc
-control block, and other wrapper machinery. Consumers do not include that
-machinery in `T::conservative_tracked_size`. Ordinary pointers owned beneath
-`T` may be included conservatively. Nested `TrackedArc` and `TrackedBox`
-handles are excluded because those wrappers already account their own pointers
-and pointees.
-
-### Memory changes
-
-```rust
-pub enum MemoryChange {
+pub enum SizeDelta {
     Increase(usize),
     Decrease(usize),
     Unchanged,
 }
-```
 
-`MemoryChange::between(before, after)` compares two `usize` measurements
-without signed conversion.
+pub trait ConservativeTrackedSize {
+    fn conservative_tracked_size(&self) -> usize;
+}
 
-### Per-item measurement account
-
-```rust
-pub trait MemoryAccount<T>: Sized
-where
-    T: ConservativeTrackedSize,
-{
-    fn new(value: &T) -> Self;
-    fn current(&self, value: &T) -> usize;
-
-    fn change<R, F>(
+pub trait TrackedSizeDelta {
+    fn size_delta<R>(
         &mut self,
-        value: &mut T,
-        action: F,
-    ) -> (R, MemoryChange)
-    where
-        F: FnOnce(&mut T) -> R;
+        action: impl FnOnce(&mut Self) -> R,
+    ) -> (R, SizeDelta);
+}
+
+pub trait TrackedMemoryBudget: Clone {
+    fn apply_delta(&self, delta: SizeDelta);
+    fn has_buffer(&self) -> bool;
+    fn buffer_size(&self) -> usize;
 }
 ```
 
-The closure is the complete mutable action boundary. Its domain result is
-returned alongside the internally consumed memory change.
+`ConservativeTrackedSize` measures the largest reasonable amount of memory
+currently retained by the underlying value. It includes inline storage and
+retained capacities. Nested tracked wrappers exclude their own memory because
+they report it independently.
 
-The crate supplies two strategies:
+`TrackedSizeDelta` is implemented by a mutable tracked value. The value owns
+its measurement strategy and any cached sizing state. It runs the provided
+action and returns both the domain result and the resulting `SizeDelta`.
+Implementations may measure twice, compare against cached state, or derive the
+delta directly.
 
-- `MeasuredAccount` is the default and should be zero-sized. It measures before
-  and after each mutation and measures the current value for reserve/release.
-- `CachedAccount` stores one `usize`. It measures once at creation, uses that
-  cached value as the before-size, measures once afterward, and updates its
-  cache. Its additional storage is included in wrapper overhead.
+`TrackedMemoryBudget` is a reporting and query boundary. An implementation may
+use atomics, thread-local counters, channels, intermediate aggregators, or a
+dedicated memory process. `has_buffer` reports whether the configured action
+buffer remains available. `buffer_size` exposes that allowance for diagnostics.
 
-Caching is opt-in. Most values should use `MeasuredAccount`; caching is useful
-only when measurement cost justifies its persistent storage and consistency
-cost.
-
-A panic inside the action is a process-level failure. The hot path does not use
-`catch_unwind` merely to preserve accounting after a panic.
-
-## Aggregate budget
-
-```rust
-pub trait MemoryBudget: Clone + Send + Sync {
-    fn reserve(&self, kind: MemoryKind, bytes: usize);
-    fn resize(&self, kind: MemoryKind, change: MemoryChange);
-    fn release(&self, kind: MemoryKind, bytes: usize);
-    fn state(&self) -> MemoryState;
-}
-```
-
-`reserve`, `resize`, and `release` increment or decrement aggregate counters.
-They do not grant permission and do not return ordinary runtime errors.
-
-Initial categories are:
-
-```rust
-pub enum MemoryKind {
-    Allocation,
-    Pointer,
-}
-```
-
-The concrete `AtomicMemoryBudget` is configured with:
-
-```rust
-pub struct MemoryBudgetConfig {
-    pub hard_limit: usize,
-    pub concurrent_actions: usize,
-    pub action_buffer: usize,
-}
-```
-
-Construction uses checked arithmetic:
-
-```text
-reserved headroom = concurrent_actions * action_buffer
-action ceiling    = hard limit - reserved headroom
-```
-
-An invalid or overflowing configuration is rejected during construction.
-There is no physical allocation for the buffer; it is accounting headroom.
-
-`MemoryState` reports total, allocation, and pointer usage; action ceiling;
-hard limit; whether another action may begin; whether the hard limit has been
-crossed; and how many resize increases exceeded one configured action buffer.
-
-The states are:
-
-- `Ready`: current usage is at or below the action ceiling.
-- `ActionBlocked`: usage is above the action ceiling but not the hard limit.
-- `HardLimitExceeded`: measured usage is above the configured hard limit.
-
-All already-running synchronous actions may complete. Core later checks the
-state before beginning another memory-growing action. Reads, drops, and future
-horizon advancement remain possible while action growth is blocked.
-
-Counter overflow never wraps. Release underflow is a programming invariant,
-not a recoverable runtime condition.
+The crate contains no production implementation of these traits. Concrete
+implementations in this crate exist only as unit-test and benchmark fixtures.
 
 ## Tracked Arc
 
-`TrackedArc<T, A, B>` is one machine pointer wide. The shared heap allocation
-stores `T`, account strategy `A`, and budget handle `B`.
+`TrackedArc<T, B>` replaces `Arc<T>`, where `T: ConservativeTrackedSize` and
+`B: TrackedMemoryBudget`.
 
-- `new(value, budget)` creates the account, reserves the complete shared
-  allocation, and reserves the first outer pointer.
-- `Clone` shares the allocation and reserves one additional pointer.
-- Every handle drop releases one pointer.
-- Dropping the final handle releases the shared allocation using the account's
-  current measurement.
-- Only immutable `Deref<Target = T>` is exposed.
+- Creation measures and reports the shared allocation plus its first handle.
+- Ordinary `Clone` reports one additional handle before cloning the Arc.
+- Every handle drop releases its handle size.
+- The final shared-allocation drop measures and releases the allocation once.
+- The public wrapper remains exactly one machine pointer wide.
+- Access is immutable.
 
-The shared charge includes the conservative tracked size of `T` plus account,
-budget-handle, Arc control-block, and fixed allocation fields. Pointer charge is
-`size_of::<TrackedArc<T, A, B>>()`.
+The wrapper records completed reality. It does not reject construction or
+cloning based on `has_buffer`; the orchestrator consults the budget before
+starting memory-growing work.
 
 ## Tracked Box
 
-`TrackedBox<T, A, B>` is one machine pointer wide. Its heap allocation stores
-`T`, account strategy `A`, and budget handle `B`.
+`TrackedBox<T, B>` replaces `Box<T>`, where `T: ConservativeTrackedSize` and
+`B: TrackedMemoryBudget`. Mutation additionally requires
+`T: TrackedSizeDelta`.
 
-- `new(value, budget)` creates and reserves one exclusive allocation and its
-  outer pointer.
-- `Clone`, when `T: Clone`, deeply clones `T`, creates a fresh account, and
-  reserves a completely independent allocation and pointer.
-- Immutable `Deref<Target = T>` is exposed.
-- `DerefMut` is not implemented.
-- `update(action)` delegates mutation to `A::change`, forwards the returned
-  `MemoryChange` immediately to the budget, and returns only the action's
-  domain result.
-- Drop releases the latest measured allocation and the outer pointer.
+Its constructor is `TrackedBox::new(value, budget)`.
 
-No initial `into_inner` operation is exposed because it would return live,
-untracked memory after releasing its accounting.
+- Creation reports its allocation plus handle.
+- Ordinary `Clone` deeply clones `T` and reports an independent allocation.
+- Any cached delta state belongs to `T` and follows `T`'s clone semantics.
+- Mutation is available only through `update`.
+- `update` calls `T::size_delta`, applies the returned delta to the budget, and
+  returns the closure result.
+- Drop releases the allocation and handle.
+- The public wrapper remains exactly one machine pointer wide.
+- There is no `DerefMut` or `into_inner` escape hatch.
 
-Channel messages use `TrackedBox`; a separate tracked-message type is
-unnecessary. Moving a tracked message through queues changes no accounting.
-Dropping its final owner releases it regardless of which subsystem performed
-the drop. Channel implementation capacity is runtime infrastructure overhead
-and is not attributed to individual live messages.
+## Runtime boundary
 
-## Downstream contract
+Core may initially implement `TrackedMemoryBudget` with an `Arc<AtomicUsize>`.
+A future reporting thread or hierarchical counter is an alternate
+implementation of the same trait, not a change to the tracked ownership types.
 
-After later integration:
+## Source layout
 
-- owned events are wrapped once and shared as `TrackedArc` values;
-- every event pointer clone is accounted automatically;
-- snapshots and messages use `TrackedBox`;
-- checkpoint/replay apply results no longer contain retained-memory deltas;
-- the worker's manual memory counter and delta reconciliation disappear;
-- core selects concrete account and budget implementations and observes budget
-  state and buffer diagnostics.
-
-Those downstream changes are intentionally outside this rewrite.
-
-## Source units
-
-The crate follows the same organization as the other isolated ConTime crates:
+Production code has four files:
 
 - `lib.rs`: module declarations and public re-exports only.
-- `types.rs`: public traits, enums, state, configuration, and errors.
-- `change.rs`: `MemoryChange` construction and helpers.
-- `measured_account.rs`: default measure-twice account.
-- `cached_account.rs`: opt-in cached account.
-- `budget.rs`: lock-free atomic aggregate budget.
-- `tracked_arc.rs`: complete Arc ownership lifecycle.
-- `tracked_box.rs`: complete Box ownership and measured mutation lifecycle.
+- `types.rs`: `SizeDelta`, the three traits, wrapper declarations, and private
+  allocation types.
+- `tracked_arc.rs`: all Arc replacement behavior.
+- `tracked_box.rs`: all Box replacement behavior.
 
-Every behavior-owning source unit contains focused unit tests and an ignored
-inline Criterion unit benchmark. Shared vocabulary and re-export files do not
-need benchmarks.
+The current account, budget, and change implementation files are removed.
+Public integration tests compare the ownership semantics of the standard and
+tracked wrappers. Public lifecycle performance is measured by one Criterion
+integration benchmark with matched standard-library baselines.
 
 ## Verification
 
-Unit tests cover change arithmetic, measurement call counts, account mutation,
-budget thresholds and categories, concurrent atomic updates, wrapper layout,
-deep versus shared clone behavior, measured mutation, and every drop path.
+`tracked_arc.rs` and `tracked_box.rs` each contain inline unit tests and ignored
+Criterion unit benchmarks. Their fixtures locally implement all required
+traits.
 
-Integration tests cover complete channel-message, shared-event, mutable
-snapshot, aggregate-budget, and action-blocking lifecycles.
+Tests cover exact creation, clone, update, and drop delta sequences; shared Arc
+allocation release exactly once; deep Box clone independence; closure-result
+preservation; and wrappers that remain one machine pointer wide.
 
-Unit benchmarks isolate:
+Each wrapper source file retains one unit benchmark for an important isolated
+path: Arc clone without destruction and Box update without setup or
+destruction.
 
-- reserve, resize, and release;
-- cheap and expensive measured versus cached account changes;
-- Arc clone and non-final/final drops;
-- Box creation, deep clone, update, and drop.
+`tests/ownership.rs` verifies that tracked Arc sharing and tracked Box deep
+cloning preserve their standard-library ownership semantics while accounting
+returns to zero after every value is dropped.
 
-Integration benchmarks measure 1,000-message ownership lifecycles and
-1,000-snapshot-update lifecycles. Fixture construction is outside timed regions
-unless construction is the operation named by the benchmark. Measured results
-and exact boundaries are recorded in the crate README.
+`benches/ownership.rs` benchmarks complete public-API lifecycles in batches of
+1,000. Every tracked path has a matched standard-library baseline performing
+the same ownership and payload work. It compares no-op, local-counter, and
+shared-atomic budget strategies and measures deep Box cloning across multiple
+retained payload sizes. The README reports the standard median, tracked median,
+their derived difference, and throughput. These integration results, rather
+than the diagnostic unit measurements, form the performance story.
 
-The crate has no normal dependency on root ConTime or another ConTime
-subcrate. Criterion remains development-only.
+## Scope exclusions
+
+- No atomic budget implementation.
+- No memory-reporting thread.
+- No admission or rejection policy.
+- No error event type.
+- No runtime or core dependency.
+- No normal dependency on another ConTime crate.
+- No Git commit during this cleanup pass.

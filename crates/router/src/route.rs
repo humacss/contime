@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::hash::RouterHasher;
@@ -26,7 +24,7 @@ impl<I, C> Deps<I, C> for DefaultDeps<'_, I, C> {
 
 pub fn route<I, C>(seed: u64, input: Receiver<InputBatch<I, C>>, worker_outputs: &[Sender<WorkerBatch<I, C>>]) -> Result<(), RouterError>
 where
-    I: RoutableInput,
+    I: RoutableInput + Clone,
     C: Clone,
 {
     route_with_deps(seed, input, &DefaultDeps { worker_outputs })
@@ -35,7 +33,7 @@ where
 fn route_with_deps<D, I, C>(seed: u64, input: Receiver<InputBatch<I, C>>, deps: &D) -> Result<(), RouterError>
 where
     D: Deps<I, C>,
-    I: RoutableInput,
+    I: RoutableInput + Clone,
     C: Clone,
 {
     if deps.worker_count() == 0 {
@@ -52,7 +50,7 @@ where
 fn route_batch<D, I, C>(hasher: &RouterHasher, batch: InputBatch<I, C>, deps: &D) -> Result<(), RouterError>
 where
     D: Deps<I, C>,
-    I: RoutableInput,
+    I: RoutableInput + Clone,
     C: Clone,
 {
     let worker_count = deps.worker_count();
@@ -65,7 +63,7 @@ where
         let mut pending_snapshot_id = None;
         input.snapshot_ids(&mut |snapshot_id| {
             if let Some(previous_snapshot_id) = pending_snapshot_id.replace(snapshot_id) {
-                push_route(&mut worker_inputs, hasher, worker_count, estimated_capacity, previous_snapshot_id, Arc::clone(&input));
+                push_route(&mut worker_inputs, hasher, worker_count, estimated_capacity, previous_snapshot_id, input.clone());
             }
         });
         if let Some(final_snapshot_id) = pending_snapshot_id {
@@ -100,7 +98,7 @@ fn push_route<I>(
     worker_count: usize,
     estimated_capacity: usize,
     snapshot_id: u128,
-    input: Arc<I>,
+    input: I,
 ) {
     let worker_index = hasher.worker_index(snapshot_id, worker_count);
     worker_inputs[worker_index].get_or_insert_with(|| Vec::with_capacity(estimated_capacity)).push(RoutedInput { snapshot_id, input });
@@ -131,6 +129,36 @@ mod tests {
         }
     }
 
+    struct SharedInput<I>(Arc<I>);
+
+    impl<I> Clone for SharedInput<I> {
+        fn clone(&self) -> Self {
+            Self(Arc::clone(&self.0))
+        }
+    }
+
+    impl<I> RoutableInput for SharedInput<I>
+    where
+        I: RoutableInput,
+    {
+        fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
+            self.0.snapshot_ids(emit);
+        }
+    }
+
+    #[test]
+    fn route_preserves_the_selected_input_ownership_type() {
+        let (input_sender, input_receiver) = unbounded();
+        let (worker_sender, worker_receiver) = unbounded();
+        input_sender.send(InputBatch { inputs: vec![TestInput { value: 10, snapshot_ids: vec![11] }], completion: () }).unwrap();
+        drop(input_sender);
+
+        route(7, input_receiver, &[worker_sender]).unwrap();
+
+        let input: TestInput = worker_receiver.recv().unwrap().inputs.pop().unwrap().input;
+        assert_eq!(input.value, 10);
+    }
+
     struct NonCloneInput {
         value: u64,
         snapshot_ids: Vec<u128>,
@@ -143,11 +171,11 @@ mod tests {
     }
 
     #[test]
-    fn route_accepts_a_non_clone_event_behind_arc() {
+    fn route_accepts_a_non_clone_event_behind_a_cloneable_wrapper() {
         let (input_sender, input_receiver) = unbounded();
         let (worker_sender, worker_receiver) = unbounded();
         input_sender
-            .send(InputBatch { inputs: vec![Arc::new(NonCloneInput { value: 10, snapshot_ids: vec![11] })], completion: () })
+            .send(InputBatch { inputs: vec![SharedInput(Arc::new(NonCloneInput { value: 10, snapshot_ids: vec![11] }))], completion: () })
             .unwrap();
         drop(input_sender);
 
@@ -155,12 +183,11 @@ mod tests {
 
         let routed = worker_receiver.recv().unwrap().inputs.pop().unwrap();
         assert_eq!(routed.snapshot_id, 11);
-        assert_eq!(routed.input.value, 10);
+        assert_eq!(routed.input.0.value, 10);
     }
 
     fn route_once(seed: u64, inputs: Vec<TestInput>, worker_count: usize) -> Vec<(usize, WorkerBatch<TestInput, ()>)> {
         let (input_sender, input_receiver) = unbounded();
-        let inputs = inputs.into_iter().map(Arc::new).collect();
         input_sender.send(InputBatch { inputs, completion: () }).unwrap();
         drop(input_sender);
 
@@ -277,7 +304,7 @@ mod tests {
             worker_outputs.push(worker_sender);
             worker_receivers.push(worker_receiver);
         }
-        input_sender.send(InputBatch { inputs: vec![event], completion: () }).unwrap();
+        input_sender.send(InputBatch { inputs: vec![SharedInput(event)], completion: () }).unwrap();
         drop(input_sender);
 
         route(7, input_receiver, &worker_outputs).unwrap();
@@ -293,7 +320,7 @@ mod tests {
         let weak = Arc::downgrade(&event);
         let (input_sender, input_receiver) = unbounded();
         let (worker_sender, worker_receiver) = unbounded();
-        input_sender.send(InputBatch { inputs: vec![event], completion: () }).unwrap();
+        input_sender.send(InputBatch { inputs: vec![SharedInput(event)], completion: () }).unwrap();
         drop(input_sender);
 
         route(7, input_receiver, &[worker_sender]).unwrap();
@@ -327,7 +354,7 @@ mod tests {
         }
         input_sender
             .send(InputBatch {
-                inputs: vec![Arc::new(TestInput { value: 10, snapshot_ids })],
+                inputs: vec![TestInput { value: 10, snapshot_ids }],
                 completion: CompletionToken { clone_count: Arc::clone(&completion_clone_count) },
             })
             .unwrap();
@@ -351,9 +378,7 @@ mod tests {
         let selected_worker = 1;
         let snapshot_id = snapshot_id_for_worker(7, 2, selected_worker);
         let (input_sender, input_receiver) = unbounded();
-        input_sender
-            .send(InputBatch { inputs: vec![Arc::new(TestInput { value: 10, snapshot_ids: vec![snapshot_id] })], completion: () })
-            .unwrap();
+        input_sender.send(InputBatch { inputs: vec![TestInput { value: 10, snapshot_ids: vec![snapshot_id] }], completion: () }).unwrap();
         drop(input_sender);
         let (first_worker, _first_receiver) = unbounded();
         let (second_worker, second_receiver) = unbounded();
@@ -373,7 +398,7 @@ mod tests {
 
     fn benchmark_fixture(input_count: usize, worker_count: usize) -> BenchmarkFixture {
         let inputs = (0..input_count)
-            .map(|snapshot_id| Arc::new(TestInput { value: snapshot_id as u64, snapshot_ids: vec![snapshot_id as u128] }))
+            .map(|snapshot_id| TestInput { value: snapshot_id as u64, snapshot_ids: vec![snapshot_id as u128] })
             .collect::<Vec<_>>();
         let (completion, completion_receiver) = unbounded();
         let (input_sender, input_receiver) = unbounded();

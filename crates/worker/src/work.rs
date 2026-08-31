@@ -180,7 +180,7 @@ mod tests {
             Some(EventsCreated { events: Self::default(), retained_bytes_delta: 0 })
         }
 
-        fn insert(&mut self, input: Arc<TestInput>, _limit: u64) -> EventInsert<()> {
+        fn insert(&mut self, input: TestInput, _limit: u64) -> EventInsert<()> {
             self.0.push(input.0);
             EventInsert { retained_bytes_delta: 32, changed: true, rejections: Vec::new() }
         }
@@ -206,7 +206,7 @@ mod tests {
 
     fn batch(first_id: u128, count: u128) -> ApplyBatch<TestInput, TestCompletion> {
         let (completion, _responses) = unbounded();
-        let inputs = (0..count).map(|offset| RoutedInput { snapshot_id: 7, input: Arc::new(TestInput(first_id + offset)) }).collect();
+        let inputs = (0..count).map(|offset| RoutedInput { snapshot_id: 7, input: TestInput(first_id + offset) }).collect();
         ApplyBatch { inputs, completion }
     }
 

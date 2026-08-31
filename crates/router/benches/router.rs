@@ -13,6 +13,7 @@ const INPUTS_PER_BATCH: usize = 1_000;
 const WORKER_COUNT: usize = 8;
 const SEED: u64 = 7;
 
+#[derive(Clone)]
 enum SnapshotIds {
     One([u128; 1]),
     Two([u128; 2]),
@@ -30,6 +31,7 @@ impl SnapshotIds {
 }
 
 #[repr(C)]
+#[derive(Clone)]
 struct BenchmarkEvent<const PAYLOAD_BYTES: usize> {
     snapshot_ids: SnapshotIds,
     payload: [u8; PAYLOAD_BYTES],
@@ -42,6 +44,7 @@ impl<const PAYLOAD_BYTES: usize> RoutableInput for BenchmarkEvent<PAYLOAD_BYTES>
 }
 
 #[repr(C)]
+#[derive(Clone)]
 struct BenchmarkEvent32 {
     first_snapshot_id: u128,
     payload: [u8; 15],
@@ -54,6 +57,23 @@ impl RoutableInput for BenchmarkEvent32 {
     }
 }
 
+struct SharedInput<I>(Arc<I>);
+
+impl<I> Clone for SharedInput<I> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<I> RoutableInput for SharedInput<I>
+where
+    I: RoutableInput,
+{
+    fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
+        self.0.snapshot_ids(emit);
+    }
+}
+
 #[repr(C)]
 struct ArcAllocationValue<const BYTES: usize> {
     bytes: [u8; BYTES],
@@ -63,8 +83,10 @@ const _: () = assert!(std::mem::size_of::<BenchmarkEvent32>() == 32);
 const _: () = assert!(std::mem::size_of::<BenchmarkEvent<0>>() == 64);
 const _: () = assert!(std::mem::size_of::<BenchmarkEvent<144>>() == 208);
 const _: () = assert!(std::mem::size_of::<BenchmarkEvent<944>>() == 1_008);
-const _: () = assert!(std::mem::size_of::<RoutedInput<BenchmarkEvent32>>() == 32);
-const _: () = assert!(std::mem::size_of::<RoutedInput<BenchmarkEvent<0>>>() == 32);
+const _: () = assert!(std::mem::size_of::<RoutedInput<BenchmarkEvent32>>() == 48);
+const _: () = assert!(std::mem::size_of::<RoutedInput<BenchmarkEvent<0>>>() == 80);
+const _: () = assert!(std::mem::size_of::<RoutedInput<SharedInput<BenchmarkEvent32>>>() == 32);
+const _: () = assert!(std::mem::size_of::<RoutedInput<SharedInput<BenchmarkEvent<0>>>>() == 32);
 
 type Completion = Sender<()>;
 type Fixture<I> = (
@@ -74,11 +96,17 @@ type Fixture<I> = (
     Vec<Receiver<()>>,
 );
 
-fn fixture<I>(inputs: Vec<Arc<I>>) -> Fixture<I> {
+fn fixture<I>(inputs: Vec<I>) -> Fixture<I>
+where
+    I: Clone,
+{
     fixture_with_worker_count(inputs, WORKER_COUNT)
 }
 
-fn fixture_with_worker_count<I>(inputs: Vec<Arc<I>>, worker_count: usize) -> Fixture<I> {
+fn fixture_with_worker_count<I>(inputs: Vec<I>, worker_count: usize) -> Fixture<I>
+where
+    I: Clone,
+{
     let (input_sender, input_receiver) = unbounded();
     let mut completion_receivers = Vec::with_capacity(BATCH_COUNT);
 
@@ -117,8 +145,12 @@ fn benchmark_events<const PAYLOAD_BYTES: usize>(route_count: usize) -> impl Iter
     })
 }
 
-fn arc_fixture<const PAYLOAD_BYTES: usize>(route_count: usize) -> Fixture<BenchmarkEvent<PAYLOAD_BYTES>> {
-    fixture(benchmark_events::<PAYLOAD_BYTES>(route_count).map(Arc::new).collect())
+fn owned_fixture<const PAYLOAD_BYTES: usize>(route_count: usize) -> Fixture<BenchmarkEvent<PAYLOAD_BYTES>> {
+    fixture(benchmark_events::<PAYLOAD_BYTES>(route_count).collect())
+}
+
+fn shared_fixture<const PAYLOAD_BYTES: usize>(route_count: usize) -> Fixture<SharedInput<BenchmarkEvent<PAYLOAD_BYTES>>> {
+    fixture(benchmark_events::<PAYLOAD_BYTES>(route_count).map(|event| SharedInput(Arc::new(event))).collect())
 }
 
 fn benchmark_event32(input_index: usize, route_count: usize) -> BenchmarkEvent32 {
@@ -133,9 +165,25 @@ fn benchmark_32_byte_event(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("router/100_batches/1000_inputs/32_byte_events/8_workers");
     for route_count in 1..=3 {
         let route_label = if route_count == 1 { String::from("1_route") } else { format!("{route_count}_routes") };
-        group.bench_function(route_label, |bencher| {
+        group.bench_function(format!("owned/{route_label}"), |bencher| {
             bencher.iter_batched(
-                || fixture((0..INPUTS_PER_BATCH).map(|input_index| Arc::new(benchmark_event32(input_index, route_count))).collect()),
+                || fixture((0..INPUTS_PER_BATCH).map(|input_index| benchmark_event32(input_index, route_count)).collect()),
+                |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
+                    route(SEED, input_receiver, &worker_outputs).unwrap();
+                    black_box((worker_outputs, worker_receivers, completion_receivers))
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        group.bench_function(format!("shared/{route_label}"), |bencher| {
+            bencher.iter_batched(
+                || {
+                    fixture(
+                        (0..INPUTS_PER_BATCH)
+                            .map(|input_index| SharedInput(Arc::new(benchmark_event32(input_index, route_count))))
+                            .collect(),
+                    )
+                },
                 |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
                     route(SEED, input_receiver, &worker_outputs).unwrap();
                     black_box((worker_outputs, worker_receivers, completion_receivers))
@@ -166,7 +214,7 @@ fn benchmark_single_worker(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("router/100_batches/1000_inputs/64_byte_events/1_worker");
     group.bench_function("1_route", |bencher| {
         bencher.iter_batched(
-            || fixture_with_worker_count(benchmark_events::<0>(1).map(Arc::new).collect(), 1),
+            || fixture_with_worker_count(benchmark_events::<0>(1).collect(), 1),
             |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
                 route(SEED, input_receiver, &worker_outputs).unwrap();
                 black_box((worker_outputs, worker_receivers, completion_receivers))
@@ -181,9 +229,19 @@ fn benchmark_matrix<const PAYLOAD_BYTES: usize>(criterion: &mut Criterion, event
     let mut group = criterion.benchmark_group(format!("router/100_batches/1000_inputs/{event_size}_byte_events/8_workers"));
     for route_count in 1..=3 {
         let route_label = if route_count == 1 { String::from("1_route") } else { format!("{route_count}_routes") };
-        group.bench_function(route_label, |bencher| {
+        group.bench_function(format!("owned/{route_label}"), |bencher| {
             bencher.iter_batched(
-                || arc_fixture::<PAYLOAD_BYTES>(route_count),
+                || owned_fixture::<PAYLOAD_BYTES>(route_count),
+                |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
+                    route(SEED, input_receiver, &worker_outputs).unwrap();
+                    black_box((worker_outputs, worker_receivers, completion_receivers))
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        group.bench_function(format!("shared/{route_label}"), |bencher| {
+            bencher.iter_batched(
+                || shared_fixture::<PAYLOAD_BYTES>(route_count),
                 |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
                     route(SEED, input_receiver, &worker_outputs).unwrap();
                     black_box((worker_outputs, worker_receivers, completion_receivers))

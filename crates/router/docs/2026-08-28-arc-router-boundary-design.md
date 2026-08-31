@@ -1,5 +1,10 @@
 # Arc-only router boundary
 
+> Historical design: superseded by the ownership-generic router boundary on
+> 2026-08-31. The router now accepts `Vec<I>` with `I: RoutableInput + Clone`;
+> core selects tracked pointer ownership while benchmarks compare owned and
+> shared inputs.
+
 ## Goal
 
 Require every event entering `contime-router` to be held in `Arc`. The router

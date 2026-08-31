@@ -1,53 +1,39 @@
 # ConTime Memory
 
-`contime-memory` is the isolated owner of ConTime memory accounting. It has no
-normal dependencies on the root crate or any sibling subcrate.
+`contime-memory` provides isolated tracked replacements for `Arc` and `Box`.
+It depends on neither the root ConTime crate nor another ConTime subcrate.
 
-## Contracts
+## Contract
 
-The crate separates three concerns:
+The crate exposes one value and three consumer-defined traits:
 
-- `ConservativeTrackedSize` measures the largest reasonable amount of memory
-  currently retained by an underlying value. Implementations include inline
-  storage and retained capacities, but exclude nested `TrackedArc` and
-  `TrackedBox` handles because those account for themselves.
-- `MemoryAccount<T>` measures a value around a mutation and produces an
-  unsigned `MemoryChange`. `MeasuredAccount`, the default, measures before and
-  after. `CachedAccount` stores the last size and measures only after mutation.
-- `MemoryBudget` records allocation and pointer changes. The provided
-  `AtomicMemoryBudget` is cloneable, lock-free, infallible during accounting,
-  and uses `usize` counters.
+- `SizeDelta` represents an increase, decrease, or unchanged tracked size.
+- `ConservativeTrackedSize` measures an underlying value and the memory it
+  retains.
+- `TrackedSizeDelta` runs a mutation on its implementing value and returns the
+  mutation result together with its `SizeDelta`.
+- `TrackedMemoryBudget` consumes deltas and exposes the configured safety
+  buffer.
 
-All accounting records completed reality. A memory-growing operation is never
-rolled back after it happened. Instead, `MemoryState` reports:
-
-- `Ready` at or below the action ceiling;
-- `ActionBlocked` above the action ceiling but at or below the hard limit;
-- `HardLimitExceeded` above the hard limit.
-
-The action ceiling is `hard_limit - concurrent_actions * action_buffer`. The
-headroom is accounting policy rather than a physical allocation. An individual
-increase larger than `action_buffer` increments `buffer_exceeded_count`, which
-tells the runtime that its configured per-action safety margin was insufficient.
+The memory crate provides no concrete budget or sizing implementation. Core is
+free to implement accounting with atomics, channels, local counters, or another
+mechanism without changing the tracked ownership types.
 
 ## Tracked ownership
 
-`TrackedArc<T>` and `TrackedBox<T>` are each one machine pointer wide. Their
-account and budget live beside `T` in the heap allocation.
+`TrackedArc<T, B>` owns one immutable shared allocation. Creation reports the
+allocation and first handle, cloning reports another handle, every handle drop
+releases that handle, and the final drop releases the shared allocation exactly
+once.
 
-`TrackedArc` charges the underlying allocation once and charges one pointer for
-every ordinary `Clone`. Each handle drop releases its pointer; the final inner
-drop releases the allocation. It exposes immutable access only.
+`TrackedBox<T, B>` owns one independently mutable allocation. Cloning deeply
+clones `T` and reports a new allocation. Mutable access exists only through
+`update`, which delegates the action to `T::size_delta` and applies its returned
+delta to the budget.
 
-`TrackedBox` owns one independently mutable allocation. Ordinary `Clone` deeply
-clones `T`, creates a fresh account, and charges another allocation and pointer.
-Mutation is available only through `update`, which measures the closure's memory
-change and applies it to the budget. It deliberately has no `DerefMut` or
-`into_inner` escape hatch.
-
-Moving a tracked message through a channel changes no accounting. The message
-remains charged until its tracked wrapper is dropped, irrespective of which
-queue, sender, receiver, or process currently owns it.
+Both public wrappers are exactly one machine pointer wide. Their budget handles
+live beside their values in the corresponding heap allocations. Neither wrapper
+exposes `DerefMut` or `into_inner`.
 
 ## Verification
 
@@ -55,76 +41,90 @@ queue, sender, receiver, or process currently owns it.
 CARGO_TARGET_DIR=/private/tmp/contime-memory-target \
   cargo test --manifest-path crates/memory/Cargo.toml
 CARGO_TARGET_DIR=/private/tmp/contime-memory-target \
-  cargo clippy --manifest-path crates/memory/Cargo.toml --all-targets -- -D warnings
-CARGO_TARGET_DIR=/private/tmp/contime-memory-target \
-  cargo bench --manifest-path crates/memory/Cargo.toml --bench lifecycle
+  cargo check --manifest-path crates/memory/Cargo.toml --all-targets
 ```
 
-Inline unit benchmarks are ignored tests. Run a unit by its filter, for example:
+The two diagnostic unit benchmarks are ignored tests:
 
 ```sh
 CARGO_TARGET_DIR=/private/tmp/contime-memory-target cargo test \
   --manifest-path crates/memory/Cargo.toml --release --lib \
-  benchmark_budget -- --ignored --nocapture --test-threads=1
+  benchmark_tracked_arc -- --ignored --nocapture --test-threads=1
+
+CARGO_TARGET_DIR=/private/tmp/contime-memory-target cargo test \
+  --manifest-path crates/memory/Cargo.toml --release --lib \
+  benchmark_tracked_box -- --ignored --nocapture --test-threads=1
 ```
 
-The other filters are `benchmark_change`, `benchmark_measured_account`,
-`benchmark_cached_account`, `benchmark_tracked_arc`, and
-`benchmark_tracked_box`.
+The public lifecycle benchmark is a normal Criterion integration target:
+
+```sh
+CARGO_TARGET_DIR=/private/tmp/contime-memory-target \
+  cargo bench --manifest-path crates/memory/Cargo.toml --bench ownership
+```
 
 ## Benchmark results
 
 Measured on the current development machine in release mode with Criterion.
-The median is the center estimate from the most recent run.
+Every integration iteration executes exactly 1,000 named operations. The median
+is the center estimate from the most recent run.
 
-### Unit operations
+### Budget comparison with 64-byte values
 
-| Operation | Batch | Median | Per operation | Throughput |
-| --- | ---: | ---: | ---: | ---: |
-| Calculate `MemoryChange` | 1,000 | 903.47 ns | 0.903 ns | 1.107B/s |
-| Measured account, cheap sizing | 1,000 | 344.74 ns | 0.345 ns | 2.900B/s |
-| Cached account, cheap sizing | 1,000 | 440.63 ns | 0.441 ns | 2.269B/s |
-| Measured account, 1,000-value sizing | 1,000 | 1.3439 ms | 1.344 us | 744.1K/s |
-| Cached account, 1,000-value sizing | 1,000 | 673.83 us | 673.83 ns | 1.484M/s |
-| Reserve allocation bytes | 1,000 | 6.6776 us | 6.678 ns | 149.75M/s |
-| Reserve pointer bytes | 1,000 | 6.6520 us | 6.652 ns | 150.33M/s |
-| Resize increase | 1,000 | 6.6440 us | 6.644 ns | 150.51M/s |
-| Resize decrease | 1,000 | 6.6799 us | 6.680 ns | 149.70M/s |
-| Balanced pointer reserve/release | 1,000 pairs | 13.305 us | 13.305 ns/pair | 75.16M pairs/s |
-| `TrackedArc::new` | 1 | 15.215 ns | 15.215 ns | 65.72M/s |
-| `TrackedArc::clone` | 1 | 10.928 ns | 10.928 ns | 91.51M/s |
-| Non-final Arc drop | 1 | 5.470 ns | 5.470 ns | 182.82M/s |
-| Final Arc drop | 1 | 26.841 ns | 26.841 ns | 37.26M/s |
-| Arc clone/drop | 1,000 pairs | 10.840 us | 10.840 ns/pair | 92.25M pairs/s |
-| `TrackedBox::new` | 1 | 15.202 ns | 15.202 ns | 65.78M/s |
-| Deep Box clone | 1 | 77.098 ns | 77.098 ns | 12.97M/s |
-| Box drop | 1 | 51.743 ns | 51.743 ns | 19.33M/s |
-| Measured Box update and drop | 1 | 47.900 ns | 47.900 ns | 20.88M/s |
-| Cached Box update and drop | 1 | 55.516 ns | 55.516 ns | 18.01M/s |
-| Grow Box vector by 1,000 bytes and drop | 1 | 70.573 ns | 70.573 ns | 14.17M/s |
-| Deep Box clone/drop | 1,000 pairs | 74.904 us | 74.904 ns/pair | 13.35M pairs/s |
+`Difference` is tracked median minus the matched standard-library median.
 
-Cheap sizing favors the zero-sized measured account. Cached accounting becomes
-useful when measuring the retained graph is expensive: the 1,000-value fixture
-nearly halves measurement time by walking the graph once instead of twice.
+| Lifecycle | Budget | Standard | Tracked | Difference | Overhead | Tracked throughput |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Arc create/drop | No-op | 25.639 ns | 26.227 ns | +0.588 ns | +2.29% | 38.129M/s |
+| Arc create/drop | Local | 25.639 ns | 27.255 ns | +1.616 ns | +6.30% | 36.690M/s |
+| Arc create/drop | Atomic | 25.639 ns | 25.825 ns | +0.186 ns | +0.73% | 38.723M/s |
+| Arc clone/drop | No-op | 4.7545 ns | 4.7603 ns | +0.0058 ns | +0.12% | 210.07M/s |
+| Arc clone/drop | Local | 4.7545 ns | 4.7734 ns | +0.0189 ns | +0.40% | 209.50M/s |
+| Arc clone/drop | Atomic | 4.7545 ns | 4.7929 ns | +0.0384 ns | +0.81% | 208.64M/s |
+| Box create/drop | No-op | 53.155 ns | 49.192 ns | -3.963 ns† | -7.46%† | 20.328M/s |
+| Box create/drop | Local | 53.155 ns | 55.643 ns | +2.488 ns | +4.68% | 17.972M/s |
+| Box create/drop | Atomic | 53.155 ns | 54.151 ns | +0.996 ns | +1.87% | 18.467M/s |
+| Box update | No-op | 1.0122 ns | 0.7586 ns | -0.2536 ns† | -25.05%† | 1.3182B/s |
+| Box update | Local | 1.0122 ns | 0.6896 ns | -0.3226 ns† | -31.87%† | 1.4502B/s |
+| Box update | Atomic | 1.0122 ns | 2.4250 ns | +1.4128 ns | +139.58% | 412.37M/s |
+| Box deep-clone/drop | No-op | 51.482 ns | 51.592 ns | +0.110 ns | +0.21% | 19.383M/s |
+| Box deep-clone/drop | Local | 51.482 ns | 56.777 ns | +5.295 ns | +10.29% | 17.613M/s |
+| Box deep-clone/drop | Atomic | 51.482 ns | 56.433 ns | +4.951 ns | +9.62% | 17.720M/s |
 
-### Integrated ownership flows
+### Deep Box clone/drop by retained payload
 
-| Flow | Batch | Median | Per element | Throughput |
-| --- | ---: | ---: | ---: | ---: |
-| Create, send, receive, and drop tracked messages | 1,000 | 44.933 us | 44.933 ns | 22.256M/s |
-| Measured fixed-size snapshot updates | 1,000 | 1.8296 us | 1.830 ns | 546.56M/s |
-| Cached fixed-size snapshot updates | 1,000 | 2.1394 us | 2.139 ns | 467.42M/s |
+| Payload | Budget | Standard | Tracked | Difference | Overhead | Tracked throughput |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 64 bytes | No-op | 51.482 ns | 51.592 ns | +0.110 ns | +0.21% | 19.383M/s |
+| 64 bytes | Local | 51.482 ns | 56.777 ns | +5.295 ns | +10.29% | 17.613M/s |
+| 64 bytes | Atomic | 51.482 ns | 56.433 ns | +4.951 ns | +9.62% | 17.720M/s |
+| 256 bytes | No-op | 58.270 ns | 58.191 ns | -0.079 ns† | -0.14%† | 17.185M/s |
+| 256 bytes | Local | 58.270 ns | 59.842 ns | +1.572 ns | +2.70% | 16.711M/s |
+| 256 bytes | Atomic | 58.270 ns | 59.483 ns | +1.213 ns | +2.08% | 16.811M/s |
+| 1,024 bytes | No-op | 72.678 ns | 71.363 ns | -1.315 ns† | -1.81%† | 14.013M/s |
+| 1,024 bytes | Local | 72.678 ns | 76.391 ns | +3.713 ns | +5.11% | 13.091M/s |
+| 1,024 bytes | Atomic | 72.678 ns | 79.009 ns | +6.331 ns | +8.71% | 12.657M/s |
 
-The message benchmark prepares event allocations, the budget, and the channel
-outside timing. It includes one Arc clone, tracked message allocation,
-accounting, standard-channel send/receive, and message drop per element.
+Each standard baseline performs the same Rust ownership and payload work as its
+tracked counterpart. Arc creation performs one heap allocation. Box creation
+and deep cloning each perform two: one for the retained `Vec` payload and one
+for the Box. Box update operates on 1,000 persistent Boxes, performs no
+allocation, and mutates the same payload byte. Arc clone/drop measures a
+complete shared handle lifetime.
 
-The snapshot benchmarks prepare and deeply clone their starting snapshots
-outside timing. They include 1,000 `update` calls and amortize the final tracked
-Box drop across the batch. The mutation changes existing elements without
-changing retained capacity, intentionally isolating account/update overhead.
+The no-op budget consumes each delta through `black_box` but stores nothing, so
+its difference is the closest estimate of wrapper and delta-construction cost.
+The local budget uses `Rc<Cell<isize>>`; the atomic budget uses
+`Arc<AtomicIsize>` with relaxed ordering.
 
-All unit measurements exclude API, router, worker, events, checkpoints, lanes,
-and runtime orchestration. Criterion harness overhead and batched fixture setup
-are excluded according to each benchmark's stated boundary.
+The differences are derived by subtracting independently sampled medians; they
+are not directly timed differential measurements. Values marked † have a lower
+tracked median. They demonstrate compiler, code-layout, or allocator effects
+and must not be interpreted as negative overhead. Very small positive values
+may likewise be below reliable measurement resolution. The clearest hot-path
+cost is atomic Box reporting: approximately 1.413 ns beyond direct mutation.
+Arc clone/drop adds at most 0.038 ns in this run, while allocation-heavy paths
+are dominated by allocator and payload work.
+
+These integration measurements exclude API, router, worker, events,
+checkpoints, lanes, runtime orchestration, and any concrete core memory policy.
