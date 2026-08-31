@@ -1,0 +1,26 @@
+[package]
+name = "contime-core"
+version = "0.1.0"
+edition = "2021"
+autobenches = false
+license = "MIT"
+description = "Apply-only composition of isolated ConTime subsystems"
+publish = false
+
+[dependencies]
+contime-api = { path = "../api" }
+contime-checkpoints = { path = "../checkpoints" }
+contime-events = { path = "../events" }
+contime-lanes = { path = "../lanes" }
+contime-memory = { path = "../memory" }
+contime-router = { path = "../router" }
+contime-runtime = { path = "../runtime" }
+contime-worker = { path = "../worker" }
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "apply"
+harness = false
