@@ -31,6 +31,12 @@ Consumers implement the local `Event` trait by providing an ordered time and a
 and is the per-snapshot state object. It does not store a snapshot
 ID; the eventual worker owns the mapping from snapshot IDs to histories.
 
+`EventHistory::clone_between` returns owned clones in canonical
+`(time, event_id)` order over the half-open interval `[from, to)`. The merged
+iterator remains a local borrow; every selected value is cloned before the
+result can cross a crate or thread boundary. Pointer-backed event types clone
+their handles rather than their payloads.
+
 An empty history starts dirty at zero. Its first unique event sets the dirty
 timestamp to that event's time, and subsequent unique events may move the
 timestamp earlier. Duplicate IDs do not change it. `mark_replayed` moves the
@@ -93,6 +99,19 @@ The representative 208-byte iteration cases produced:
 | --- | ---: | ---: | ---: |
 | Full history | 1.364 us | 1.36 | 733.0 million |
 | Dirty range over all events | 2.449 us | 2.45 | 408.3 million |
+
+Event queries clone the selected `Arc`-backed handles into an owned vector.
+Local release-mode Criterion results on 2026-09-01:
+
+| Late storage | 0 results | 10 results | 100 results | 1,000 results | ns/result at 1,000 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0% | 10.866 ns | 701.56 ns | 2.7176 us | 20.351 us | 20.35 |
+| 10% | 8.6813 ns | 796.72 ns | 5.6155 us | 35.295 us | 35.30 |
+| 50% | 11.969 ns | 734.30 ns | 3.5488 us | 29.153 us | 29.15 |
+
+The query measurements include locating the lower bound, merging ordered and
+late stores, allocating the result vector, cloning each selected shared handle,
+and dropping the returned vector. Event payloads are not cloned.
 
 Run the integration suite with:
 

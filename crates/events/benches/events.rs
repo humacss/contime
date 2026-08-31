@@ -148,5 +148,34 @@ fn iteration(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, insertion_matrix, iteration);
+fn query_history(late_percentage: usize) -> EventHistory<SharedEvent<184>> {
+    let late_count = late_percentage * EVENT_COUNT / 100;
+    let mut history = EventHistory::with_capacity(EVENT_COUNT);
+    for event in events::<184>().into_iter().skip(late_count) {
+        history.insert(event);
+    }
+    for event in events::<184>().into_iter().take(late_count) {
+        history.insert(event);
+    }
+    history
+}
+
+fn query(criterion: &mut Criterion) {
+    for late_percentage in [0, 10, 50] {
+        let history = query_history(late_percentage);
+        let mut group = criterion.benchmark_group(format!("events/query/{late_percentage}_percent_late"));
+        for result_count in [0, 10, 100, 1_000] {
+            group.bench_with_input(
+                BenchmarkId::from_parameter(format!("{result_count}_results")),
+                &result_count,
+                |bencher, result_count| {
+                    bencher.iter(|| black_box(history.clone_between(black_box(&0), black_box(&(*result_count as i64)))))
+                },
+            );
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(benches, insertion_matrix, iteration, query);
 criterion_main!(benches);

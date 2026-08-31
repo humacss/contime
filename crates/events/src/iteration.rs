@@ -16,6 +16,12 @@ impl<E> crate::EventHistory<E>
 where
     E: Event,
 {
+    pub(crate) fn iter_from_time(&self, from: &E::Time) -> EventHistoryRangeIter<'_, E> {
+        let boundary = EventKey { time: from.clone(), event_id: u128::MIN };
+        let ordered_start = self.ordered.partition_point(|(key, _event)| key < &boundary);
+        EventHistoryRangeIter::new(self.ordered.range(ordered_start..), self.late.range(boundary..))
+    }
+
     /// Iterates canonically from the dirty timestamp, including its complete
     /// same-timestamp event bucket.
     pub fn iter_from_dirty(&self) -> EventHistoryRangeIter<'_, E> {

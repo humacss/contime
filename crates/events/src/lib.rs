@@ -3,6 +3,7 @@
 mod history;
 mod insert;
 mod iteration;
+mod query;
 mod types;
 
 pub use types::{Event, EventHistory, EventHistoryIter, EventHistoryRangeIter, EventKey, Insert};
