@@ -10,9 +10,18 @@ where
     T: Clone + Default + Ord,
 {
     let base_index = checkpoints.checkpoints.partition_point(|checkpoint| checkpoint.key.time <= time).checked_sub(1);
-    let mut working_snapshot = base_index.map(|index| checkpoints.checkpoints[index].snapshot.clone());
-    let start_key = base_index.map(|index| checkpoints.checkpoints[index].key.clone());
-    let mut history_event_count = base_index.map_or(0, |index| checkpoints.checkpoints[index].history_event_count);
+    let (mut working_snapshot, start_key, mut history_event_count) = base_index.map_or_else(
+        || {
+            checkpoints
+                .anchor
+                .as_ref()
+                .map_or((None, None, 0), |anchor| (Some(anchor.snapshot.clone()), anchor.boundary.clone(), anchor.history_event_count))
+        },
+        |index| {
+            let checkpoint = &checkpoints.checkpoints[index];
+            (Some(checkpoint.snapshot.clone()), Some(checkpoint.key.clone()), checkpoint.history_event_count)
+        },
+    );
     let mut event_iter = events.iter_after(start_key.as_ref()).peekable();
     let mut bucket = Vec::new();
 
@@ -177,6 +186,18 @@ mod tests {
 
         assert_eq!(*result, TestSnapshot { time: 10, sum: 3, batch_sizes: vec![2] });
         assert!(query_at(&store, &events, &mut (), 9).is_none());
+    }
+
+    #[test]
+    fn a_query_older_than_the_retained_anchor_returns_the_anchor() {
+        let mut events = TestEvents::new(vec![event(1, 10, 1), event(2, 20, 2)]);
+        let mut store = replay_fixture(&mut events, 100);
+        crate::advance_before(&mut store, &events, &mut (), &20);
+
+        let result = query_at(&store, &events, &mut (), 5).unwrap();
+
+        assert_eq!(result.time, 10);
+        assert_eq!(result.sum, 1);
     }
 
     #[test]

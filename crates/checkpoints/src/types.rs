@@ -123,6 +123,21 @@ where
     pub history_event_count: u64,
 }
 
+/// State retained before the ordinary checkpoint sequence.
+///
+/// A missing boundary represents the clean initial snapshot before its first
+/// event. Later advancement replaces it with a boundary at the final pruned
+/// event.
+#[derive(Clone, Debug)]
+pub struct ReplayAnchor<S>
+where
+    S: Snapshot,
+{
+    pub boundary: Option<CheckpointKey<S::Time>>,
+    pub snapshot: S,
+    pub history_event_count: u64,
+}
+
 /// Materialized checkpoints for one externally scheduled snapshot ID.
 #[derive(Clone)]
 pub struct CheckpointStore<S>
@@ -131,6 +146,7 @@ where
 {
     pub(crate) snapshot_id: u128,
     pub(crate) interval: u64,
+    pub(crate) anchor: Option<ReplayAnchor<S>>,
     pub(crate) checkpoints: VecDeque<Checkpoint<S>>,
 }
 
@@ -155,4 +171,10 @@ pub struct ApplyResult {
     pub applied_events: u64,
     /// Total checkpoints retained after this replay.
     pub retained_checkpoints: usize,
+}
+
+/// The structural effect of one checkpoint-horizon advancement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdvanceResult {
+    pub removed_checkpoints: usize,
 }
