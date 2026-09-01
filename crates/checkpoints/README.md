@@ -24,9 +24,11 @@ independent traits.
 Historical snapshot queries clone the nearest checkpoint at or before the
 requested time and replay complete canonical event buckets through that time.
 The query-local replay does not mutate retained checkpoints or acknowledge
-event history. Horizon pruning, worker scheduling, event mutation, completion
-handling, memory accounting, and memory-limit enforcement remain deferred.
-Consumers select snapshot ownership and memory policy.
+event history. A separate replay anchor preserves complete state through the
+last pruned event. Advancement folds every event strictly before the horizon
+into that anchor and removes older cadence checkpoints. Queries older than the
+anchor return the anchor as a best-effort result. Worker scheduling, event
+mutation, completion handling, and memory policy remain outside this crate.
 
 ## Unit benchmark snapshot
 
@@ -47,6 +49,10 @@ Historical query results on 2026-09-01:
 | Replay 10 events | 82.52 ns | 8.25 ns/event |
 | Replay 100 events | 270.07 ns | 2.70 ns/event |
 | Replay 1,000 events | 2.112 us | 2.11 ns/event |
+
+Horizon advancement over a prepared 1,000-event history measured about
+68.6 ns when aligned with a cadence checkpoint and 204.4 ns when the anchor
+had to fold 50 additional events between checkpoints.
 
 The apply benchmark includes the default wrapper, `ApplyInner`, one effective
 snapshot application, snapshot-time advancement, and a consumer loop over all

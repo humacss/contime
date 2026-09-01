@@ -36,6 +36,11 @@ collect result batches until every downstream sender clone is dropped.
 Snapshot queries return only found boxed snapshots; event queries return owned
 handles selected by the consumer's output type.
 
+Horizon advancement follows the same closure contract. `send_advance_to`
+forwards one timestamp and caller-owned completion sender. `advance_to` owns
+that channel and waits until every downstream sender clone has been dropped;
+there is no acknowledgement payload.
+
 ## Verification
 
 Run the unit tests from the ConTime repository root:

@@ -1,6 +1,6 @@
 # contime-core
 
-`contime-core` is the smallest complete apply-and-query composition of the isolated
+`contime-core` is the smallest complete apply, query, and advance composition of the isolated
 ConTime subcrates. It owns the process topology and memory budget while
 delegating API batching, deterministic routing, worker scheduling, canonical
 event storage, checkpoint replay, lane application, and ownership accounting
@@ -47,9 +47,41 @@ acknowledge event history, force replay, or change worker scheduling.
 
 ## Deferred scope
 
-- Advance, horizon pruning, and memory reclamation policy
 - Cross-worker transactional admission
 - Lane macros
+
+## Horizon advancement
+
+`send_advance_to` broadcasts a timestamp and returns immediately;
+`advance_to` waits for completion by sender closure. Each worker advances
+monotonically and retains `history_retention` worth of time. Before pruning, a
+dirty pre-horizon history is replayed and a complete replay anchor is
+materialized. Events and cadence checkpoints strictly before the horizon are
+then dropped, releasing their tracked allocations. Events exactly at the
+horizon remain valid; later arrivals before it return
+`BeforeHistoryHorizon`. Queries older than the retained anchor return that
+anchor as a best-effort reconstruction.
+
+There is deliberately no global router barrier. With multiple routers,
+separately queued apply and advance calls may reach a worker in either order;
+callers requiring ordering must wait for the earlier operation or otherwise
+establish readiness before advancing.
+
+Local optimized advancement-only results for 1,000 histories on 2026-09-01:
+
+| Routers | Workers | Clean prune | Anchor materialization | Forced replay |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 328.9 us | 664.2 us | 1.471 ms |
+| 1 | 4 | 291.0 us | 426.7 us | 1.628 ms |
+| 1 | 10 | 1.202 ms | 891.7 us | 1.857 ms |
+| 2 | 10 | 1.068 ms | 406.9 us | 879.8 us |
+
+Fixtures contain 1,000 histories and are prepared outside the timed region.
+Each sample asserts that tracked memory decreases. The dirty multi-router
+fixture first confirms through read-only queries that all histories reached
+their workers, preserving the intended dirty-replay workload without adding a
+production ordering barrier. These thread-sensitive figures showed broad
+variance and should be treated as local reference points, not scaling claims.
 
 ## End-to-end query benchmark snapshot
 
