@@ -22,6 +22,14 @@ implementations to those contracts.
 The runtime owns thread and channel lifecycle only. It does not inspect,
 clone, route, apply, replay, or otherwise interpret messages.
 
+The shared receiver guarantees that each input message is taken by exactly one
+router; it does not guarantee that several routers finish dispatching messages
+in receive order. Each worker channel preserves the order in which that worker
+receives messages from its router producers, but there is no fence spanning all
+router producers. Higher layers must wait for completion before submitting an
+operation that must happen after earlier work, or introduce an explicit
+ordering barrier.
+
 ## Lifecycle
 
 `Runtime::start` validates the supplied process collections, creates the channels, starts all

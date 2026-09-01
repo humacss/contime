@@ -62,10 +62,44 @@ horizon remain valid; later arrivals before it return
 `BeforeHistoryHorizon`. Queries older than the retained anchor return that
 anchor as a best-effort reconstruction.
 
-There is deliberately no global router barrier. With multiple routers,
-separately queued apply and advance calls may reach a worker in either order;
-callers requiring ordering must wait for the earlier operation or otherwise
-establish readiness before advancing.
+### Remaining ordering-barrier limitation
+
+There is deliberately no global router barrier yet. The runtime has one shared
+input queue consumed by multiple routers. Although requests leave that queue
+one at a time, one router may still be dispatching an apply while another
+router dispatches a later horizon advance. Worker queues preserve the order in
+which they receive messages, but they cannot reconstruct the original order of
+messages dispatched concurrently by different routers.
+
+This matters because horizon advancement is an irreversible retention action,
+not ordinary event-time ordering. If the advance reaches a worker first, that
+worker may establish the new horizon and prune history before an earlier apply
+arrives. The late apply is then correctly rejected as
+`BeforeHistoryHorizon`, even though the caller submitted it before the advance.
+Likewise, dirty history that has not reached its worker cannot participate in
+the advance's replay-before-prune pass. Canonical `(time, input ID)` ordering
+inside a history cannot repair either case after pruning has happened.
+
+Callers that require this ordering must currently establish completion before
+advancing:
+
+- use synchronous `apply` before `advance_to`; or
+- after `send`, drain the request's rejection receiver until it disconnects,
+  proving that every downstream completion-sender clone has been dropped.
+
+`advance_to` waits only for that advance to finish. It does not implicitly wait
+for unrelated earlier asynchronous sends. A read-only query can establish that
+specific benchmark or test fixtures have reached their workers, as the dirty
+advancement benchmark does, but it is not the public ordering contract. A
+single-router runtime naturally serializes router dispatch today, but callers
+should not rely on topology as a permanent correctness mechanism.
+
+A future solution needs an explicit cross-router fence or monotonically ordered
+request epoch. Every router would have to finish dispatching work before the
+fence, and every affected worker would have to finish that work, before any
+post-fence advance could execute. That design is intentionally deferred: it
+must preserve the current low-overhead asynchronous send path and avoid a
+global stop-the-world barrier for requests that do not need ordering.
 
 Local optimized advancement-only results for 1,000 histories on 2026-09-01:
 
