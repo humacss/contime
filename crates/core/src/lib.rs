@@ -5,6 +5,7 @@ mod apply;
 mod checkpoint;
 mod history;
 mod input;
+mod listen;
 mod memory;
 mod message;
 mod query;
@@ -17,7 +18,8 @@ mod worker;
 
 pub use types::{
     Advance, CompletionHandle, ConTime, ConTimeConfig, EventQuery, Input, MemoryBudget, RejectionReason, Route, RouterBatch, RouterMessage,
-    RouterProcess, SnapshotQuery, TrackedEvent, WorkerBatch, WorkerMessage, WorkerProcess,
+    RouterProcess, SnapshotListen, SnapshotListener, SnapshotListenerMessage, SnapshotQuery, TrackedEvent, WorkerBatch, WorkerMessage,
+    WorkerProcess,
 };
 
 pub use contime_api::{ApiError, ApplyResponse, RejectionMessage};

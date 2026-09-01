@@ -1,28 +1,32 @@
 use ahash::AHashMap;
 
-use crate::types::{complete_snapshot, Checkpoints, Completion, SnapshotSlot};
+use crate::types::{complete_snapshot, Checkpoints, Completion, ReplayUpdate, SnapshotSlot};
 
 pub(crate) fn update_snapshot<S, K, C, R>(
     snapshot_id: u128,
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
     checkpoints_config: &K::Config,
     checkpoints_context: &mut K::Context,
-) where
+) -> ReplayUpdate<K::Time>
+where
     K: Checkpoints<S>,
     C: Completion<R>,
 {
     let slot = snapshots.get_mut(&snapshot_id).expect("dirty schedule referenced a missing event store");
+    let events = slot.events.as_mut().expect("dirty schedule referenced a metadata-only snapshot slot");
 
     if slot.checkpoints.is_none() {
         slot.checkpoints = Some(K::create(snapshot_id, checkpoints_config));
     }
 
     let checkpoints = slot.checkpoints.as_mut().expect("checkpoint store was not initialized");
-    checkpoints.update(&mut slot.events, checkpoints_context);
+    let affected_from = checkpoints.update(events, checkpoints_context);
 
     for request in slot.waiters.drain(..) {
         complete_snapshot(request);
     }
+
+    ReplayUpdate { snapshot_id, affected_from }
 }
 
 #[cfg(test)]
@@ -34,7 +38,7 @@ mod tests {
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use super::update_snapshot;
-    use crate::types::{new_request, register_waiter, SnapshotSlot};
+    use crate::types::{new_request, register_waiter, ReplayUpdate, SnapshotSlot};
     use crate::Checkpoints;
 
     struct TestEvents(Vec<u128>);
@@ -50,8 +54,9 @@ mod tests {
             Self
         }
 
-        fn update(&mut self, events: &mut TestEvents, _context: &mut ()) {
+        fn update(&mut self, events: &mut TestEvents, _context: &mut ()) -> Self::Time {
             events.0.clear();
+            0
         }
 
         fn advance_before(&mut self, _events: &TestEvents, _context: &mut (), _horizon: &u64) {}
@@ -71,9 +76,10 @@ mod tests {
             Self::default()
         }
 
-        fn update(&mut self, events: &mut TestEvents, context: &mut Vec<usize>) {
+        fn update(&mut self, events: &mut TestEvents, context: &mut Vec<usize>) -> Self::Time {
             self.event_count = events.0.len();
             context.push(self.event_count);
+            37
         }
 
         fn advance_before(&mut self, _events: &TestEvents, _context: &mut Vec<usize>, _horizon: &u64) {}
@@ -85,7 +91,7 @@ mod tests {
     ) {
         let (completion, responses) = unbounded::<Vec<()>>();
         let request = new_request(completion);
-        let mut slot = SnapshotSlot { events: TestEvents((0..1_000).collect()), checkpoints: None, waiters: Vec::new() };
+        let mut slot = SnapshotSlot::with_events(TestEvents((0..1_000).collect()));
         register_waiter(&mut slot, &request);
         let mut snapshots = AHashMap::new();
         snapshots.insert(7, slot);
@@ -93,12 +99,13 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_update_reads_events_and_completes_snapshot_waiters() {
+    fn checkpoint_update_returns_the_affected_interval_start() {
         let (mut snapshots, responses) = snapshot();
         let mut context = Vec::new();
 
-        update_snapshot(7, &mut snapshots, &(), &mut context);
+        let update = update_snapshot(7, &mut snapshots, &(), &mut context);
 
+        assert_eq!(update, ReplayUpdate { snapshot_id: 7, affected_from: 37 });
         assert_eq!(context, vec![1_000]);
         assert_eq!(snapshots.get(&7).unwrap().checkpoints.as_ref().unwrap().event_count, 1_000);
         assert_eq!(responses.try_recv(), Err(TryRecvError::Disconnected));
@@ -108,15 +115,14 @@ mod tests {
     fn checkpoint_update_can_acknowledge_mutable_event_history() {
         let (completion, responses) = unbounded::<Vec<()>>();
         let request = new_request(completion);
-        let mut slot =
-            SnapshotSlot { events: TestEvents(vec![1, 2, 3]), checkpoints: None::<AcknowledgingCheckpoints>, waiters: Vec::new() };
+        let mut slot = SnapshotSlot::<_, AcknowledgingCheckpoints, _, _>::with_events(TestEvents(vec![1, 2, 3]));
         register_waiter(&mut slot, &request);
         let mut snapshots = AHashMap::new();
         snapshots.insert(7, slot);
 
         update_snapshot(7, &mut snapshots, &(), &mut ());
 
-        assert!(snapshots.get(&7).unwrap().events.0.is_empty());
+        assert!(snapshots.get(&7).unwrap().events.as_ref().unwrap().0.is_empty());
         assert_eq!(responses.try_recv(), Err(TryRecvError::Disconnected));
     }
 

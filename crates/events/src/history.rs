@@ -38,6 +38,7 @@ where
             late: BTreeMap::new(),
             retained_ids: ahash::AHashSet::with_capacity(capacity),
             dirty_time: horizon.clone(),
+            dirty: false,
             horizon,
         }
     }
@@ -83,6 +84,7 @@ where
     /// An empty history returns to its zero timestamp.
     pub fn mark_replayed(&mut self) {
         self.dirty_time = self.latest_key().map(|key| key.time.clone()).unwrap_or_default();
+        self.dirty = false;
     }
 
     /// Iterates retained events in canonical `(time, event ID)` order.
@@ -160,6 +162,17 @@ mod tests {
         history.mark_replayed();
 
         assert_eq!(history.dirty_time(), &30);
+    }
+
+    #[test]
+    fn first_event_after_replay_starts_a_new_dirty_interval() {
+        let mut history = EventHistory::new();
+        history.insert(event(1, 10));
+        history.mark_replayed();
+
+        history.insert(event(2, 11));
+
+        assert_eq!(history.dirty_time(), &11);
     }
 
     #[test]

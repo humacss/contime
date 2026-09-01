@@ -184,6 +184,57 @@ Local optimized Criterion results recorded on 2026-08-31:
 | Start | Start one router and one worker | 10.597 us | — |
 | Shutdown | Join one router and one worker | 23.352 us | — |
 
+### Snapshot replay listeners
+
+`send_listen_snapshots` forwards one watched timestamp, a snapshot-ID set, and
+a consumer-owned notification sender without waiting. The router preserves the
+registration as one collection per affected worker. Each owning worker emits
+one batched `SnapshotListenerMessage::Registered`, then at most one batched
+`SnapshotListenerMessage::Replayed` for that collection after a worker replay
+pass. A snapshot is included when its replay began at or before the watched
+timestamp. Consumers drop their receiver when finished; subsequent failed
+sends remove the collection lazily.
+
+Listener unit results recorded on 2026-09-01:
+
+| Unit | Work | Point estimate | Amortized |
+| --- | ---: | ---: | ---: |
+| API | Forward timestamp + 1,000 snapshot IDs | 205.28 ns | 0.205 ns/ID |
+| Router | Route 1,000 IDs to one worker | 2.1067 us | 2.107 ns/ID |
+| Router | Route 1,000 IDs across eight workers | 3.4233 us | 3.423 ns/ID |
+| Worker | Register one collection with 1,000 IDs | 58.069 us | 58.069 ns/ID |
+| Worker | Replay check with no collections | 2.1286 ns | 2.129 ns/replay |
+| Worker | Replay check with one nonmatching collection | 6.2251 ns | 6.225 ns/replay |
+| Worker | Accumulate + flush 100 matching IDs | 994.68 ns | 9.947 ns/ID |
+| Worker | Accumulate + flush 1,000 matching IDs | 8.7402 us | 8.740 ns/ID |
+| Core adapter | Emit one one-ID replay batch | 43.585 ns | 43.585 ns/message |
+
+End-to-end results recorded on 2026-09-02 use long-lived warmed runtimes. Every
+sample asynchronously sends 100 batches of 1,000 events (100,000 total); event
+construction and listener registration are outside timing. Baseline and
+enabled cases are otherwise identical, and enabled cases drain one notification
+per affected worker replay batch. `Delta` is enabled minus baseline using the
+Criterion point estimates.
+
+| Routers | Workers | Listened snapshots | Baseline | Enabled | Delta | Baseline events/s | Enabled events/s |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1 | 76.510 ms | 73.851 ms | -2.659 ms | 1.3070 M | 1.3541 M |
+| 1 | 1 | 100 | 82.765 ms | 83.075 ms | +0.310 ms | 1.2082 M | 1.2037 M |
+| 1 | 1 | 1,000 | 98.408 ms | 100.23 ms | +1.822 ms | 1.0162 M | 997.74 K |
+| 2 | 4 | 1 | 54.042 ms | 54.042 ms | 0.000 ms | 1.8504 M | 1.8504 M |
+| 2 | 4 | 100 | 63.193 ms | 63.432 ms | +0.239 ms | 1.5825 M | 1.5765 M |
+| 2 | 4 | 1,000 | 72.025 ms | 72.250 ms | +0.225 ms | 1.3884 M | 1.3841 M |
+
+The negative one-snapshot delta and broad multi-worker confidence intervals
+show ordinary thread-scheduling noise rather than a speedup. The useful signal
+is that listener overhead is mostly within measurement variance; the clearest
+case, 1,000 listened snapshots on one worker, adds about 18.2 ns per event.
+
+Current limitations are deliberate: disconnected listeners remain stored
+until their snapshot replays again, listener storage is not yet included in
+the retained event/checkpoint memory budget, and there is no explicit listener
+identity or removal command.
+
 The worker measurement intentionally includes all worker-owned work after its
 batch is already available: snapshot lookup, canonical insertion, scheduling,
 checkpoint replay, lane-independent snapshot application, completion, and the
@@ -284,6 +335,8 @@ cargo test --release --manifest-path crates/core/Cargo.toml \
   apply::tests::benchmark_apply -- --ignored --nocapture
 cargo test --release --manifest-path crates/core/Cargo.toml \
   shutdown::tests::benchmark_shutdown -- --ignored --nocapture
+cargo test --release --manifest-path crates/core/Cargo.toml \
+  listen::tests::benchmark_listener_notification -- --ignored --nocapture
 ```
 
 Run the end-to-end send benchmark:
@@ -291,6 +344,7 @@ Run the end-to-end send benchmark:
 ```bash
 cargo bench --manifest-path crates/core/Cargo.toml --bench apply
 cargo bench --manifest-path crates/core/Cargo.toml --bench query
+cargo bench --manifest-path crates/core/Cargo.toml --bench listen
 ```
 
 Run only the topology matrix:

@@ -27,6 +27,8 @@ it is not a workspace member. It has no dependency on `contime` or
 - Flatten directly into final worker vectors.
 - Send one batch per affected worker.
 - Partition snapshot queries into one message per affected worker.
+- Partition each timestamped snapshot-listener collection into at most one
+  message per affected worker, preserving its collection boundary.
 - Route single-history event queries directly to one worker.
 - Dispatch apply and both query kinds over one unified queue.
 
@@ -63,6 +65,7 @@ Run the inline Criterion benchmark separately in release mode:
 ```bash
 cargo test --manifest-path crates/router/Cargo.toml --release --lib benchmark_route -- --ignored --nocapture
 cargo test --manifest-path crates/router/Cargo.toml --release --lib benchmark_hash -- --ignored --nocapture
+cargo test --manifest-path crates/router/Cargo.toml --release --lib benchmark_snapshot_listener_routing -- --ignored --nocapture
 ```
 
 Run the sustained integration benchmark:
@@ -83,6 +86,18 @@ Criterion writes the graph to
 inside this crate.
 
 ## Benchmarks
+
+Timestamped collection routing results recorded on 2026-09-02:
+
+| Snapshot IDs | Workers | Total | Amortized | Throughput |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 1 | 2.1067 us | 2.107 ns/ID | 474.7 million IDs/s |
+| 1,000 | 8 | 3.4233 us | 3.423 ns/ID | 292.1 million IDs/s |
+
+The fixture includes one seeded ownership lookup per ID, worker partition
+allocation, one listener clone per additional affected worker, and one real
+Crossbeam send per affected worker. Listener registration and notifications in
+the workers are excluded.
 
 Query routing results recorded on 2026-09-01:
 

@@ -41,6 +41,13 @@ forwards one timestamp and caller-owned completion sender. `advance_to` owns
 that channel and waits until every downstream sender clone has been dropped;
 there is no acknowledgement payload.
 
+Snapshot replay listeners use only an asynchronous boundary.
+`send_listen_snapshots` collects one watched timestamp and the requested
+snapshot-ID set, then forwards them with a consumer-owned notification sender.
+The API does not create the channel,
+interpret listener notifications, or wait for distributed registration. Empty
+registrations forward nothing and drop the supplied sender.
+
 ## Verification
 
 Run the unit tests from the ConTime repository root:
@@ -49,14 +56,22 @@ Run the unit tests from the ConTime repository root:
 cargo test --manifest-path crates/api/Cargo.toml --lib
 ```
 
-Run the two inline Criterion benchmarks separately:
+Run the inline Criterion benchmarks separately:
 
 ```bash
 cargo test --manifest-path crates/api/Cargo.toml --release --lib benchmark_send -- --ignored --nocapture
 cargo test --manifest-path crates/api/Cargo.toml --release --lib benchmark_apply -- --ignored --nocapture
+cargo test --manifest-path crates/api/Cargo.toml --release --lib benchmark_send_listen_snapshots -- --ignored --nocapture
 ```
 
 ## Benchmarks
+
+Listener forwarding of one timestamp and 1,000 already-collected snapshot IDs
+measured **205.28 ns**, or approximately **0.205 ns per ID**, on 2026-09-02.
+The snapshot-ID vector and both channels are prepared outside the timed routine. Like the apply
+send benchmark, consuming and recollecting the owned vector can reuse its
+allocation; this measurement describes the API boundary only and excludes
+router partitioning, worker registration, and notification delivery.
 
 The following medians were recorded locally in one release-mode run on
 2026-08-31. The fixtures have compile-time assertions fixing their complete

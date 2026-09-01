@@ -77,6 +77,14 @@ pub trait SnapshotQueryInput {
     fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Response);
 }
 
+/// Caller-selected snapshot-listener registration consumed by the router.
+pub trait SnapshotListenInput {
+    type Time: Clone;
+    type Listener: Clone;
+
+    fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Listener);
+}
+
 /// Caller-selected event-history query consumed by the router.
 pub trait EventQueryInput {
     type Time;
@@ -88,6 +96,11 @@ pub trait EventQueryInput {
 /// Constructs a caller-selected worker snapshot-query message.
 pub trait SnapshotQueryWorkerOutput<T, R>: Sized {
     fn snapshot_query(time: T, snapshot_ids: Vec<u128>, response: R) -> Self;
+}
+
+/// Constructs a caller-selected worker listener-registration message.
+pub trait SnapshotListenWorkerOutput<T, L>: Sized {
+    fn listen(time: T, snapshot_ids: Vec<u128>, listener: L) -> Self;
 }
 
 /// Constructs a caller-selected worker event-query message.
@@ -107,10 +120,11 @@ pub trait AdvanceWorkerOutput<T, C>: Sized {
 }
 
 /// One of the operations accepted by a unified router queue.
-pub enum RouteInputKind<A, SQ, EQ, AD> {
+pub enum RouteInputKind<A, SQ, EQ, SL, AD> {
     Apply(A),
     SnapshotQuery(SQ),
     EventQuery(EQ),
+    SnapshotListen(SL),
     Advance(AD),
 }
 
@@ -119,7 +133,8 @@ pub trait RouteInput {
     type Apply;
     type SnapshotQuery;
     type EventQuery;
+    type SnapshotListen;
     type Advance;
 
-    fn into_kind(self) -> RouteInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::Advance>;
+    fn into_kind(self) -> RouteInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::SnapshotListen, Self::Advance>;
 }

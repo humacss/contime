@@ -28,9 +28,10 @@ where
         }
 
         let was_empty = self.is_empty();
-        if was_empty || key.time < self.dirty_time {
+        if was_empty || !self.dirty || key.time < self.dirty_time {
             self.dirty_time = key.time.clone();
         }
+        self.dirty = true;
 
         if self.ordered.back().is_none_or(|(latest, _event)| key > *latest) {
             self.ordered.push_back((key, event));

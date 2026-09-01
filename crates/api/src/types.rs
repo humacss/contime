@@ -10,6 +10,11 @@ pub trait SnapshotQueryOutput<T, S>: Sized {
     fn snapshot_query(time: T, snapshot_ids: Vec<u128>, response: Sender<Vec<Box<S>>>) -> Self;
 }
 
+/// Constructs a caller-selected snapshot-listener registration message.
+pub trait SnapshotListenOutput<T, N>: Sized {
+    fn listen(time: T, snapshot_ids: Vec<u128>, notifications: Sender<N>) -> Self;
+}
+
 /// Constructs a caller-selected event-history query message.
 pub trait EventQueryOutput<T, E>: Sized {
     fn event_query(snapshot_id: u128, from: T, to: T, response: Sender<Vec<E>>) -> Self;

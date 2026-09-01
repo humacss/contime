@@ -1,19 +1,42 @@
-use contime_api::{AdvanceOutput as ApiAdvanceOutput, ApplyOutput, EventQueryOutput, RejectionMessage, SnapshotQueryOutput};
+use contime_api::{
+    AdvanceOutput as ApiAdvanceOutput, ApplyOutput, EventQueryOutput, RejectionMessage, SnapshotListenOutput as ApiSnapshotListenOutput,
+    SnapshotQueryOutput,
+};
 use contime_router::{
     AdvanceInput as RouterAdvanceInput, AdvanceWorkerOutput, EventQueryInput as RouterEventQueryInput, EventQueryWorkerOutput,
-    RouteInput as RouterInput, RouteInputBatch, RouteInputKind, RouteOutput, SnapshotQueryInput as RouterSnapshotQueryInput,
-    SnapshotQueryWorkerOutput, WorkerOutput,
+    RouteInput as RouterInput, RouteInputBatch, RouteInputKind, RouteOutput, SnapshotListenInput as RouterSnapshotListenInput,
+    SnapshotListenWorkerOutput, SnapshotQueryInput as RouterSnapshotQueryInput, SnapshotQueryWorkerOutput, WorkerOutput,
 };
 use contime_worker::{
     AdvanceInput as WorkerAdvanceInput, ApplyInput, Completion, EventQueryInput as WorkerEventQueryInput, RouteInput,
+    SnapshotListenInput as WorkerSnapshotListenInput, SnapshotListener as WorkerSnapshotListener,
     SnapshotQueryInput as WorkerSnapshotQueryInput, WorkInput, WorkInputKind,
 };
 use crossbeam_channel::Sender;
 
 use crate::{
-    Advance, CompletionHandle, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage, SnapshotQuery, TrackedEvent,
-    WorkerBatch, WorkerMessage,
+    Advance, CompletionHandle, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage, SnapshotListen, SnapshotListener,
+    SnapshotListenerMessage, SnapshotQuery, TrackedEvent, WorkerBatch, WorkerMessage,
 };
+
+impl<T> SnapshotListener<T> {
+    pub(crate) fn new(notifications: Sender<SnapshotListenerMessage<T>>) -> Self {
+        Self { notifications }
+    }
+}
+
+impl<T> WorkerSnapshotListener<T> for SnapshotListener<T>
+where
+    T: Clone,
+{
+    fn registered(&self, time: T, snapshot_ids: Vec<u128>) -> bool {
+        self.notifications.send(SnapshotListenerMessage::Registered { time, snapshot_ids }).is_ok()
+    }
+
+    fn replayed(&self, time: T, snapshot_ids: Vec<u128>) -> bool {
+        self.notifications.send(SnapshotListenerMessage::Replayed { time, snapshot_ids }).is_ok()
+    }
+}
 
 impl CompletionHandle {
     pub fn new(sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
@@ -86,6 +109,15 @@ where
     }
 }
 
+impl<I, S> ApiSnapshotListenOutput<I::Time, SnapshotListenerMessage<I::Time>> for RouterMessage<I, S>
+where
+    I: Input,
+{
+    fn listen(time: I::Time, snapshot_ids: Vec<u128>, notifications: Sender<SnapshotListenerMessage<I::Time>>) -> Self {
+        Self::SnapshotListen(SnapshotListen { time, snapshot_ids, listener: SnapshotListener::new(notifications) })
+    }
+}
+
 impl<I> RouteInputBatch for RouterBatch<I>
 where
     I: Input,
@@ -119,6 +151,18 @@ where
     }
 }
 
+impl<T> RouterSnapshotListenInput for SnapshotListen<T>
+where
+    T: Clone,
+{
+    type Time = T;
+    type Listener = SnapshotListener<T>;
+
+    fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Listener) {
+        (self.time, self.snapshot_ids, self.listener)
+    }
+}
+
 impl<I, S> RouterInput for RouterMessage<I, S>
 where
     I: Input,
@@ -126,13 +170,17 @@ where
     type Apply = RouterBatch<I>;
     type SnapshotQuery = SnapshotQuery<I::Time, S>;
     type EventQuery = EventQuery<I::Time, I>;
+    type SnapshotListen = SnapshotListen<I::Time>;
     type Advance = Advance<I::Time>;
 
-    fn into_kind(self) -> RouteInputKind<RouterBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, Advance<I::Time>> {
+    fn into_kind(
+        self,
+    ) -> RouteInputKind<RouterBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, SnapshotListen<I::Time>, Advance<I::Time>> {
         match self {
             Self::Apply(batch) => RouteInputKind::Apply(batch),
             Self::SnapshotQuery(query) => RouteInputKind::SnapshotQuery(query),
             Self::EventQuery(query) => RouteInputKind::EventQuery(query),
+            Self::SnapshotListen(registration) => RouteInputKind::SnapshotListen(registration),
             Self::Advance(advance) => RouteInputKind::Advance(advance),
         }
     }
@@ -198,6 +246,15 @@ where
     }
 }
 
+impl<I, S> SnapshotListenWorkerOutput<I::Time, SnapshotListener<I::Time>> for WorkerMessage<I, S>
+where
+    I: Input,
+{
+    fn listen(time: I::Time, snapshot_ids: Vec<u128>, listener: SnapshotListener<I::Time>) -> Self {
+        Self::SnapshotListen(SnapshotListen { time, snapshot_ids, listener })
+    }
+}
+
 impl<I, S> AdvanceWorkerOutput<I::Time, Sender<()>> for WorkerMessage<I, S>
 where
     I: Input,
@@ -252,6 +309,18 @@ where
     }
 }
 
+impl<T> WorkerSnapshotListenInput for SnapshotListen<T>
+where
+    T: Clone + Ord,
+{
+    type Time = T;
+    type Listener = SnapshotListener<T>;
+
+    fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Listener) {
+        (self.time, self.snapshot_ids, self.listener)
+    }
+}
+
 impl<I, S> WorkInput for WorkerMessage<I, S>
 where
     I: Input,
@@ -259,13 +328,17 @@ where
     type Apply = WorkerBatch<I>;
     type SnapshotQuery = SnapshotQuery<I::Time, S>;
     type EventQuery = EventQuery<I::Time, I>;
+    type SnapshotListen = SnapshotListen<I::Time>;
     type Advance = Advance<I::Time>;
 
-    fn into_kind(self) -> WorkInputKind<WorkerBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, Advance<I::Time>> {
+    fn into_kind(
+        self,
+    ) -> WorkInputKind<WorkerBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, SnapshotListen<I::Time>, Advance<I::Time>> {
         match self {
             Self::Apply(batch) => WorkInputKind::Apply(batch),
             Self::SnapshotQuery(query) => WorkInputKind::SnapshotQuery(query),
             Self::EventQuery(query) => WorkInputKind::EventQuery(query),
+            Self::SnapshotListen(registration) => WorkInputKind::SnapshotListen(registration),
             Self::Advance(advance) => WorkInputKind::Advance(advance),
         }
     }

@@ -77,6 +77,26 @@ where
     pub(crate) response: Sender<Vec<TrackedEvent<I>>>,
 }
 
+/// Notification emitted by a registered snapshot listener.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SnapshotListenerMessage<T> {
+    Registered { time: T, snapshot_ids: Vec<u128> },
+    Replayed { time: T, snapshot_ids: Vec<u128> },
+}
+
+/// Core adapter around a consumer-owned notification sender.
+#[derive(Clone)]
+pub struct SnapshotListener<T> {
+    pub(crate) notifications: Sender<SnapshotListenerMessage<T>>,
+}
+
+/// One snapshot-listener registration routed to owning workers.
+pub struct SnapshotListen<T> {
+    pub(crate) time: T,
+    pub(crate) snapshot_ids: Vec<u128>,
+    pub(crate) listener: SnapshotListener<T>,
+}
+
 pub enum RouterMessage<I, S>
 where
     I: Input,
@@ -84,6 +104,7 @@ where
     Apply(RouterBatch<I>),
     SnapshotQuery(SnapshotQuery<I::Time, S>),
     EventQuery(EventQuery<I::Time, I>),
+    SnapshotListen(SnapshotListen<I::Time>),
     Advance(Advance<I::Time>),
 }
 
@@ -112,6 +133,7 @@ where
     Apply(WorkerBatch<I>),
     SnapshotQuery(SnapshotQuery<I::Time, S>),
     EventQuery(EventQuery<I::Time, I>),
+    SnapshotListen(SnapshotListen<I::Time>),
     Advance(Advance<I::Time>),
 }
 
