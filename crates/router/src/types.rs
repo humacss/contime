@@ -95,11 +95,23 @@ pub trait EventQueryWorkerOutput<T, R>: Sized {
     fn event_query(snapshot_id: u128, from: T, to: T, response: R) -> Self;
 }
 
+pub trait AdvanceInput {
+    type Time: Clone;
+    type Completion: Clone;
+
+    fn into_parts(self) -> (Self::Time, Self::Completion);
+}
+
+pub trait AdvanceWorkerOutput<T, C>: Sized {
+    fn advance(time: T, completion: C) -> Self;
+}
+
 /// One of the operations accepted by a unified router queue.
-pub enum RouteInputKind<A, SQ, EQ> {
+pub enum RouteInputKind<A, SQ, EQ, AD> {
     Apply(A),
     SnapshotQuery(SQ),
     EventQuery(EQ),
+    Advance(AD),
 }
 
 /// Converts a caller-selected router message into its static operation kind.
@@ -107,6 +119,7 @@ pub trait RouteInput {
     type Apply;
     type SnapshotQuery;
     type EventQuery;
+    type Advance;
 
-    fn into_kind(self) -> RouteInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery>;
+    fn into_kind(self) -> RouteInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::Advance>;
 }

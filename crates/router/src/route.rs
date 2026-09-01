@@ -2,8 +2,8 @@ use crossbeam_channel::{Receiver, Sender};
 
 use crate::hash::RouterHasher;
 use crate::types::{
-    EventQueryInput, EventQueryWorkerOutput, RoutableInput, RouteInput, RouteInputBatch, RouteInputKind, RouteOutput, RouterError,
-    SnapshotQueryInput, SnapshotQueryWorkerOutput, WorkerOutput,
+    AdvanceInput, AdvanceWorkerOutput, EventQueryInput, EventQueryWorkerOutput, RoutableInput, RouteInput, RouteInputBatch, RouteInputKind,
+    RouteOutput, RouterError, SnapshotQueryInput, SnapshotQueryWorkerOutput, WorkerOutput,
 };
 
 trait Deps<W> {
@@ -45,9 +45,11 @@ where
     M::SnapshotQuery: SnapshotQueryInput,
     <M::SnapshotQuery as SnapshotQueryInput>::Time: Clone,
     M::EventQuery: EventQueryInput,
+    M::Advance: AdvanceInput,
     W: WorkerOutput<<M::Apply as RouteInputBatch>::Input, <M::Apply as RouteInputBatch>::Completion>
         + SnapshotQueryWorkerOutput<<M::SnapshotQuery as SnapshotQueryInput>::Time, <M::SnapshotQuery as SnapshotQueryInput>::Response>
-        + EventQueryWorkerOutput<<M::EventQuery as EventQueryInput>::Time, <M::EventQuery as EventQueryInput>::Response>,
+        + EventQueryWorkerOutput<<M::EventQuery as EventQueryInput>::Time, <M::EventQuery as EventQueryInput>::Response>
+        + AdvanceWorkerOutput<<M::Advance as AdvanceInput>::Time, <M::Advance as AdvanceInput>::Completion>,
 {
     if worker_outputs.is_empty() {
         return Err(RouterError::NoWorkers);
@@ -60,6 +62,7 @@ where
             RouteInputKind::Apply(batch) => route_batch(&hasher, batch, &deps)?,
             RouteInputKind::SnapshotQuery(query) => crate::route_snapshot_query(seed, query, worker_outputs)?,
             RouteInputKind::EventQuery(query) => crate::route_event_query(seed, query, worker_outputs)?,
+            RouteInputKind::Advance(advance) => crate::route_advance(advance, worker_outputs)?,
         }
     }
     Ok(())
