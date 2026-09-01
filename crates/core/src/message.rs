@@ -1,33 +1,52 @@
-use std::convert::Infallible;
-
-use contime_api::{ApplyOutput, EventQueryOutput, RejectionMessage, SnapshotQueryOutput};
+use contime_api::{AdvanceOutput as ApiAdvanceOutput, ApplyOutput, EventQueryOutput, RejectionMessage, SnapshotQueryOutput};
 use contime_router::{
-    EventQueryInput as RouterEventQueryInput, EventQueryWorkerOutput, RouteInput as RouterInput, RouteInputBatch, RouteInputKind,
-    RouteOutput, SnapshotQueryInput as RouterSnapshotQueryInput, SnapshotQueryWorkerOutput, WorkerOutput,
+    AdvanceInput as RouterAdvanceInput, AdvanceWorkerOutput, EventQueryInput as RouterEventQueryInput, EventQueryWorkerOutput,
+    RouteInput as RouterInput, RouteInputBatch, RouteInputKind, RouteOutput, SnapshotQueryInput as RouterSnapshotQueryInput,
+    SnapshotQueryWorkerOutput, WorkerOutput,
 };
 use contime_worker::{
-    ApplyInput, Completion, EventQueryInput as WorkerEventQueryInput, RouteInput, SnapshotQueryInput as WorkerSnapshotQueryInput,
-    WorkInput, WorkInputKind,
+    AdvanceInput as WorkerAdvanceInput, ApplyInput, Completion, EventQueryInput as WorkerEventQueryInput, RouteInput,
+    SnapshotQueryInput as WorkerSnapshotQueryInput, WorkInput, WorkInputKind,
 };
 use crossbeam_channel::Sender;
 
 use crate::{
-    CompletionHandle, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage, SnapshotQuery, TrackedEvent, WorkerBatch,
-    WorkerMessage,
+    Advance, CompletionHandle, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage, SnapshotQuery, TrackedEvent,
+    WorkerBatch, WorkerMessage,
 };
 
 impl CompletionHandle {
     pub fn new(sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
-        Self { _sender: sender }
+        Self { sender }
     }
 }
 
-impl Completion<Infallible> for CompletionHandle {
-    fn reject(self, rejections: Vec<Infallible>) {
+impl Completion<RejectionMessage<RejectionReason>> for CompletionHandle {
+    fn reject(self, rejections: Vec<RejectionMessage<RejectionReason>>) {
         for rejection in rejections {
-            match rejection {}
+            let _ = self.sender.send(rejection);
         }
-        drop(self);
+    }
+}
+
+impl<I, S> ApiAdvanceOutput<I::Time> for RouterMessage<I, S>
+where
+    I: Input,
+{
+    fn advance(time: I::Time, completion: Sender<()>) -> Self {
+        Self::Advance(Advance { time, completion })
+    }
+}
+
+impl<T> RouterAdvanceInput for Advance<T>
+where
+    T: Clone,
+{
+    type Time = T;
+    type Completion = Sender<()>;
+
+    fn into_parts(self) -> (T, Sender<()>) {
+        (self.time, self.completion)
     }
 }
 
@@ -107,12 +126,14 @@ where
     type Apply = RouterBatch<I>;
     type SnapshotQuery = SnapshotQuery<I::Time, S>;
     type EventQuery = EventQuery<I::Time, I>;
+    type Advance = Advance<I::Time>;
 
-    fn into_kind(self) -> RouteInputKind<RouterBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>> {
+    fn into_kind(self) -> RouteInputKind<RouterBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, Advance<I::Time>> {
         match self {
             Self::Apply(batch) => RouteInputKind::Apply(batch),
             Self::SnapshotQuery(query) => RouteInputKind::SnapshotQuery(query),
             Self::EventQuery(query) => RouteInputKind::EventQuery(query),
+            Self::Advance(advance) => RouteInputKind::Advance(advance),
         }
     }
 }
@@ -177,6 +198,27 @@ where
     }
 }
 
+impl<I, S> AdvanceWorkerOutput<I::Time, Sender<()>> for WorkerMessage<I, S>
+where
+    I: Input,
+{
+    fn advance(time: I::Time, completion: Sender<()>) -> Self {
+        Self::Advance(Advance { time, completion })
+    }
+}
+
+impl<T> WorkerAdvanceInput for Advance<T>
+where
+    T: contime_worker::AdvanceTime,
+{
+    type Time = T;
+    type Completion = Sender<()>;
+
+    fn into_parts(self) -> (T, Sender<()>) {
+        (self.time, self.completion)
+    }
+}
+
 impl<I> ApplyInput for WorkerBatch<I>
 where
     I: Input,
@@ -217,30 +259,31 @@ where
     type Apply = WorkerBatch<I>;
     type SnapshotQuery = SnapshotQuery<I::Time, S>;
     type EventQuery = EventQuery<I::Time, I>;
+    type Advance = Advance<I::Time>;
 
-    fn into_kind(self) -> WorkInputKind<WorkerBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>> {
+    fn into_kind(self) -> WorkInputKind<WorkerBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, Advance<I::Time>> {
         match self {
             Self::Apply(batch) => WorkInputKind::Apply(batch),
             Self::SnapshotQuery(query) => WorkInputKind::SnapshotQuery(query),
             Self::EventQuery(query) => WorkInputKind::EventQuery(query),
+            Self::Advance(advance) => WorkInputKind::Advance(advance),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
     use std::hint::black_box;
 
-    use contime_api::{ApplyOutput, RejectionMessage};
+    use contime_api::{AdvanceOutput, ApplyOutput, RejectionMessage};
     use contime_memory::ConservativeTrackedSize;
-    use contime_router::{RouteInputBatch, RouteOutput, WorkerOutput};
-    use contime_worker::{ApplyInput, Completion, RouteInput};
+    use contime_router::{AdvanceInput as RouterAdvanceInput, AdvanceWorkerOutput, RouteInputBatch, RouteOutput, WorkerOutput};
+    use contime_worker::{AdvanceInput as WorkerAdvanceInput, ApplyInput, Completion, RouteInput};
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use crate::input::prepare_inputs;
-    use crate::{CompletionHandle, Input, MemoryBudget, RejectionReason, Route, RouterBatch, WorkerBatch};
+    use crate::{CompletionHandle, Input, MemoryBudget, RejectionReason, Route, RouterBatch, RouterMessage, WorkerBatch, WorkerMessage};
 
     #[derive(Debug)]
     struct TestInput(u128);
@@ -289,9 +332,24 @@ mod tests {
         let (sender, receiver) = unbounded::<RejectionMessage<RejectionReason>>();
         let completion = CompletionHandle::new(sender);
 
-        <CompletionHandle as Completion<Infallible>>::reject(completion, Vec::new());
+        <CompletionHandle as Completion<RejectionMessage<RejectionReason>>>::reject(completion, Vec::new());
 
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn advance_adapters_preserve_the_timestamp_and_completion_channel() {
+        let (completion, done) = unbounded();
+        let router = <RouterMessage<TestInput, ()> as AdvanceOutput<i64>>::advance(50, completion);
+        let RouterMessage::Advance(advance) = router else { panic!("expected router advance") };
+        let (time, completion) = RouterAdvanceInput::into_parts(advance);
+        let worker = <WorkerMessage<TestInput, ()> as AdvanceWorkerOutput<_, _>>::advance(time, completion);
+        let WorkerMessage::Advance(advance) = worker else { panic!("expected worker advance") };
+        let (time, completion) = WorkerAdvanceInput::into_parts(advance);
+
+        assert_eq!(time, 50);
+        drop(completion);
+        assert_eq!(done.try_recv(), Err(TryRecvError::Disconnected));
     }
 
     #[test]

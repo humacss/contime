@@ -19,7 +19,7 @@ pub(crate) struct MemoryState {
 
 /// The event information required by the complete apply pipeline.
 pub trait Input: ConservativeTrackedSize + Send + Sync + 'static {
-    type Time: Clone + Default + Ord + Send + Sync + 'static;
+    type Time: contime_worker::AdvanceTime + Send + Sync + 'static;
 
     fn event_id(&self) -> u128;
     fn time(&self) -> Self::Time;
@@ -37,13 +37,19 @@ where
 /// A core-owned reason returned at the public apply boundary.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum RejectionReason {
+    BeforeHistoryHorizon,
     MemoryFull,
 }
 
 /// Request completion forwarded unchanged from API admission to the worker.
 #[derive(Clone)]
 pub struct CompletionHandle {
-    pub(crate) _sender: Sender<contime_api::RejectionMessage<RejectionReason>>,
+    pub(crate) sender: Sender<contime_api::RejectionMessage<RejectionReason>>,
+}
+
+pub struct Advance<T> {
+    pub(crate) time: T,
+    pub(crate) completion: Sender<()>,
 }
 
 /// One admitted API batch consumed by a router.
@@ -78,6 +84,7 @@ where
     Apply(RouterBatch<I>),
     SnapshotQuery(SnapshotQuery<I::Time, S>),
     EventQuery(EventQuery<I::Time, I>),
+    Advance(Advance<I::Time>),
 }
 
 /// One snapshot-specific route emitted by a router.
@@ -105,6 +112,7 @@ where
     Apply(WorkerBatch<I>),
     SnapshotQuery(SnapshotQuery<I::Time, S>),
     EventQuery(EventQuery<I::Time, I>),
+    Advance(Advance<I::Time>),
 }
 
 pub(crate) struct History<I>
@@ -160,19 +168,21 @@ where
 {
     pub(crate) worker: contime_worker::WorkerConfig,
     pub(crate) checkpoints: contime_checkpoints::CheckpointConfig,
+    pub(crate) history_retention: I::Time,
     pub(crate) budget: MemoryBudget,
     pub(crate) wrapper: W,
     pub(crate) types: PhantomData<fn() -> (I, S)>,
 }
 
 /// Complete apply-and-query process configuration.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ConTimeConfig {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConTimeConfig<T> {
     pub router_count: usize,
     pub worker_count: usize,
     pub router_seed: u64,
     pub memory_limit: usize,
     pub memory_buffer: usize,
+    pub history_retention: T,
     pub worker: contime_worker::WorkerConfig,
     pub checkpoints: contime_checkpoints::CheckpointConfig,
 }

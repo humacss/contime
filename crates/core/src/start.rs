@@ -11,11 +11,13 @@ where
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + ConservativeTrackedSize + Send + 'static,
     W: ApplyWrapper<S, I> + Clone + Send + 'static,
 {
-    pub fn start(config: ConTimeConfig, wrapper: W) -> Result<Self, contime_runtime::StartError> {
+    pub fn start(config: ConTimeConfig<I::Time>, wrapper: W) -> Result<Self, contime_runtime::StartError> {
         let budget = MemoryBudget::new(config.memory_limit, config.memory_buffer);
         let routers = (0..config.router_count).map(|_| RouterProcess::<I, S>::new(config.router_seed)).collect();
         let workers = (0..config.worker_count)
-            .map(|_| WorkerProcess::new(config.worker, config.checkpoints, budget.clone(), wrapper.clone()))
+            .map(|_| {
+                WorkerProcess::new(config.worker, config.checkpoints, config.history_retention.clone(), budget.clone(), wrapper.clone())
+            })
             .collect();
         let runtime = contime_runtime::Runtime::start(routers, workers)?;
         Ok(Self { runtime, budget, types: PhantomData })
@@ -80,13 +82,14 @@ mod tests {
         fn apply_events(&mut self, _batch: ApplyBatch<'_, Self::Time, TestInput>) {}
     }
 
-    fn config(router_count: usize, worker_count: usize) -> ConTimeConfig {
+    fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<i64> {
         ConTimeConfig {
             router_count,
             worker_count,
             router_seed: 9,
             memory_limit: 1_000_000,
             memory_buffer: 1_000,
+            history_retention: 0,
             worker: contime_worker::WorkerConfig {
                 maximum_dirty_age: Duration::from_micros(100),
                 replays_per_receive: 1,
