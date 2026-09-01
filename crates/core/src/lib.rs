@@ -1,5 +1,6 @@
 //! Apply-and-query composition of isolated ConTime subsystems.
 
+mod advance;
 mod apply;
 mod checkpoint;
 mod history;
@@ -15,7 +16,7 @@ mod types;
 mod worker;
 
 pub use types::{
-    CompletionHandle, ConTime, ConTimeConfig, EventQuery, Input, MemoryBudget, RejectionReason, Route, RouterBatch, RouterMessage,
+    Advance, CompletionHandle, ConTime, ConTimeConfig, EventQuery, Input, MemoryBudget, RejectionReason, Route, RouterBatch, RouterMessage,
     RouterProcess, SnapshotQuery, TrackedEvent, WorkerBatch, WorkerMessage, WorkerProcess,
 };
 

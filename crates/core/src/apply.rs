@@ -124,13 +124,14 @@ mod tests {
         }
     }
 
-    fn config(memory_limit: usize, memory_buffer: usize) -> ConTimeConfig {
+    fn config(memory_limit: usize, memory_buffer: usize) -> ConTimeConfig<i64> {
         ConTimeConfig {
             router_count: 1,
             worker_count: 1,
             router_seed: 9,
             memory_limit,
             memory_buffer,
+            history_retention: 0,
             worker: contime_worker::WorkerConfig {
                 maximum_dirty_age: Duration::from_micros(100),
                 replays_per_receive: 1,

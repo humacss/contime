@@ -77,6 +77,7 @@ mod tests {
                 router_seed: 9,
                 memory_limit: 1_000_000,
                 memory_buffer: 1_000,
+                history_retention: 0,
                 worker: contime_worker::WorkerConfig {
                     maximum_dirty_age: Duration::from_micros(100),
                     replays_per_receive: 1,

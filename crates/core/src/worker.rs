@@ -13,8 +13,14 @@ where
     I: Input,
     S: Snapshot + ConservativeTrackedSize,
 {
-    pub fn new(worker: contime_worker::WorkerConfig, checkpoints: CheckpointConfig, budget: MemoryBudget, wrapper: W) -> Self {
-        Self { worker, checkpoints, budget, wrapper, types: PhantomData }
+    pub fn new(
+        worker: contime_worker::WorkerConfig,
+        checkpoints: CheckpointConfig,
+        history_retention: I::Time,
+        budget: MemoryBudget,
+        wrapper: W,
+    ) -> Self {
+        Self { worker, checkpoints, history_retention, budget, wrapper, types: PhantomData }
     }
 }
 
@@ -33,6 +39,7 @@ where
             input,
             self.worker,
             (),
+            self.history_retention,
             checkpoint_config,
             self.wrapper,
         );
@@ -134,6 +141,7 @@ mod tests {
                 deadline_compaction_multiplier: 2,
             },
             CheckpointConfig { interval: 100 },
+            0,
             budget,
             RecordingWrapper(observed),
         )

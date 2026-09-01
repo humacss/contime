@@ -12,7 +12,10 @@ where
     S: Snapshot + ConservativeTrackedSize,
 {
     fn conservative_tracked_size(&self) -> usize {
-        self.checkpoints.iter().fold(size_of::<Self>(), |total, checkpoint| {
+        let total = self.checkpoints.anchor().map_or(size_of::<Self>(), |anchor| {
+            size_of::<Self>().saturating_add(anchor.snapshot.conservative_tracked_size().saturating_sub(size_of::<S>()))
+        });
+        self.checkpoints.iter().fold(total, |total, checkpoint| {
             total
                 .saturating_add(size_of_val(checkpoint).saturating_sub(size_of::<S>()))
                 .saturating_add(checkpoint.snapshot.conservative_tracked_size())
@@ -45,6 +48,7 @@ where
 {
     type Config = CheckpointStorageConfig;
     type Context = W;
+    type Time = I::Time;
 
     fn create(snapshot_id: u128, config: &Self::Config) -> Self {
         let state = CheckpointState { checkpoints: contime_checkpoints::CheckpointStore::new(snapshot_id, config.checkpoints) };
@@ -54,6 +58,12 @@ where
     fn update(&mut self, events: &mut History<I>, context: &mut Self::Context) {
         self.state.update(|state| {
             contime_checkpoints::replay(&mut state.checkpoints, events, context);
+        });
+    }
+
+    fn advance_before(&mut self, events: &History<I>, context: &mut Self::Context, horizon: &I::Time) {
+        self.state.update(|state| {
+            contime_checkpoints::advance_before(&mut state.checkpoints, events, context, horizon);
         });
     }
 }
@@ -150,7 +160,7 @@ mod tests {
     }
 
     fn history(budget: &MemoryBudget, count: u128) -> History<TestInput> {
-        let mut history = History::new();
+        let mut history = History::with_horizon(0);
         let events = prepare_inputs(budget, (0..count).map(|id| TestInput { id, value: 1 }).collect()).unwrap();
         for event in events {
             history.insert(event);
@@ -178,6 +188,22 @@ mod tests {
         drop(history);
         assert!(events_only > 0);
         assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn checkpoint_advancement_tracks_anchor_replacement_and_pruned_checkpoints() {
+        let budget = MemoryBudget::new(1_000_000, 1_000);
+        let mut history = history(&budget, 100);
+        let checkpoint_config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 50 }, budget: budget.clone() };
+        let mut checkpoints = <CheckpointStorage<TestSnapshot, ()> as WorkerCheckpoints<History<TestInput>>>::create(7, &checkpoint_config);
+        checkpoints.update(&mut history, &mut ());
+        let before = budget.used();
+
+        WorkerCheckpoints::advance_before(&mut checkpoints, &history, &mut (), &101);
+
+        let anchor = checkpoints.state.checkpoints.anchor().unwrap();
+        assert_eq!(anchor.boundary.as_ref().unwrap().time, 99);
+        assert!(budget.used() < before);
     }
 
     #[test]

@@ -1,22 +1,28 @@
-use std::convert::Infallible;
-
 use contime_checkpoints::{CheckpointKey, EventRef};
+use contime_events::Insert;
 use contime_worker::EventInsert;
 
 use crate::types::{History, HistoryIter};
-use crate::{Input, TrackedEvent};
+use crate::{Input, RejectionMessage, RejectionReason, TrackedEvent};
 
 impl<I> History<I>
 where
     I: Input,
 {
-    pub(crate) fn new() -> Self {
-        Self { events: contime_events::EventHistory::new() }
+    pub(crate) fn with_horizon(horizon: I::Time) -> Self {
+        Self { events: contime_events::EventHistory::with_horizon(horizon) }
     }
 
-    pub(crate) fn insert(&mut self, input: TrackedEvent<I>) -> EventInsert<Infallible> {
-        let changed = self.events.insert(input).changed();
-        EventInsert { changed, rejections: Vec::new() }
+    pub(crate) fn insert(&mut self, input: TrackedEvent<I>) -> EventInsert<RejectionMessage<RejectionReason>> {
+        let event_id = input.event_id();
+        match self.events.insert(input) {
+            Insert::Inserted => EventInsert { changed: true, rejections: Vec::new() },
+            Insert::Duplicate => EventInsert { changed: false, rejections: Vec::new() },
+            Insert::BeforeHorizon => EventInsert {
+                changed: false,
+                rejections: vec![RejectionMessage { event_id, reason: RejectionReason::BeforeHistoryHorizon }],
+            },
+        }
     }
 }
 
@@ -25,14 +31,23 @@ where
     I: Input,
 {
     type Config = ();
-    type Rejection = Infallible;
+    type Rejection = RejectionMessage<RejectionReason>;
+    type Time = I::Time;
 
-    fn create(_snapshot_id: u128, _config: &Self::Config) -> Self {
-        Self::new()
+    fn create(_snapshot_id: u128, _config: &Self::Config, horizon: &Self::Time) -> Self {
+        Self::with_horizon(horizon.clone())
     }
 
     fn insert(&mut self, input: TrackedEvent<I>) -> EventInsert<Self::Rejection> {
         self.insert(input)
+    }
+
+    fn dirty_time(&self) -> &Self::Time {
+        self.events.dirty_time()
+    }
+
+    fn prune_before(&mut self, horizon: &Self::Time) {
+        self.events.prune_before(horizon);
     }
 }
 
@@ -139,7 +154,7 @@ mod tests {
     #[test]
     fn history_deduplicates_and_exposes_raw_events_in_canonical_order() {
         let budget = MemoryBudget::new(10_000, 100);
-        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &());
+        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &0);
 
         assert!(history.insert(event(&budget, 2, 20)).changed);
         assert!(history.insert(event(&budget, 1, 10)).changed);
@@ -155,13 +170,28 @@ mod tests {
     #[test]
     fn replay_acknowledgement_moves_dirty_time_to_the_latest_event() {
         let budget = MemoryBudget::new(10_000, 100);
-        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &());
+        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &0);
         history.insert(event(&budget, 2, 20));
         history.insert(event(&budget, 1, 10));
 
         ReplayEvents::acknowledge_replay(&mut history);
 
         assert_eq!(ReplayEvents::dirty_time(&history), &20);
+    }
+
+    #[test]
+    fn pre_horizon_inputs_are_rejected_and_release_their_tracked_allocation() {
+        let budget = MemoryBudget::new(10_000, 100);
+        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &10);
+
+        let rejection = history.insert(event(&budget, 1, 9));
+
+        assert!(!rejection.changed);
+        assert_eq!(rejection.rejections.len(), 1);
+        assert_eq!(rejection.rejections[0].event_id, 1);
+        assert_eq!(rejection.rejections[0].reason, crate::RejectionReason::BeforeHistoryHorizon);
+        assert_eq!(budget.used(), 0);
+        assert!(history.insert(event(&budget, 2, 10)).changed);
     }
 
     #[test]
@@ -173,7 +203,7 @@ mod tests {
                 || {
                     let budget = MemoryBudget::new(usize::MAX, 0);
                     let inputs = prepare_inputs(&budget, (0..1_000).map(|id| TestInput { id, time: id as i64 }).collect()).unwrap();
-                    (History::new(), inputs)
+                    (History::with_horizon(0), inputs)
                 },
                 |(mut history, inputs)| {
                     for input in inputs {

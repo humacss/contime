@@ -67,13 +67,14 @@ impl ApplyEvents<BenchEvent> for BenchSnapshot {
     }
 }
 
-fn config(router_count: usize, worker_count: usize) -> ConTimeConfig {
+fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<u64> {
     ConTimeConfig {
         router_count,
         worker_count,
         router_seed: 9,
         memory_limit: 256 * 1024 * 1024,
         memory_buffer: 1024 * 1024,
+        history_retention: 0,
         worker: contime_worker::WorkerConfig {
             maximum_dirty_age: Duration::from_micros(100),
             replays_per_receive: 1,
