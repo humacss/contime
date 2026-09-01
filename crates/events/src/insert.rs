@@ -17,13 +17,17 @@ where
     /// tail enter the late-event tree. Identity is independent of timestamp:
     /// a retained event ID always makes a later insertion a no-op.
     pub fn insert(&mut self, event: E) -> Insert {
+        let key = EventKey::from_event(&event);
+        if key.time < self.horizon {
+            return Insert::BeforeHorizon;
+        }
+
         let event_id = event.event_id();
         if !self.retained_ids.insert(event_id) {
             return Insert::Duplicate;
         }
 
         let was_empty = self.is_empty();
-        let key = EventKey::from_event(&event);
         if was_empty || key.time < self.dirty_time {
             self.dirty_time = key.time.clone();
         }
@@ -126,6 +130,24 @@ mod tests {
 
         history.insert(event(1, 5));
         assert_eq!(history.dirty_time(), &10);
+    }
+
+    #[test]
+    fn insertion_rejects_only_times_strictly_before_the_horizon() {
+        let mut history = EventHistory::with_horizon(10);
+
+        assert_eq!(history.insert(event(1, 9)), Insert::BeforeHorizon);
+        assert_eq!(history.insert(event(2, 10)), Insert::Inserted);
+        assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn horizon_rejection_precedes_duplicate_detection() {
+        let mut history = EventHistory::with_horizon(0);
+        assert_eq!(history.insert(event(1, 10)), Insert::Inserted);
+        history.prune_before(&20);
+
+        assert_eq!(history.insert(event(1, 10)), Insert::BeforeHorizon);
     }
 
     fn ordered_fixture() -> (EventHistory<TestEvent>, Vec<TestEvent>) {

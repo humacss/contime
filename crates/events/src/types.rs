@@ -50,6 +50,7 @@ where
     pub(crate) late: BTreeMap<EventKey<E::Time>, E>,
     pub(crate) retained_ids: AHashSet<u128>,
     pub(crate) dirty_time: E::Time,
+    pub(crate) horizon: E::Time,
 }
 
 /// The outcome of one event insertion.
@@ -59,6 +60,15 @@ pub enum Insert {
     Inserted,
     /// The event ID is already retained. Timestamp and payload are ignored.
     Duplicate,
+    /// The event predates the active retained-history horizon.
+    BeforeHorizon,
+}
+
+/// The number of events removed from each internal event store.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PruneResult {
+    pub removed_ordered: usize,
+    pub removed_late: usize,
 }
 
 /// A canonical merged view over ordered and late retained events.

@@ -24,11 +24,21 @@ where
     /// Creates an empty history with capacity for the expected ordered events
     /// and retained IDs.
     pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_horizon(capacity, E::Time::default())
+    }
+
+    /// Creates an empty history at an already active horizon.
+    pub fn with_horizon(horizon: E::Time) -> Self {
+        Self::with_capacity_and_horizon(0, horizon)
+    }
+
+    fn with_capacity_and_horizon(capacity: usize, horizon: E::Time) -> Self {
         Self {
             ordered: VecDeque::with_capacity(capacity),
             late: BTreeMap::new(),
             retained_ids: ahash::AHashSet::with_capacity(capacity),
-            dirty_time: E::Time::default(),
+            dirty_time: horizon.clone(),
+            horizon,
         }
     }
 
@@ -59,6 +69,11 @@ where
     /// Returns the earliest timestamp from which replay must begin.
     pub fn dirty_time(&self) -> &E::Time {
         &self.dirty_time
+    }
+
+    /// Returns the active lower retained-history boundary.
+    pub fn horizon(&self) -> &E::Time {
+        &self.horizon
     }
 
     /// Marks all retained events as replayed.
