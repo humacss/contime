@@ -57,8 +57,8 @@ mod tests {
     use crossbeam_channel::{unbounded, Sender};
 
     use crate::{
-        work_messages, ApplyBatch, Checkpoints, EventInsert, EventQueryInput, Events, QueryCheckpoints, QueryEvents, RoutedInput,
-        SnapshotQueryInput, WorkInput, WorkInputKind, WorkerConfig,
+        work_messages, AdvanceInput, ApplyBatch, Checkpoints, EventInsert, EventQueryInput, Events, QueryCheckpoints, QueryEvents,
+        RoutedInput, SnapshotQueryInput, WorkInput, WorkInputKind, WorkerConfig,
     };
 
     #[derive(Clone)]
@@ -70,7 +70,9 @@ mod tests {
     impl Events<TestEvent> for TestEvents {
         type Config = ();
         type Rejection = ();
-        fn create(_snapshot_id: u128, _config: &Self::Config) -> Self {
+        type Time = u64;
+
+        fn create(_snapshot_id: u128, _config: &Self::Config, _horizon: &u64) -> Self {
             Self::default()
         }
 
@@ -78,6 +80,12 @@ mod tests {
             self.0.push(input);
             EventInsert { changed: true, rejections: Vec::new() }
         }
+
+        fn dirty_time(&self) -> &u64 {
+            &0
+        }
+
+        fn prune_before(&mut self, _horizon: &u64) {}
     }
 
     impl QueryEvents<TestEvent> for TestEvents {
@@ -102,11 +110,14 @@ mod tests {
     impl Checkpoints<TestEvents> for TestCheckpoints {
         type Config = ();
         type Context = ();
+        type Time = u64;
         fn create(_snapshot_id: u128, _config: &Self::Config) -> Self {
             Self
         }
 
         fn update(&mut self, _events: &mut TestEvents, _context: &mut Self::Context) {}
+
+        fn advance_before(&mut self, _events: &TestEvents, _context: &mut Self::Context, _horizon: &u64) {}
     }
 
     impl QueryCheckpoints<TestEvents> for TestCheckpoints {
@@ -151,18 +162,35 @@ mod tests {
         Apply(ApplyBatch<TestEvent, Completion>),
         Snapshots(SnapshotQuery),
         Events(EventQuery),
+        Advance(Advance),
+    }
+
+    struct Advance {
+        time: u64,
+        completion: Sender<()>,
+    }
+
+    impl AdvanceInput for Advance {
+        type Time = u64;
+        type Completion = Sender<()>;
+
+        fn into_parts(self) -> (u64, Sender<()>) {
+            (self.time, self.completion)
+        }
     }
 
     impl WorkInput for Message {
         type Apply = ApplyBatch<TestEvent, Completion>;
         type SnapshotQuery = SnapshotQuery;
         type EventQuery = EventQuery;
+        type Advance = Advance;
 
-        fn into_kind(self) -> WorkInputKind<ApplyBatch<TestEvent, Completion>, SnapshotQuery, EventQuery> {
+        fn into_kind(self) -> WorkInputKind<ApplyBatch<TestEvent, Completion>, SnapshotQuery, EventQuery, Advance> {
             match self {
                 Self::Apply(batch) => WorkInputKind::Apply(batch),
                 Self::Snapshots(query) => WorkInputKind::SnapshotQuery(query),
                 Self::Events(query) => WorkInputKind::EventQuery(query),
+                Self::Advance(advance) => WorkInputKind::Advance(advance),
             }
         }
     }
@@ -196,10 +224,22 @@ mod tests {
         input.send(Message::Events(EventQuery { response: event_response })).unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), (), ());
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), ());
 
         assert_eq!(*snapshots.recv().unwrap()[0], TestSnapshot { snapshot_id: 7, count: 3 });
         assert_eq!(events.recv().unwrap().into_iter().map(|event| event.0).collect::<Vec<_>>(), vec![1, 2]);
+    }
+
+    #[test]
+    fn one_worker_queue_completes_horizon_advancement() {
+        let (input, receiver) = unbounded();
+        let (completion, done) = unbounded();
+        input.send(Message::Advance(Advance { time: 20, completion })).unwrap();
+        drop(input);
+
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 10, (), ());
+
+        assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
     }
 
     struct BenchmarkSnapshotQuery;

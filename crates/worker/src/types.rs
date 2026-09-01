@@ -82,14 +82,49 @@ pub struct EventInsert<R> {
     pub rejections: Vec<R>,
 }
 
+/// Timestamp arithmetic required for worker-local horizon advancement.
+pub trait AdvanceTime: Clone + Default + Ord {
+    fn saturating_sub(&self, retention: &Self) -> Self;
+}
+
+macro_rules! impl_advance_time {
+    ($($time:ty),+ $(,)?) => {
+        $(
+            impl AdvanceTime for $time {
+                fn saturating_sub(&self, retention: &Self) -> Self {
+                    <$time>::saturating_sub(*self, *retention)
+                }
+            }
+        )+
+    };
+}
+
+impl_advance_time!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
+
+pub trait AdvanceInput {
+    type Time: AdvanceTime;
+    type Completion;
+
+    fn into_parts(self) -> (Self::Time, Self::Completion);
+}
+
+pub trait AdvanceOutput<T, C>: Sized {
+    fn advance(time: T, completion: C) -> Self;
+}
+
 /// Canonical per-snapshot event storage owned by a worker.
 pub trait Events<I>: Sized {
     type Config;
     type Rejection;
+    type Time: AdvanceTime;
 
-    fn create(snapshot_id: u128, config: &Self::Config) -> Self;
+    fn create(snapshot_id: u128, config: &Self::Config, horizon: &Self::Time) -> Self;
 
     fn insert(&mut self, input: I) -> EventInsert<Self::Rejection>;
+
+    fn dirty_time(&self) -> &Self::Time;
+
+    fn prune_before(&mut self, horizon: &Self::Time);
 }
 
 /// Read-only event-history access required by worker queries.
@@ -107,10 +142,13 @@ pub trait QueryEvents<I> {
 pub trait Checkpoints<S>: Sized {
     type Config;
     type Context;
+    type Time: AdvanceTime;
 
     fn create(snapshot_id: u128, config: &Self::Config) -> Self;
 
     fn update(&mut self, events: &mut S, context: &mut Self::Context);
+
+    fn advance_before(&mut self, events: &S, context: &mut Self::Context, horizon: &Self::Time);
 }
 
 /// Read-only checkpoint reconstruction required by worker queries.
@@ -156,18 +194,20 @@ impl<I> EventQueryResponse<I> for crossbeam_channel::Sender<Vec<I>> {
     }
 }
 
-pub enum WorkInputKind<A, SQ, EQ> {
+pub enum WorkInputKind<A, SQ, EQ, AD> {
     Apply(A),
     SnapshotQuery(SQ),
     EventQuery(EQ),
+    Advance(AD),
 }
 
 pub trait WorkInput {
     type Apply;
     type SnapshotQuery;
     type EventQuery;
+    type Advance;
 
-    fn into_kind(self) -> WorkInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery>;
+    fn into_kind(self) -> WorkInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::Advance>;
 }
 
 pub(crate) type Request<C, R> = Rc<RefCell<PendingRequest<C, R>>>;
