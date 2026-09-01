@@ -106,6 +106,23 @@ impl Schedule {
         self.oldest_is_due(now, maximum_dirty_age).then(|| self.pop_oldest()).flatten()
     }
 
+    pub(crate) fn is_dirty(&self, snapshot_id: u128) -> bool {
+        self.states.get(&snapshot_id).is_some_and(|state| state.actual_count != 0)
+    }
+
+    pub(crate) fn take(&mut self, snapshot_id: u128) -> bool {
+        let Some(state) = self.states.get_mut(&snapshot_id) else {
+            return false;
+        };
+        if state.actual_count == 0 {
+            return false;
+        }
+
+        state.actual_count = 0;
+        self.active_count -= 1;
+        true
+    }
+
     pub(crate) fn pop_largest(&mut self, _now: Instant) -> Option<u128> {
         loop {
             let (snapshot_id, observed) = self.by_count.pop()?;
@@ -232,6 +249,18 @@ mod tests {
         assert_eq!(schedule.pop_largest(start), Some(7));
 
         assert_eq!(schedule.pop_overdue(start + Duration::from_secs(1), Duration::from_micros(100)), None);
+    }
+
+    #[test]
+    fn taking_one_dirty_snapshot_deactivates_only_that_snapshot() {
+        let now = Instant::now();
+        let mut schedule = Schedule::new(usize::MAX, 2);
+        schedule.mark_dirty(7, now);
+        schedule.mark_dirty(9, now);
+
+        assert!(schedule.take(7));
+        assert!(!schedule.take(7));
+        assert_eq!(schedule.pop_largest(now), Some(9));
     }
 
     #[test]

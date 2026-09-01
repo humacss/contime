@@ -8,8 +8,8 @@ use crate::events::insert_batch;
 use crate::query::{query_events, query_snapshots};
 use crate::schedule::Schedule;
 use crate::types::{
-    ApplyInput, Checkpoints, Completion, EventQueryInput, EventQueryResponse, Events, QueryCheckpoints, QueryEvents, RouteInput,
-    SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, WorkInput, WorkInputKind, WorkerConfig,
+    AdvanceInput, ApplyInput, Checkpoints, Completion, EventQueryInput, EventQueryResponse, Events, QueryCheckpoints, QueryEvents,
+    RouteInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, WorkInput, WorkInputKind, WorkerConfig,
 };
 
 /// Receives event batches and schedules their checkpoint updates.
@@ -25,17 +25,18 @@ pub fn work<B, S, K>(
 ) where
     B: ApplyInput,
     S: Events<<B::Route as RouteInput>::Input>,
-    K: Checkpoints<S>,
+    K: Checkpoints<S, Time = S::Time>,
     B::Completion: Completion<S::Rejection>,
 {
     let mut snapshots = AHashMap::<u128, SnapshotSlot<S, K, B::Completion, S::Rejection>>::new();
     let mut schedule = Schedule::new(config.deadline_compaction_minimum, config.deadline_compaction_multiplier);
+    let horizon = S::Time::default();
 
     loop {
         if schedule.is_empty() {
             match input.recv() {
                 Ok(batch) => {
-                    insert_batch(batch, &mut snapshots, &mut schedule, &events_config, Instant::now());
+                    insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
                     update_budget::<S, K, B::Completion, S::Rejection>(
                         &mut snapshots,
                         &mut schedule,
@@ -55,7 +56,7 @@ pub fn work<B, S, K>(
 
         match input.recv_timeout(timeout) {
             Ok(batch) => {
-                insert_batch(batch, &mut snapshots, &mut schedule, &events_config, Instant::now());
+                insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
                 update_budget::<S, K, B::Completion, S::Rejection>(
                     &mut snapshots,
                     &mut schedule,
@@ -92,26 +93,36 @@ pub fn work_messages<M, S, K>(
     input: Receiver<M>,
     config: WorkerConfig,
     events_config: S::Config,
+    history_retention: <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
     checkpoints_config: K::Config,
     mut checkpoints_context: <K as Checkpoints<S>>::Context,
 ) where
     M: WorkInput,
     M::Apply: ApplyInput,
-    S: Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input> + QueryEvents<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>,
-    K: Checkpoints<S> + QueryCheckpoints<S, Context = <K as Checkpoints<S>>::Context>,
+    S: Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>
+        + QueryEvents<
+            <<M::Apply as ApplyInput>::Route as RouteInput>::Input,
+            Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
+        >,
+    K: Checkpoints<S, Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>
+        + QueryCheckpoints<S, Context = <K as Checkpoints<S>>::Context>,
     <M::Apply as ApplyInput>::Completion: Completion<S::Rejection>,
     M::SnapshotQuery: SnapshotQueryInput<Time = <K as QueryCheckpoints<S>>::Time>,
     <M::SnapshotQuery as SnapshotQueryInput>::Response: SnapshotQueryResponse<<K as QueryCheckpoints<S>>::Snapshot>,
     M::EventQuery: EventQueryInput<Time = <S as QueryEvents<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
     <M::EventQuery as EventQueryInput>::Response: EventQueryResponse<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>,
+    M::Advance: AdvanceInput<Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
     <<M::Apply as ApplyInput>::Route as RouteInput>::Input: Clone,
 {
     type ApplyRoute<M> = <<M as WorkInput>::Apply as ApplyInput>::Route;
     type ApplyCompletion<M> = <<M as WorkInput>::Apply as ApplyInput>::Completion;
     type ApplyEvent<M> = <ApplyRoute<M> as RouteInput>::Input;
+    type EventTime<M, S> = <S as Events<ApplyEvent<M>>>::Time;
 
     let mut snapshots = AHashMap::<u128, SnapshotSlot<S, K, ApplyCompletion<M>, S::Rejection>>::new();
     let mut schedule = Schedule::new(config.deadline_compaction_minimum, config.deadline_compaction_multiplier);
+    let mut current_time = EventTime::<M, S>::default();
+    let mut horizon = EventTime::<M, S>::default();
 
     loop {
         let received = if schedule.is_empty() {
@@ -124,7 +135,7 @@ pub fn work_messages<M, S, K>(
         match received {
             Ok(message) => match message.into_kind() {
                 WorkInputKind::Apply(batch) => {
-                    insert_batch(batch, &mut snapshots, &mut schedule, &events_config, Instant::now());
+                    insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
                     update_budget::<S, K, ApplyCompletion<M>, S::Rejection>(
                         &mut snapshots,
                         &mut schedule,
@@ -136,6 +147,20 @@ pub fn work_messages<M, S, K>(
                 }
                 WorkInputKind::SnapshotQuery(query) => query_snapshots(query, &snapshots, &checkpoints_config, &mut checkpoints_context),
                 WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _, _, _, _>(query, &snapshots),
+                WorkInputKind::Advance(advance) => {
+                    let (target_time, completion) = advance.into_parts();
+                    crate::advance::advance_worker::<ApplyEvent<M>, _, _, _, _>(
+                        &mut snapshots,
+                        &mut schedule,
+                        &checkpoints_config,
+                        &mut checkpoints_context,
+                        &mut current_time,
+                        &mut horizon,
+                        &history_retention,
+                        target_time,
+                        completion,
+                    );
+                }
             },
             Err(RecvTimeoutError::Timeout) => update_overdue::<S, K, ApplyCompletion<M>, S::Rejection>(
                 &mut snapshots,
@@ -228,8 +253,9 @@ mod tests {
     impl Events<TestInput> for TestEvents {
         type Config = ();
         type Rejection = ();
+        type Time = u64;
 
-        fn create(_id: u128, _config: &()) -> Self {
+        fn create(_id: u128, _config: &(), _horizon: &u64) -> Self {
             Self::default()
         }
 
@@ -237,6 +263,12 @@ mod tests {
             self.0.push(input.0);
             EventInsert { changed: true, rejections: Vec::new() }
         }
+
+        fn dirty_time(&self) -> &u64 {
+            &0
+        }
+
+        fn prune_before(&mut self, _horizon: &u64) {}
     }
 
     struct TestCheckpoints;
@@ -244,6 +276,7 @@ mod tests {
     impl Checkpoints<TestEvents> for TestCheckpoints {
         type Config = ();
         type Context = Arc<Mutex<Vec<Vec<u128>>>>;
+        type Time = u64;
 
         fn create(_id: u128, _config: &()) -> Self {
             Self
@@ -252,6 +285,8 @@ mod tests {
         fn update(&mut self, events: &mut TestEvents, context: &mut Self::Context) {
             context.lock().unwrap().push(events.0.clone());
         }
+
+        fn advance_before(&mut self, _events: &TestEvents, _context: &mut Self::Context, _horizon: &u64) {}
     }
 
     type TestCompletion = crossbeam_channel::Sender<Vec<()>>;

@@ -16,8 +16,9 @@ struct BenchEvents(usize);
 impl Events<BenchInput> for BenchEvents {
     type Config = ();
     type Rejection = ();
+    type Time = u64;
 
-    fn create(_snapshot_id: u128, _config: &()) -> Self {
+    fn create(_snapshot_id: u128, _config: &(), _horizon: &u64) -> Self {
         Self::default()
     }
 
@@ -25,6 +26,12 @@ impl Events<BenchInput> for BenchEvents {
         self.0 = black_box(self.0.wrapping_add(input.0 as usize));
         EventInsert { changed: true, rejections: Vec::new() }
     }
+
+    fn dirty_time(&self) -> &u64 {
+        &0
+    }
+
+    fn prune_before(&mut self, _horizon: &u64) {}
 }
 
 struct BenchCheckpoints;
@@ -32,6 +39,7 @@ struct BenchCheckpoints;
 impl Checkpoints<BenchEvents> for BenchCheckpoints {
     type Config = ();
     type Context = Arc<AtomicUsize>;
+    type Time = u64;
 
     fn create(_snapshot_id: u128, _config: &()) -> Self {
         Self
@@ -40,6 +48,8 @@ impl Checkpoints<BenchEvents> for BenchCheckpoints {
     fn update(&mut self, _events: &mut BenchEvents, context: &mut Self::Context) {
         context.fetch_add(1, Ordering::Relaxed);
     }
+
+    fn advance_before(&mut self, _events: &BenchEvents, _context: &mut Self::Context, _horizon: &u64) {}
 }
 
 type BenchCompletion = crossbeam_channel::Sender<Vec<()>>;
@@ -105,8 +115,9 @@ where
 {
     type Config = ();
     type Rejection = ();
+    type Time = u64;
 
-    fn create(_snapshot_id: u128, _config: &()) -> Self {
+    fn create(_snapshot_id: u128, _config: &(), _horizon: &u64) -> Self {
         Self::default()
     }
 
@@ -114,6 +125,12 @@ where
         self.0 = black_box(self.0.wrapping_add(input.input_id() as usize));
         EventInsert { changed: true, rejections: Vec::new() }
     }
+
+    fn dirty_time(&self) -> &u64 {
+        &0
+    }
+
+    fn prune_before(&mut self, _horizon: &u64) {}
 }
 
 struct OwnershipCheckpoints;
@@ -121,6 +138,7 @@ struct OwnershipCheckpoints;
 impl Checkpoints<OwnershipEvents> for OwnershipCheckpoints {
     type Config = ();
     type Context = Arc<AtomicUsize>;
+    type Time = u64;
 
     fn create(_snapshot_id: u128, _config: &()) -> Self {
         Self
@@ -129,6 +147,8 @@ impl Checkpoints<OwnershipEvents> for OwnershipCheckpoints {
     fn update(&mut self, events: &mut OwnershipEvents, context: &mut Self::Context) {
         context.fetch_add(events.0, Ordering::Relaxed);
     }
+
+    fn advance_before(&mut self, _events: &OwnershipEvents, _context: &mut Self::Context, _horizon: &u64) {}
 }
 
 const _: () = assert!(size_of::<OwnershipEvent<48>>() == 64);

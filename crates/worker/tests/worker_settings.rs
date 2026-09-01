@@ -12,8 +12,9 @@ struct TestEvents(Vec<u128>);
 impl Events<TestInput> for TestEvents {
     type Config = ();
     type Rejection = ();
+    type Time = u64;
 
-    fn create(_snapshot_id: u128, _config: &()) -> Self {
+    fn create(_snapshot_id: u128, _config: &(), _horizon: &u64) -> Self {
         Self::default()
     }
 
@@ -21,6 +22,12 @@ impl Events<TestInput> for TestEvents {
         self.0.push(input.0);
         EventInsert { changed: true, rejections: Vec::new() }
     }
+
+    fn dirty_time(&self) -> &u64 {
+        &0
+    }
+
+    fn prune_before(&mut self, _horizon: &u64) {}
 }
 
 struct TestCheckpoints;
@@ -28,6 +35,7 @@ struct TestCheckpoints;
 impl Checkpoints<TestEvents> for TestCheckpoints {
     type Config = ();
     type Context = Arc<Mutex<Vec<Vec<u128>>>>;
+    type Time = u64;
 
     fn create(_snapshot_id: u128, _config: &()) -> Self {
         Self
@@ -36,6 +44,8 @@ impl Checkpoints<TestEvents> for TestCheckpoints {
     fn update(&mut self, events: &mut TestEvents, context: &mut Self::Context) {
         context.lock().unwrap().push(events.0.clone());
     }
+
+    fn advance_before(&mut self, _events: &TestEvents, _context: &mut Self::Context, _horizon: &u64) {}
 }
 
 type TestCompletion = crossbeam_channel::Sender<Vec<()>>;

@@ -11,6 +11,7 @@ pub(crate) fn insert_batch<B, S, K>(
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, B::Completion, S::Rejection>>,
     schedule: &mut Schedule,
     events_config: &S::Config,
+    horizon: &S::Time,
     now: Instant,
 ) where
     B: ApplyInput,
@@ -20,7 +21,7 @@ pub(crate) fn insert_batch<B, S, K>(
     let (inputs, completion) = batch.into_parts();
     let request = new_request(completion);
     for routed in inputs {
-        insert_event(routed, &request, snapshots, schedule, events_config, now);
+        insert_event(routed, &request, snapshots, schedule, events_config, horizon, now);
     }
     finish_if_ready(&request);
 }
@@ -31,6 +32,7 @@ fn insert_event<R, S, K, C>(
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, S::Rejection>>,
     schedule: &mut Schedule,
     events_config: &S::Config,
+    horizon: &S::Time,
     now: Instant,
 ) where
     R: RouteInput,
@@ -41,7 +43,7 @@ fn insert_event<R, S, K, C>(
     let slot = match snapshots.entry(snapshot_id) {
         Entry::Occupied(entry) => entry.into_mut(),
         Entry::Vacant(entry) => {
-            entry.insert(SnapshotSlot { events: S::create(snapshot_id, events_config), checkpoints: None, waiters: Vec::new() })
+            entry.insert(SnapshotSlot { events: S::create(snapshot_id, events_config, horizon), checkpoints: None, waiters: Vec::new() })
         }
     };
 
@@ -57,6 +59,7 @@ fn insert_event<R, S, K, C>(
 #[cfg(test)]
 mod tests {
     use std::hint::black_box;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use ahash::AHashMap;
@@ -77,8 +80,9 @@ mod tests {
     impl Events<TestInput> for TestEvents {
         type Config = ();
         type Rejection = ();
+        type Time = u64;
 
-        fn create(_id: u128, _config: &()) -> Self {
+        fn create(_id: u128, _config: &(), _horizon: &u64) -> Self {
             Self::default()
         }
 
@@ -86,6 +90,12 @@ mod tests {
             self.0.push(input.0);
             EventInsert { changed: true, rejections: Vec::new() }
         }
+
+        fn dirty_time(&self) -> &u64 {
+            &0
+        }
+
+        fn prune_before(&mut self, _horizon: &u64) {}
     }
 
     #[derive(Default)]
@@ -94,8 +104,9 @@ mod tests {
     impl Events<TestInput> for DirectEvents {
         type Config = ();
         type Rejection = ();
+        type Time = u64;
 
-        fn create(_id: u128, _config: &()) -> Self {
+        fn create(_id: u128, _config: &(), _horizon: &u64) -> Self {
             Self::default()
         }
 
@@ -103,6 +114,12 @@ mod tests {
             self.0.push(input.0);
             EventInsert { changed: true, rejections: Vec::new() }
         }
+
+        fn dirty_time(&self) -> &u64 {
+            &0
+        }
+
+        fn prune_before(&mut self, _horizon: &u64) {}
     }
 
     struct AdapterRoute {
@@ -123,6 +140,33 @@ mod tests {
         completion: C,
     }
 
+    struct HorizonEvents {
+        horizon: u64,
+    }
+
+    impl Events<TestInput> for HorizonEvents {
+        type Config = Arc<Mutex<Vec<u64>>>;
+        type Rejection = ();
+        type Time = u64;
+
+        fn create(_snapshot_id: u128, config: &Self::Config, horizon: &u64) -> Self {
+            config.lock().unwrap().push(*horizon);
+            Self { horizon: *horizon }
+        }
+
+        fn insert(&mut self, _input: TestInput) -> EventInsert<()> {
+            EventInsert { changed: true, rejections: Vec::new() }
+        }
+
+        fn dirty_time(&self) -> &u64 {
+            &self.horizon
+        }
+
+        fn prune_before(&mut self, horizon: &u64) {
+            self.horizon = *horizon;
+        }
+    }
+
     impl<C> ApplyInput for AdapterBatch<C> {
         type Route = AdapterRoute;
         type Completion = C;
@@ -139,7 +183,7 @@ mod tests {
         let mut snapshots = AHashMap::new();
         let mut schedule = Schedule::new(usize::MAX, 2);
 
-        insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut schedule, &(), Instant::now());
+        insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
 
         assert_eq!(snapshots.get(&7).unwrap().events.0, vec![9]);
     }
@@ -151,9 +195,23 @@ mod tests {
         let mut snapshots = AHashMap::new();
         let mut schedule = Schedule::new(usize::MAX, 2);
 
-        insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut schedule, &(), Instant::now());
+        insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
 
         assert_eq!(snapshots.get(&7).unwrap().events.0, vec![9]);
+    }
+
+    #[test]
+    fn a_new_history_is_initialized_with_the_active_horizon() {
+        let (completion, _responses) = unbounded();
+        let batch = ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestInput(9) }], completion };
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let mut snapshots = AHashMap::new();
+        let mut schedule = Schedule::new(usize::MAX, 2);
+
+        insert_batch::<_, HorizonEvents, ()>(batch, &mut snapshots, &mut schedule, &observed, &55, Instant::now());
+
+        assert_eq!(*observed.lock().unwrap(), vec![55]);
+        assert_eq!(snapshots.get(&7).unwrap().events.horizon, 55);
     }
 
     fn batch(count: u128) -> (ApplyBatch<TestInput, crossbeam_channel::Sender<Vec<()>>>, crossbeam_channel::Receiver<Vec<()>>) {
@@ -168,7 +226,7 @@ mod tests {
         let mut snapshots = AHashMap::new();
         let mut schedule = Schedule::new(usize::MAX, 2);
 
-        insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut schedule, &(), Instant::now());
+        insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
 
         assert_eq!(snapshots.get(&7).unwrap().events.0, vec![0, 1]);
         assert!(!schedule.is_empty());
@@ -196,7 +254,7 @@ mod tests {
                 for _ in 0..iterations {
                     let batch = batch(1_000).0;
                     let started = Instant::now();
-                    insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut schedule, &(), Instant::now());
+                    insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
                     measured += started.elapsed();
 
                     let slot = snapshots.get_mut(&7).unwrap();

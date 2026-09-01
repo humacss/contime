@@ -44,6 +44,7 @@ mod tests {
     impl Checkpoints<TestEvents> for AcknowledgingCheckpoints {
         type Config = ();
         type Context = ();
+        type Time = u64;
 
         fn create(_snapshot_id: u128, _config: &()) -> Self {
             Self
@@ -52,6 +53,8 @@ mod tests {
         fn update(&mut self, events: &mut TestEvents, _context: &mut ()) {
             events.0.clear();
         }
+
+        fn advance_before(&mut self, _events: &TestEvents, _context: &mut (), _horizon: &u64) {}
     }
 
     #[derive(Default)]
@@ -62,6 +65,7 @@ mod tests {
     impl Checkpoints<TestEvents> for TestCheckpoints {
         type Config = ();
         type Context = Vec<usize>;
+        type Time = u64;
 
         fn create(_snapshot_id: u128, _config: &()) -> Self {
             Self::default()
@@ -71,6 +75,8 @@ mod tests {
             self.event_count = events.0.len();
             context.push(self.event_count);
         }
+
+        fn advance_before(&mut self, _events: &TestEvents, _context: &mut Vec<usize>, _horizon: &u64) {}
     }
 
     fn snapshot() -> (
