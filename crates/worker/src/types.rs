@@ -82,6 +82,14 @@ pub struct EventInsert<R> {
     pub rejections: Vec<R>,
 }
 
+/// One snapshot whose completed replay may affect every time at or after
+/// `affected_from`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplayUpdate<T> {
+    pub snapshot_id: u128,
+    pub affected_from: T,
+}
+
 /// Timestamp arithmetic required for worker-local horizon advancement.
 pub trait AdvanceTime: Clone + Default + Ord {
     fn saturating_sub(&self, retention: &Self) -> Self;
@@ -146,7 +154,7 @@ pub trait Checkpoints<S>: Sized {
 
     fn create(snapshot_id: u128, config: &Self::Config) -> Self;
 
-    fn update(&mut self, events: &mut S, context: &mut Self::Context);
+    fn update(&mut self, events: &mut S, context: &mut Self::Context) -> Self::Time;
 
     fn advance_before(&mut self, events: &S, context: &mut Self::Context, horizon: &Self::Time);
 }
@@ -174,6 +182,25 @@ pub trait EventQueryInput {
     fn into_parts(self) -> (u128, Self::Time, Self::Time, Self::Response);
 }
 
+/// A worker-owned timestamped snapshot replay listener.
+pub trait SnapshotListener<T>: Clone {
+    /// Reports that this listener collection was installed.
+    /// Returns `false` when the receiver no longer exists.
+    fn registered(&self, time: T, snapshot_ids: Vec<u128>) -> bool;
+
+    /// Reports the collection members completed in one worker replay batch.
+    /// Returns `false` when the receiver no longer exists.
+    fn replayed(&self, time: T, snapshot_ids: Vec<u128>) -> bool;
+}
+
+/// Caller-selected snapshot-listener registration consumed by a worker.
+pub trait SnapshotListenInput {
+    type Time: Clone + Ord;
+    type Listener: SnapshotListener<Self::Time>;
+
+    fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Listener);
+}
+
 pub trait SnapshotQueryResponse<S> {
     fn send(self, snapshots: Vec<Box<S>>);
 }
@@ -194,10 +221,11 @@ impl<I> EventQueryResponse<I> for crossbeam_channel::Sender<Vec<I>> {
     }
 }
 
-pub enum WorkInputKind<A, SQ, EQ, AD> {
+pub enum WorkInputKind<A, SQ, EQ, SL, AD> {
     Apply(A),
     SnapshotQuery(SQ),
     EventQuery(EQ),
+    SnapshotListen(SL),
     Advance(AD),
 }
 
@@ -205,17 +233,37 @@ pub trait WorkInput {
     type Apply;
     type SnapshotQuery;
     type EventQuery;
+    type SnapshotListen;
     type Advance;
 
-    fn into_kind(self) -> WorkInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::Advance>;
+    fn into_kind(self) -> WorkInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::SnapshotListen, Self::Advance>;
 }
 
 pub(crate) type Request<C, R> = Rc<RefCell<PendingRequest<C, R>>>;
 
+/// One generational index into worker-local notification collection storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NotificationId {
+    pub(crate) index: usize,
+    pub(crate) generation: u64,
+}
+
 pub(crate) struct SnapshotSlot<S, K, C, R> {
-    pub(crate) events: S,
+    pub(crate) events: Option<S>,
     pub(crate) checkpoints: Option<K>,
     pub(crate) waiters: Vec<Request<C, R>>,
+    pub(crate) notification_ids: Vec<NotificationId>,
+}
+
+impl<S, K, C, R> SnapshotSlot<S, K, C, R> {
+    pub(crate) const fn metadata_only() -> Self {
+        Self { events: None, checkpoints: None, waiters: Vec::new(), notification_ids: Vec::new() }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_events(events: S) -> Self {
+        Self { events: Some(events), checkpoints: None, waiters: Vec::new(), notification_ids: Vec::new() }
+    }
 }
 
 pub(crate) struct PendingRequest<C, R> {
@@ -267,5 +315,20 @@ where
         } else {
             completion.reject(rejections);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SnapshotSlot;
+
+    #[test]
+    fn metadata_only_snapshot_slots_do_not_initialize_history_or_checkpoints() {
+        let slot = SnapshotSlot::<Vec<u8>, Vec<u8>, (), ()>::metadata_only();
+
+        assert!(slot.events.is_none());
+        assert!(slot.checkpoints.is_none());
+        assert!(slot.waiters.is_empty());
+        assert!(slot.notification_ids.is_empty());
     }
 }

@@ -39,6 +39,9 @@ for adapting independently defined message types and choosing where
 - Serve snapshot and event-history queries from the same worker queue.
 - Reconstruct query-local snapshots without forcing or reprioritizing replay.
 - Clone event handles before returning them across a thread boundary.
+- Register timestamped consumer-owned listener collections independently from
+  snapshot history and emit one batched notification per collection per worker
+  replay pass.
 
 Input and checkpoint ownership, memory accounting, and admission policy remain
 orchestrator concerns. The worker only coordinates the implementations supplied
@@ -69,6 +72,24 @@ does not return high-water capacity to the allocator. Capacity shrinking is a
 separate policy that remains deferred.
 
 ## Benchmark snapshot
+
+Snapshot-listener unit results recorded on 2026-09-01:
+
+| Worker-local operation | Total | Amortized |
+| --- | ---: | ---: |
+| Register one collection with 1,000 IDs | 58.069 us | 58.069 ns/ID |
+| Replay check, no collections | 2.1286 ns | 2.1286 ns/replay |
+| Replay check, one nonmatching collection | 6.2251 ns | 6.2251 ns/replay |
+| Accumulate + flush 1 matching snapshot | 54.117 ns | 54.117 ns/ID |
+| Accumulate + flush 100 matching snapshots | 994.68 ns | 9.947 ns/ID |
+| Accumulate + flush 1,000 matching snapshots | 8.7402 us | 8.740 ns/ID |
+
+Registration deduplicates one collection's IDs, sends one batched `Registered`
+message, and attaches a compact generational collection ID to each worker-local
+snapshot slot. Replay notification inspects only memberships on snapshots that
+actually replayed, filters them by watched timestamp, and sends one batched
+`Replayed` message per touched collection. The empty case shows the fast path
+when no collection has been installed.
 
 Horizon orchestration results for 1,000 worker-local histories recorded on
 2026-09-01:
@@ -164,6 +185,8 @@ us respectively; 1,024 is the best current starting point.
 - `schedule.rs`: dirty-time and pending-count scheduling policy.
 - `events.rs`: event-store creation, insertion, and dirty scheduling.
 - `checkpoints.rs`: checkpoint materialization and request completion.
+- `listen.rs`: listener registration, replay notification, and disconnected
+  sender cleanup.
 - `work.rs`: the deadline-driven blocking receive loop.
 - `tests/worker_settings.rs`: public replay-budget and deadline behavior.
 - `benches/worker_settings.rs`: end-to-end worker configuration benchmarks.

@@ -41,8 +41,9 @@ impl Checkpoints<TestEvents> for TestCheckpoints {
         Self
     }
 
-    fn update(&mut self, events: &mut TestEvents, context: &mut Self::Context) {
+    fn update(&mut self, events: &mut TestEvents, context: &mut Self::Context) -> Self::Time {
         context.lock().unwrap().push(events.0.clone());
+        0
     }
 
     fn advance_before(&mut self, _events: &TestEvents, _context: &mut Self::Context, _horizon: &u64) {}

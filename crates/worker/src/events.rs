@@ -42,12 +42,11 @@ fn insert_event<R, S, K, C>(
     let (snapshot_id, input) = routed.into_parts();
     let slot = match snapshots.entry(snapshot_id) {
         Entry::Occupied(entry) => entry.into_mut(),
-        Entry::Vacant(entry) => {
-            entry.insert(SnapshotSlot { events: S::create(snapshot_id, events_config, horizon), checkpoints: None, waiters: Vec::new() })
-        }
+        Entry::Vacant(entry) => entry.insert(SnapshotSlot::metadata_only()),
     };
+    let events = slot.events.get_or_insert_with(|| S::create(snapshot_id, events_config, horizon));
 
-    let result = slot.events.insert(input);
+    let result = events.insert(input);
     request.borrow_mut().rejections.extend(result.rejections);
 
     if result.changed {
@@ -185,7 +184,7 @@ mod tests {
 
         insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
 
-        assert_eq!(snapshots.get(&7).unwrap().events.0, vec![9]);
+        assert_eq!(snapshots.get(&7).unwrap().events.as_ref().unwrap().0, vec![9]);
     }
 
     #[test]
@@ -197,7 +196,7 @@ mod tests {
 
         insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
 
-        assert_eq!(snapshots.get(&7).unwrap().events.0, vec![9]);
+        assert_eq!(snapshots.get(&7).unwrap().events.as_ref().unwrap().0, vec![9]);
     }
 
     #[test]
@@ -211,7 +210,7 @@ mod tests {
         insert_batch::<_, HorizonEvents, ()>(batch, &mut snapshots, &mut schedule, &observed, &55, Instant::now());
 
         assert_eq!(*observed.lock().unwrap(), vec![55]);
-        assert_eq!(snapshots.get(&7).unwrap().events.horizon, 55);
+        assert_eq!(snapshots.get(&7).unwrap().events.as_ref().unwrap().horizon, 55);
     }
 
     fn batch(count: u128) -> (ApplyBatch<TestInput, crossbeam_channel::Sender<Vec<()>>>, crossbeam_channel::Receiver<Vec<()>>) {
@@ -228,7 +227,7 @@ mod tests {
 
         insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
 
-        assert_eq!(snapshots.get(&7).unwrap().events.0, vec![0, 1]);
+        assert_eq!(snapshots.get(&7).unwrap().events.as_ref().unwrap().0, vec![0, 1]);
         assert!(!schedule.is_empty());
         assert_eq!(responses.try_recv(), Err(TryRecvError::Empty));
     }
@@ -239,14 +238,7 @@ mod tests {
         let mut criterion = Criterion::default();
         criterion.bench_function("worker/events/1000_inputs/one_snapshot", |bencher| {
             let mut snapshots = AHashMap::new();
-            snapshots.insert(
-                7,
-                SnapshotSlot::<TestEvents, (), _, ()> {
-                    events: TestEvents(Vec::with_capacity(1_000)),
-                    checkpoints: None,
-                    waiters: Vec::new(),
-                },
-            );
+            snapshots.insert(7, SnapshotSlot::<TestEvents, (), _, ()>::with_events(TestEvents(Vec::with_capacity(1_000))));
             let mut schedule = Schedule::new(usize::MAX, 2);
 
             bencher.iter_custom(|iterations| {
@@ -258,7 +250,7 @@ mod tests {
                     measured += started.elapsed();
 
                     let slot = snapshots.get_mut(&7).unwrap();
-                    slot.events.0.clear();
+                    slot.events.as_mut().unwrap().0.clear();
                     slot.waiters.clear();
                     while schedule.pop_largest(Instant::now()).is_some() {}
                     schedule.is_empty();
@@ -280,11 +272,7 @@ mod tests {
             let mut snapshots = AHashMap::new();
             snapshots.insert(
                 7,
-                SnapshotSlot::<TestEvents, (), crossbeam_channel::Sender<Vec<()>>, ()> {
-                    events: TestEvents(Vec::with_capacity(1_000)),
-                    checkpoints: None,
-                    waiters: Vec::new(),
-                },
+                SnapshotSlot::<TestEvents, (), crossbeam_channel::Sender<Vec<()>>, ()>::with_events(TestEvents(Vec::with_capacity(1_000))),
             );
             bencher.iter(|| {
                 for _ in 0..1_000 {
@@ -313,7 +301,7 @@ mod tests {
         criterion.bench_function("worker/events/components/1000_existing_waiter_checks", |bencher| {
             let (completion, _responses) = unbounded::<Vec<()>>();
             let request = crate::types::new_request(completion);
-            let mut slot = SnapshotSlot::<TestEvents, (), _, ()> { events: TestEvents(Vec::new()), checkpoints: None, waiters: Vec::new() };
+            let mut slot = SnapshotSlot::<TestEvents, (), _, ()>::with_events(TestEvents(Vec::new()));
             crate::types::register_waiter(&mut slot, &request);
             bencher.iter(|| {
                 for _ in 0..1_000 {

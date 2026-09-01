@@ -72,8 +72,8 @@ mod tests {
 
     use crate::{
         route_event_query, route_messages, route_snapshot_query, AdvanceInput, AdvanceWorkerOutput, EventQueryInput,
-        EventQueryWorkerOutput, InputBatch, RoutableInput, RouteInput, RouteInputKind, RouteOutput, SnapshotQueryInput,
-        SnapshotQueryWorkerOutput, WorkerOutput,
+        EventQueryWorkerOutput, InputBatch, RoutableInput, RouteInput, RouteInputKind, RouteOutput, SnapshotListenInput,
+        SnapshotListenWorkerOutput, SnapshotQueryInput, SnapshotQueryWorkerOutput, WorkerOutput,
     };
 
     #[derive(Clone)]
@@ -114,6 +114,7 @@ mod tests {
         Apply { count: usize },
         Snapshots { time: u64, snapshot_ids: Vec<u128>, response: Response },
         Events { snapshot_id: u128, from: u64, to: u64, response: Response },
+        Listen { time: u64, snapshot_ids: Vec<u128>, listener: Response },
         Advance { time: u64, completion: Response },
     }
 
@@ -146,7 +147,23 @@ mod tests {
         Apply(InputBatch<ApplyEvent, Response>),
         Snapshots(SnapshotQuery),
         Events(EventQuery),
+        Listen(Listen),
         Advance(Advance),
+    }
+
+    struct Listen {
+        time: u64,
+        snapshot_ids: Vec<u128>,
+        listener: Response,
+    }
+
+    impl SnapshotListenInput for Listen {
+        type Time = u64;
+        type Listener = Response;
+
+        fn into_parts(self) -> (Self::Time, Vec<u128>, Self::Listener) {
+            (self.time, self.snapshot_ids, self.listener)
+        }
     }
 
     struct Advance {
@@ -167,13 +184,15 @@ mod tests {
         type Apply = InputBatch<ApplyEvent, Response>;
         type SnapshotQuery = SnapshotQuery;
         type EventQuery = EventQuery;
+        type SnapshotListen = Listen;
         type Advance = Advance;
 
-        fn into_kind(self) -> RouteInputKind<InputBatch<ApplyEvent, Response>, SnapshotQuery, EventQuery, Advance> {
+        fn into_kind(self) -> RouteInputKind<InputBatch<ApplyEvent, Response>, SnapshotQuery, EventQuery, Listen, Advance> {
             match self {
                 Self::Apply(batch) => RouteInputKind::Apply(batch),
                 Self::Snapshots(query) => RouteInputKind::SnapshotQuery(query),
                 Self::Events(query) => RouteInputKind::EventQuery(query),
+                Self::Listen(listen) => RouteInputKind::SnapshotListen(listen),
                 Self::Advance(advance) => RouteInputKind::Advance(advance),
             }
         }
@@ -188,6 +207,12 @@ mod tests {
     impl EventQueryWorkerOutput<u64, Response> for WorkerMessage {
         fn event_query(snapshot_id: u128, from: u64, to: u64, response: Response) -> Self {
             Self::Events { snapshot_id, from, to, response }
+        }
+    }
+
+    impl SnapshotListenWorkerOutput<u64, Response> for WorkerMessage {
+        fn listen(time: u64, snapshot_ids: Vec<u128>, listener: Response) -> Self {
+            Self::Listen { time, snapshot_ids, listener }
         }
     }
 
@@ -248,6 +273,8 @@ mod tests {
             .send(RouterMessage::Snapshots(SnapshotQuery { time: 42, snapshot_ids: vec![7], response: Response(response.clone()) }))
             .unwrap();
         input.send(RouterMessage::Events(EventQuery { snapshot_id: 7, from: 10, to: 20, response: Response(response) })).unwrap();
+        let (listen_response, _listen_results) = unbounded();
+        input.send(RouterMessage::Listen(Listen { time: 42, snapshot_ids: vec![7], listener: Response(listen_response) })).unwrap();
         let (advance_response, _advance_results) = unbounded();
         input.send(RouterMessage::Advance(Advance { time: 50, completion: Response(advance_response) })).unwrap();
         drop(input);
@@ -255,11 +282,15 @@ mod tests {
         route_messages(9, receiver, &[worker]).unwrap();
 
         let messages = output.try_iter().collect::<Vec<_>>();
-        assert_eq!(messages.len(), 4);
+        assert_eq!(messages.len(), 5);
         assert!(matches!(messages[0], WorkerMessage::Apply { count: 1 }));
         assert!(matches!(messages[1], WorkerMessage::Snapshots { .. }));
         assert!(matches!(messages[2], WorkerMessage::Events { .. }));
-        let WorkerMessage::Advance { time, completion } = &messages[3] else { panic!("wrong message") };
+        let WorkerMessage::Listen { time, snapshot_ids, listener } = &messages[3] else { panic!("wrong message") };
+        assert_eq!(*time, 42);
+        assert_eq!(snapshot_ids, &[7]);
+        let _ = &listener.0;
+        let WorkerMessage::Advance { time, completion } = &messages[4] else { panic!("wrong message") };
         assert_eq!(*time, 50);
         let _ = &completion.0;
     }

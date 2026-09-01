@@ -44,7 +44,10 @@ An empty history starts dirty at zero. Its first unique event sets the dirty
 timestamp to that event's time, and subsequent unique events may move the
 timestamp earlier. Duplicate IDs do not change it. `mark_replayed` moves the
 boundary to the latest retained timestamp, conservatively preserving the last
-same-timestamp bucket for the next replay.
+same-timestamp bucket for the next replay. The first unique event accepted
+after that acknowledgement starts a new dirty interval at its own timestamp;
+this lets downstream consumers distinguish later changes from the conservative
+clean-history boundary.
 
 ## Benchmark snapshot
 

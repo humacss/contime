@@ -55,10 +55,12 @@ where
         Self { state: TrackedBox::new(state, config.budget.clone()), wrapper: PhantomData }
     }
 
-    fn update(&mut self, events: &mut History<I>, context: &mut Self::Context) {
+    fn update(&mut self, events: &mut History<I>, context: &mut Self::Context) -> Self::Time {
+        let affected_from = contime_checkpoints::Events::dirty_time(events).clone();
         self.state.update(|state| {
             contime_checkpoints::replay(&mut state.checkpoints, events, context);
         });
+        affected_from
     }
 
     fn advance_before(&mut self, events: &History<I>, context: &mut Self::Context, horizon: &I::Time) {
@@ -176,8 +178,9 @@ mod tests {
             <CheckpointStorage<TestSnapshot, ()> as WorkerCheckpoints<History<TestInput>>>::create(7, &config(budget.clone()));
         let before_replay = budget.used();
 
-        checkpoints.update(&mut history, &mut ());
+        let affected_from = checkpoints.update(&mut history, &mut ());
 
+        assert_eq!(affected_from, 0);
         assert_eq!(checkpoints.state.checkpoints.current().unwrap().snapshot.value, 2);
         assert_eq!(contime_checkpoints::Events::dirty_time(&history), &1);
         assert!(budget.used() > before_replay);

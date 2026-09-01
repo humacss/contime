@@ -45,8 +45,9 @@ impl Checkpoints<BenchEvents> for BenchCheckpoints {
         Self
     }
 
-    fn update(&mut self, _events: &mut BenchEvents, context: &mut Self::Context) {
+    fn update(&mut self, _events: &mut BenchEvents, context: &mut Self::Context) -> Self::Time {
         context.fetch_add(1, Ordering::Relaxed);
+        0
     }
 
     fn advance_before(&mut self, _events: &BenchEvents, _context: &mut Self::Context, _horizon: &u64) {}
@@ -144,8 +145,9 @@ impl Checkpoints<OwnershipEvents> for OwnershipCheckpoints {
         Self
     }
 
-    fn update(&mut self, events: &mut OwnershipEvents, context: &mut Self::Context) {
+    fn update(&mut self, events: &mut OwnershipEvents, context: &mut Self::Context) -> Self::Time {
         context.fetch_add(events.0, Ordering::Relaxed);
+        0
     }
 
     fn advance_before(&mut self, _events: &OwnershipEvents, _context: &mut Self::Context, _horizon: &u64) {}

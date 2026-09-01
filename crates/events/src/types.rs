@@ -50,6 +50,7 @@ where
     pub(crate) late: BTreeMap<EventKey<E::Time>, E>,
     pub(crate) retained_ids: AHashSet<u128>,
     pub(crate) dirty_time: E::Time,
+    pub(crate) dirty: bool,
     pub(crate) horizon: E::Time,
 }
 

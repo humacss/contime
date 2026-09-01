@@ -5,11 +5,13 @@ use crossbeam_channel::{Receiver, RecvTimeoutError};
 
 use crate::checkpoints::update_snapshot;
 use crate::events::insert_batch;
+use crate::listen::NotificationCollections;
 use crate::query::{query_events, query_snapshots};
 use crate::schedule::Schedule;
 use crate::types::{
     AdvanceInput, ApplyInput, Checkpoints, Completion, EventQueryInput, EventQueryResponse, Events, QueryCheckpoints, QueryEvents,
-    RouteInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, WorkInput, WorkInputKind, WorkerConfig,
+    ReplayUpdate, RouteInput, SnapshotListenInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, WorkInput, WorkInputKind,
+    WorkerConfig,
 };
 
 /// Receives event batches and schedules their checkpoint updates.
@@ -37,13 +39,14 @@ pub fn work<B, S, K>(
             match input.recv() {
                 Ok(batch) => {
                     insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
-                    update_budget::<S, K, B::Completion, S::Rejection>(
+                    update_budget::<S, K, B::Completion, S::Rejection, _>(
                         &mut snapshots,
                         &mut schedule,
                         &checkpoints_config,
                         &mut checkpoints_context,
                         config.replays_per_receive,
                         config.maximum_dirty_age,
+                        &mut |_, _| {},
                     );
                 }
                 Err(_) => break,
@@ -57,30 +60,33 @@ pub fn work<B, S, K>(
         match input.recv_timeout(timeout) {
             Ok(batch) => {
                 insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
-                update_budget::<S, K, B::Completion, S::Rejection>(
+                update_budget::<S, K, B::Completion, S::Rejection, _>(
                     &mut snapshots,
                     &mut schedule,
                     &checkpoints_config,
                     &mut checkpoints_context,
                     config.replays_per_receive,
                     config.maximum_dirty_age,
+                    &mut |_, _| {},
                 );
             }
             Err(RecvTimeoutError::Timeout) => {
-                update_overdue::<S, K, B::Completion, S::Rejection>(
+                update_overdue::<S, K, B::Completion, S::Rejection, _>(
                     &mut snapshots,
                     &mut schedule,
                     &checkpoints_config,
                     &mut checkpoints_context,
                     config.maximum_dirty_age,
+                    &mut |_, _| {},
                 );
             }
             Err(RecvTimeoutError::Disconnected) => {
-                update_all::<S, K, B::Completion, S::Rejection>(
+                update_all::<S, K, B::Completion, S::Rejection, _>(
                     &mut snapshots,
                     &mut schedule,
                     &checkpoints_config,
                     &mut checkpoints_context,
+                    &mut |_, _| {},
                 );
                 break;
             }
@@ -111,6 +117,7 @@ pub fn work_messages<M, S, K>(
     <M::SnapshotQuery as SnapshotQueryInput>::Response: SnapshotQueryResponse<<K as QueryCheckpoints<S>>::Snapshot>,
     M::EventQuery: EventQueryInput<Time = <S as QueryEvents<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
     <M::EventQuery as EventQueryInput>::Response: EventQueryResponse<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>,
+    M::SnapshotListen: SnapshotListenInput<Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
     M::Advance: AdvanceInput<Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
     <<M::Apply as ApplyInput>::Route as RouteInput>::Input: Clone,
 {
@@ -120,6 +127,7 @@ pub fn work_messages<M, S, K>(
     type EventTime<M, S> = <S as Events<ApplyEvent<M>>>::Time;
 
     let mut snapshots = AHashMap::<u128, SnapshotSlot<S, K, ApplyCompletion<M>, S::Rejection>>::new();
+    let mut listeners = NotificationCollections::<EventTime<M, S>, <M::SnapshotListen as SnapshotListenInput>::Listener>::new();
     let mut schedule = Schedule::new(config.deadline_compaction_minimum, config.deadline_compaction_multiplier);
     let mut current_time = EventTime::<M, S>::default();
     let mut horizon = EventTime::<M, S>::default();
@@ -136,20 +144,26 @@ pub fn work_messages<M, S, K>(
             Ok(message) => match message.into_kind() {
                 WorkInputKind::Apply(batch) => {
                     insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
-                    update_budget::<S, K, ApplyCompletion<M>, S::Rejection>(
+                    update_budget::<S, K, ApplyCompletion<M>, S::Rejection, _>(
                         &mut snapshots,
                         &mut schedule,
                         &checkpoints_config,
                         &mut checkpoints_context,
                         config.replays_per_receive,
                         config.maximum_dirty_age,
+                        &mut |update, snapshots| listeners.record(update, snapshots),
                     );
+                    listeners.flush();
                 }
                 WorkInputKind::SnapshotQuery(query) => query_snapshots(query, &snapshots, &checkpoints_config, &mut checkpoints_context),
                 WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _, _, _, _>(query, &snapshots),
+                WorkInputKind::SnapshotListen(registration) => {
+                    let (time, snapshot_ids, listener) = registration.into_parts();
+                    listeners.register(time, snapshot_ids, listener, &mut snapshots);
+                }
                 WorkInputKind::Advance(advance) => {
                     let (target_time, completion) = advance.into_parts();
-                    crate::advance::advance_worker::<ApplyEvent<M>, _, _, _, _>(
+                    crate::advance::advance_worker::<ApplyEvent<M>, _, _, _, _, _>(
                         &mut snapshots,
                         &mut schedule,
                         &checkpoints_config,
@@ -159,77 +173,94 @@ pub fn work_messages<M, S, K>(
                         &history_retention,
                         target_time,
                         completion,
+                        &mut |update, snapshots| listeners.record(update, snapshots),
                     );
+                    listeners.flush();
                 }
             },
-            Err(RecvTimeoutError::Timeout) => update_overdue::<S, K, ApplyCompletion<M>, S::Rejection>(
-                &mut snapshots,
-                &mut schedule,
-                &checkpoints_config,
-                &mut checkpoints_context,
-                config.maximum_dirty_age,
-            ),
-            Err(RecvTimeoutError::Disconnected) => {
-                update_all::<S, K, ApplyCompletion<M>, S::Rejection>(
+            Err(RecvTimeoutError::Timeout) => {
+                update_overdue::<S, K, ApplyCompletion<M>, S::Rejection, _>(
                     &mut snapshots,
                     &mut schedule,
                     &checkpoints_config,
                     &mut checkpoints_context,
+                    config.maximum_dirty_age,
+                    &mut |update, snapshots| listeners.record(update, snapshots),
                 );
+                listeners.flush();
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                update_all::<S, K, ApplyCompletion<M>, S::Rejection, _>(
+                    &mut snapshots,
+                    &mut schedule,
+                    &checkpoints_config,
+                    &mut checkpoints_context,
+                    &mut |update, snapshots| listeners.record(update, snapshots),
+                );
+                listeners.flush();
                 break;
             }
         }
     }
 }
 
-fn update_budget<S, K, C, R>(
+fn update_budget<S, K, C, R, F>(
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
     schedule: &mut Schedule,
     checkpoints_config: &K::Config,
     checkpoints_context: &mut K::Context,
     replay_budget: usize,
     maximum_dirty_age: Duration,
+    on_replayed: &mut F,
 ) where
     K: Checkpoints<S>,
     C: Completion<R>,
+    F: FnMut(ReplayUpdate<K::Time>, &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>),
 {
     for _ in 0..replay_budget {
         let Some(snapshot_id) = schedule.pop_next(Instant::now(), maximum_dirty_age) else {
             break;
         };
-        update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
+        let update = update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
+        on_replayed(update, snapshots);
     }
 }
 
-fn update_overdue<S, K, C, R>(
+fn update_overdue<S, K, C, R, F>(
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
     schedule: &mut Schedule,
     checkpoints_config: &K::Config,
     checkpoints_context: &mut K::Context,
     maximum_dirty_age: Duration,
+    on_replayed: &mut F,
 ) where
     K: Checkpoints<S>,
     C: Completion<R>,
+    F: FnMut(ReplayUpdate<K::Time>, &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>),
 {
     loop {
         let Some(snapshot_id) = schedule.pop_overdue(Instant::now(), maximum_dirty_age) else {
             break;
         };
-        update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
+        let update = update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
+        on_replayed(update, snapshots);
     }
 }
 
-fn update_all<S, K, C, R>(
+fn update_all<S, K, C, R, F>(
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
     schedule: &mut Schedule,
     checkpoints_config: &K::Config,
     checkpoints_context: &mut K::Context,
+    on_replayed: &mut F,
 ) where
     K: Checkpoints<S>,
     C: Completion<R>,
+    F: FnMut(ReplayUpdate<K::Time>, &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>),
 {
     while let Some(snapshot_id) = schedule.pop_largest(Instant::now()) {
-        update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
+        let update = update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
+        on_replayed(update, snapshots);
     }
 }
 
@@ -282,8 +313,9 @@ mod tests {
             Self
         }
 
-        fn update(&mut self, events: &mut TestEvents, context: &mut Self::Context) {
+        fn update(&mut self, events: &mut TestEvents, context: &mut Self::Context) -> Self::Time {
             context.lock().unwrap().push(events.0.clone());
+            0
         }
 
         fn advance_before(&mut self, _events: &TestEvents, _context: &mut Self::Context, _horizon: &u64) {}
