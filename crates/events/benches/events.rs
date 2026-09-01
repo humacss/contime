@@ -177,5 +177,48 @@ fn query(criterion: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, insertion_matrix, iteration, query);
+fn late_prune_fixture(count: usize) -> EventHistory<SharedEvent<184>> {
+    let mut history = EventHistory::with_horizon(-1);
+    history.insert(SharedEvent(Arc::new(BenchmarkEvent { id: u128::MAX, time: count as i64, payload: [0; 184] })));
+    for index in 0..count {
+        history.insert(SharedEvent(Arc::new(BenchmarkEvent { id: index as u128, time: index as i64, payload: [index as u8; 184] })));
+    }
+    history
+}
+
+fn ordered_prune_fixture(count: usize) -> EventHistory<SharedEvent<184>> {
+    let mut history = EventHistory::with_horizon(-1);
+    for index in 0..count {
+        history.insert(SharedEvent(Arc::new(BenchmarkEvent { id: index as u128, time: index as i64, payload: [index as u8; 184] })));
+    }
+    history
+}
+
+fn pruning(criterion: &mut Criterion) {
+    let mut late = criterion.benchmark_group("events/pruning/late_tree");
+    for count in [1_usize, 100, 1_000] {
+        late.throughput(Throughput::Elements(count as u64));
+        late.bench_with_input(BenchmarkId::from_parameter(count), &count, |bencher, count| {
+            bencher.iter_batched(
+                || late_prune_fixture(*count),
+                |mut history| black_box(history.prune_before(black_box(&(*count as i64)))),
+                BatchSize::LargeInput,
+            );
+        });
+    }
+    late.finish();
+
+    let mut ordered = criterion.benchmark_group("events/pruning/ordered_deque");
+    ordered.throughput(Throughput::Elements(EVENT_COUNT as u64));
+    ordered.bench_function("1000_events", |bencher| {
+        bencher.iter_batched(
+            || ordered_prune_fixture(EVENT_COUNT),
+            |mut history| black_box(history.prune_before(black_box(&(EVENT_COUNT as i64)))),
+            BatchSize::LargeInput,
+        );
+    });
+    ordered.finish();
+}
+
+criterion_group!(benches, insertion_matrix, iteration, query, pruning);
 criterion_main!(benches);
