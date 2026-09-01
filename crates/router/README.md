@@ -6,6 +6,13 @@ and completion handle; earlier workers receive clones. Local full-channel
 measurements recorded on 2026-09-01 were 237.5 ns for one worker, 626.3 ns for
 four workers, and 2.275 us for sixteen workers.
 
+The broadcast does not establish a barrier with apply batches being processed
+by another router. With multiple routers, an earlier apply and a later advance
+can therefore reach the same worker in the opposite order. The router crate
+provides dispatch, not cross-router sequencing; the composed core currently
+requires callers to observe apply completion before advancing the horizon when
+that ordering matters.
+
 `contime-router` receives complete input batches, deterministically maps each
 snapshot route to a worker, and sends one final batch per affected worker.
 
@@ -39,8 +46,9 @@ the adjacent API and worker boundaries.
 
 ## Exclusions
 
-The crate owns no threads, workers, memory accounting, time advancement,
-rejection semantics, response waiting, or recovery orchestration.
+The crate owns no threads, workers, memory accounting, horizon policy or
+state, rejection semantics, response waiting, cross-router barriers, or
+recovery orchestration.
 
 ## Verification
 
