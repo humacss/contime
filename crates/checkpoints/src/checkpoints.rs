@@ -9,7 +9,7 @@ where
 {
     /// Creates an empty checkpoint store for one snapshot ID.
     pub fn new(snapshot_id: u128, config: CheckpointConfig) -> Self {
-        Self { snapshot_id, interval: config.interval, checkpoints: VecDeque::new() }
+        Self { snapshot_id, interval: config.interval, anchor: None, checkpoints: VecDeque::new() }
     }
 
     pub fn snapshot_id(&self) -> u128 {
@@ -32,6 +32,10 @@ where
         self.checkpoints.back()
     }
 
+    pub fn anchor(&self) -> Option<&crate::ReplayAnchor<S>> {
+        self.anchor.as_ref()
+    }
+
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Checkpoint<S>> {
         self.checkpoints.iter()
     }
@@ -44,9 +48,17 @@ where
     pub(crate) fn begin_replay(&mut self, dirty_time: &S::Time) -> ReplaySession<'_, S> {
         let dirty_boundary = CheckpointKey { time: dirty_time.clone(), event_id: u128::MIN };
         let base_index = self.latest_before_index(&dirty_boundary);
-        let working_snapshot = base_index.map(|index| self.checkpoints[index].snapshot.clone());
-        let start_key = base_index.map(|index| self.checkpoints[index].key.clone());
-        let history_event_count = base_index.map_or(0, |index| self.checkpoints[index].history_event_count);
+        let (working_snapshot, start_key, history_event_count) = base_index.map_or_else(
+            || {
+                self.anchor
+                    .as_ref()
+                    .map_or((None, None, 0), |anchor| (Some(anchor.snapshot.clone()), anchor.boundary.clone(), anchor.history_event_count))
+            },
+            |index| {
+                let checkpoint = &self.checkpoints[index];
+                (Some(checkpoint.snapshot.clone()), Some(checkpoint.key.clone()), checkpoint.history_event_count)
+            },
+        );
         let movable_tip = base_index.filter(|index| *index + 1 == self.checkpoints.len() && !self.tip_interval_is_full(*index));
         let next_checkpoint_index = movable_tip.or_else(|| base_index.map(|index| index + 1)).unwrap_or(0);
         let events_since_checkpoint = movable_tip.map_or(0, |index| self.events_in_checkpoint(index));
@@ -86,6 +98,9 @@ where
 
     pub(crate) fn initialize(&mut self, snapshot: S) {
         debug_assert!(self.working_snapshot.is_none());
+        if self.store.anchor.is_none() {
+            self.store.anchor = Some(crate::ReplayAnchor { boundary: None, snapshot: snapshot.clone(), history_event_count: 0 });
+        }
         self.working_snapshot = Some(snapshot);
     }
 
@@ -218,7 +233,9 @@ mod tests {
         let retained_count = store.len();
 
         let mut session = store.begin_replay(&0);
-        session.initialize(TestSnapshot::default());
+        if session.working_snapshot.is_none() {
+            session.initialize(TestSnapshot::default());
+        }
         session.advance_event_count(3);
         session.snapshot_mut().value = 30;
         session.record_intermediate(key(20));

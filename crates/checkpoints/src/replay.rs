@@ -30,7 +30,9 @@ where
     };
 
     if session.working_snapshot.is_none() {
-        session.initialize(S::create(snapshot_id, first_event.event));
+        let mut snapshot = S::create(snapshot_id, first_event.event);
+        snapshot.set_time(T::default());
+        session.initialize(snapshot);
     }
 
     let mut bucket = Vec::new();
@@ -151,7 +153,7 @@ mod tests {
 
     impl ApplyEvents<TestEvent> for TestSnapshot {
         fn create(_snapshot_id: u128, _first_event: &TestEvent) -> Self {
-            Self::default()
+            Self { time: 999, ..Self::default() }
         }
 
         fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Time, TestEvent>) {
@@ -201,6 +203,20 @@ mod tests {
         assert_eq!(snapshot.batch_sizes, vec![2, 1]);
         assert_eq!(snapshot.batch_times, vec![10, 20]);
         assert_eq!(result.applied_events, 3);
+    }
+
+    #[test]
+    fn first_materialization_retains_the_clean_initial_snapshot() {
+        let mut events = TestEvents::new(0, vec![event(1, 10, 5)]);
+        let mut checkpoints = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval: 100 });
+
+        replay(&mut checkpoints, &mut events, &mut ());
+
+        let anchor = checkpoints.anchor().expect("materialized history has an anchor");
+        assert_eq!(anchor.boundary, None);
+        assert_eq!(anchor.snapshot.time, 0);
+        assert_eq!(anchor.snapshot.sum, 0);
+        assert_eq!(anchor.history_event_count, 0);
     }
 
     #[test]

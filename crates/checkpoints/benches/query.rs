@@ -1,9 +1,9 @@
 use std::hint::black_box;
 
 use contime_checkpoints::{
-    query_at, ApplyBatch, ApplyEvents, CheckpointConfig, CheckpointKey, CheckpointStore, EventRef, Events, Snapshot,
+    advance_before, query_at, ApplyBatch, ApplyEvents, CheckpointConfig, CheckpointKey, CheckpointStore, EventRef, Events, Snapshot,
 };
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 
 #[derive(Clone)]
 struct TestEvent {
@@ -91,5 +91,24 @@ fn query_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, query_benchmarks);
+fn advance_benchmarks(criterion: &mut Criterion) {
+    let mut retained_events = events(1_000);
+    let mut retained = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval: 100 });
+    contime_checkpoints::replay(&mut retained, &mut retained_events, &mut ());
+
+    let mut group = criterion.benchmark_group("checkpoints/advance/1000_events");
+    group.throughput(Throughput::Elements(1_000));
+    for horizon in [500_u64, 550] {
+        group.bench_with_input(BenchmarkId::from_parameter(horizon), &horizon, |bencher, horizon| {
+            bencher.iter_batched(
+                || retained.clone(),
+                |mut store| black_box(advance_before(&mut store, &retained_events, &mut (), black_box(horizon))),
+                BatchSize::LargeInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, query_benchmarks, advance_benchmarks);
 criterion_main!(benches);
