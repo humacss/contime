@@ -15,6 +15,11 @@ pub trait EventQueryOutput<T, E>: Sized {
     fn event_query(snapshot_id: u128, from: T, to: T, response: Sender<Vec<E>>) -> Self;
 }
 
+/// Constructs a caller-selected horizon-advancement message.
+pub trait AdvanceOutput<T>: Sized {
+    fn advance(time: T, completion: Sender<()>) -> Self;
+}
+
 /// One batch of inputs forwarded across the API boundary.
 #[derive(Debug)]
 pub struct InputBatch<I, R> {
