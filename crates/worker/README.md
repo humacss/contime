@@ -49,7 +49,12 @@ arrival inserts its history and triggers up to `replays_per_receive` replays. A
 timeout replays every snapshot whose deadline has passed before calculating the
 next deadline.
 
-Time advancement is intentionally deferred.
+Worker-local time advancement is monotonic. The worker derives its horizon
+from `current_time.saturating_sub(history_retention)`, forces replay only for a
+scheduled history whose dirty time is strictly before that horizon, advances
+an existing checkpoint store, and then prunes events. Histories first seen
+afterward are initialized with the active horizon. Equal and older requests
+are successful no-ops, and sender closure signals completion.
 
 ## Worker configuration
 
@@ -64,6 +69,15 @@ does not return high-water capacity to the allocator. Capacity shrinking is a
 separate policy that remains deferred.
 
 ## Benchmark snapshot
+
+Horizon orchestration results for 1,000 worker-local histories recorded on
+2026-09-01:
+
+| Workload | Total | Histories/s |
+| --- | ---: | ---: |
+| Clean event pruning | 122.4 us | 8.17 million |
+| Checkpoint anchor + pruning | 127.9 us | 7.82 million |
+| Forced replay + anchor + pruning | 544.6 us | 1.84 million |
 
 Query unit results recorded on 2026-09-01:
 

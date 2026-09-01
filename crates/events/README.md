@@ -20,8 +20,11 @@ worker boundary.
   bucket.
 - Expose basic length, latest-key, and storage-count inspection.
 
-Horizon pruning, memory accounting, batch insertion, checkpoint
-materialization, and integration tests are intentionally deferred.
+The store also owns a monotonic history horizon. Events strictly before it are
+rejected before duplicate detection, while events exactly at it remain valid.
+`prune_before` removes obsolete late-tree and ordered-prefix entries and
+forgets their IDs, allowing those IDs to be reused by retained-time events.
+Memory accounting and checkpoint materialization remain outside this crate.
 
 ## Public boundary
 
@@ -44,6 +47,15 @@ boundary to the latest retained timestamp, conservatively preserving the last
 same-timestamp bucket for the next replay.
 
 ## Benchmark snapshot
+
+Horizon-pruning results recorded on 2026-09-01:
+
+| Pruned events | Storage | Total | Per event |
+| ---: | --- | ---: | ---: |
+| 1 | Late tree | 123.7 ns | 123.7 ns |
+| 100 | Late tree | 3.31 us | 33.1 ns |
+| 1,000 | Late tree | 28.1 us | 28.1 ns |
+| 1,000 | Ordered deque prefix | 22.55 us | 22.55 ns |
 
 Local release-mode Criterion results on 2026-08-29:
 
