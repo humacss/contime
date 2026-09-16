@@ -19,6 +19,7 @@ independent traits.
 - Move the mutable tip forward in place until its event interval is full.
 - Preserve a full tip as a fixed checkpoint and append the next tip.
 - Correct existing checkpoints in place when late events require replay.
+- Truncate obsolete trailing checkpoints after replay commits its final tip.
 - Never insert a new checkpoint between existing checkpoints.
 
 Historical snapshot queries clone the nearest checkpoint at or before the

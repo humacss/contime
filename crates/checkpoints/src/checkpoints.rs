@@ -83,7 +83,10 @@ where
     }
 
     fn events_in_checkpoint(&self, index: usize) -> u64 {
-        let previous_count = index.checked_sub(1).map_or(0, |index| self.checkpoints[index].history_event_count);
+        let previous_count = index.checked_sub(1).map_or_else(
+            || self.anchor.as_ref().map_or(0, |anchor| anchor.history_event_count),
+            |index| self.checkpoints[index].history_event_count,
+        );
         self.checkpoints[index].history_event_count.saturating_sub(previous_count)
     }
 }
@@ -126,11 +129,6 @@ where
     }
 
     pub(crate) fn finish(mut self, key: CheckpointKey<S::Time>) -> ApplyResult {
-        debug_assert!(
-            self.next_checkpoint_index + 1 >= self.store.checkpoints.len(),
-            "replay ended before reaching an existing checkpoint"
-        );
-
         let snapshot = self.working_snapshot.take().expect("replay snapshot must be initialized");
         if self.next_checkpoint_index < self.store.checkpoints.len() {
             self.move_working_into_checkpoint(self.next_checkpoint_index, key, snapshot);
@@ -138,6 +136,7 @@ where
             debug_assert_eq!(self.next_checkpoint_index, self.store.checkpoints.len());
             self.append_moved_checkpoint(key, snapshot);
         }
+        self.store.checkpoints.truncate(self.next_checkpoint_index + 1);
 
         ApplyResult { applied_events: self.applied_events, retained_checkpoints: self.store.len() }
     }
@@ -246,6 +245,23 @@ mod tests {
         assert_eq!(store.len(), retained_count);
         assert_eq!(store.iter().map(|checkpoint| checkpoint.key.clone()).collect::<Vec<_>>(), vec![key(20), key(40)]);
         assert_eq!(store.iter().map(|checkpoint| checkpoint.snapshot.value).collect::<Vec<_>>(), vec![30, 50]);
+    }
+
+    #[test]
+    fn first_retained_tip_counts_only_events_after_the_anchor() {
+        let mut store = CheckpointStore::new(7, CheckpointConfig { interval: 10 });
+        store.anchor =
+            Some(crate::ReplayAnchor { boundary: Some(key(6)), snapshot: TestSnapshot { time: 6, value: 6 }, history_event_count: 6 });
+        store.checkpoints.push_back(crate::Checkpoint {
+            key: key(10),
+            snapshot: TestSnapshot { time: 10, value: 10 },
+            history_event_count: 10,
+        });
+        assert_eq!(store.events_in_checkpoint(0), 4);
+        assert!(!store.tip_interval_is_full(0));
+        finish_event(&mut store, 11);
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.current().unwrap().history_event_count, 11);
     }
 
     #[test]

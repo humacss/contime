@@ -177,6 +177,41 @@ mod tests {
     }
 
     #[test]
+    fn replay_after_partial_interval_pruning_discards_the_obsolete_tip() {
+        let mut events = events(250);
+        let mut store = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval: 100 });
+        replay(&mut store, &mut events, &mut ());
+        assert_eq!(store.iter().map(|c| c.key.time).collect::<Vec<_>>(), vec![100, 200, 250]);
+
+        advance_before(&mut store, &events, &mut (), &180);
+        events.events.retain(|event| event.time >= 180);
+        assert_eq!(store.anchor().unwrap().history_event_count, 179);
+        assert_eq!(store.iter().map(|c| c.key.time).collect::<Vec<_>>(), vec![200, 250]);
+
+        events.events.push(TestEvent { id: 1000, time: 181, value: 10 });
+        events.events.sort_by_key(|event| (event.time, event.id));
+        events.dirty_time = 181;
+        let result = replay(&mut store, &mut events, &mut ());
+
+        assert_eq!(result.applied_events, 72);
+        assert_eq!(result.retained_checkpoints, 1);
+        assert_eq!(store.current().unwrap().key.time, 250);
+        assert_eq!(store.current().unwrap().history_event_count, 251);
+        assert_eq!(store.current().unwrap().snapshot.sum, 260);
+        assert_eq!(store.anchor().unwrap().snapshot.sum, 179);
+        assert_eq!(crate::query_at(&store, &events, &mut (), 180).unwrap().sum, 180);
+        assert_eq!(crate::query_at(&store, &events, &mut (), 200).unwrap().sum, 210);
+
+        // The corrected partial tip can still move forward normally.
+        events.events.push(TestEvent { id: 1001, time: 251, value: 1 });
+        events.dirty_time = 251;
+        replay(&mut store, &mut events, &mut ());
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.current().unwrap().snapshot.sum, 261);
+        assert_eq!(store.current().unwrap().history_event_count, 252);
+    }
+
+    #[test]
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_advance() {
         let mut criterion = Criterion::default();
