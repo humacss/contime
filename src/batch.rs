@@ -1,17 +1,20 @@
 use ahash::AHashMap;
 
-use crate::history::{checkpoint_conservative_size, CHECKPOINT_INTERVAL, RETAINED_ID_BYTES};
+use crate::history::RETAINED_ID_BYTES;
 use crate::{EventRejection, EventRejectionReason, Input, InputLanes, SnapshotLanes};
 
 /// Opaque prepared snapshot batch used by doc-hidden benchmark boundary adapters.
 #[doc(hidden)]
 pub struct SnapshotInputBatch<IL> {
-    pub(crate) snapshot_id: u128,
     pub(crate) inputs: Vec<IL>,
     pub(crate) conservative_bytes: u64,
-    pub(crate) apply_allocation_bytes: u64,
-    event_count: usize,
-    snapshot_checkpoint_bytes: Option<u64>,
+}
+
+/// API-owned request grouped into one complete batch per snapshot history.
+#[doc(hidden)]
+pub struct PreparedRequest<IL> {
+    pub(crate) snapshots: AHashMap<u128, SnapshotInputBatch<IL>>,
+    pub(crate) conservative_bytes: u64,
 }
 
 impl<IL> SnapshotInputBatch<IL>
@@ -23,72 +26,44 @@ where
     }
 }
 
-pub(crate) fn group_inputs_by_snapshot<SL, IL, I>(inputs: I) -> Vec<SnapshotInputBatch<IL>>
+pub(crate) fn prepare_inputs_by_snapshot<SL, IL, I>(inputs: I) -> PreparedRequest<IL>
 where
     SL: SnapshotLanes<Input = IL>,
     IL: InputLanes<SL>,
     I: IntoIterator<Item = IL>,
 {
-    let mut batch_index_by_snapshot = AHashMap::<u128, usize>::new();
-    let mut batches = Vec::<SnapshotInputBatch<IL>>::new();
-    let mut routed_snapshot_ids = Vec::<u128>::new();
+    let mut snapshots = AHashMap::<u128, SnapshotInputBatch<IL>>::new();
+    let mut total_bytes = 0_u64;
 
     for input in inputs {
-        routed_snapshot_ids.clear();
-        input.visit_snapshot_ids(&mut |snapshot_id| routed_snapshot_ids.push(snapshot_id));
-        let Some((&final_snapshot_id, earlier_snapshot_ids)) = routed_snapshot_ids.split_last() else {
-            continue;
-        };
         let conservative_bytes = conservative_route_bytes(&input);
-        let apply_allocation_bytes = input.conservative_allocation_size();
-        let is_event = input.is_event();
+        let mut pending_snapshot_id = None;
 
-        for &snapshot_id in earlier_snapshot_ids {
-            push_routed_input::<SL, IL>(
-                &mut batches,
-                &mut batch_index_by_snapshot,
-                snapshot_id,
-                input.clone(),
-                conservative_bytes,
-                apply_allocation_bytes,
-                is_event,
-            );
+        input.visit_snapshot_ids(&mut |snapshot_id| {
+            if let Some(previous_snapshot_id) = pending_snapshot_id.replace(snapshot_id) {
+                push_routed_input(&mut snapshots, previous_snapshot_id, input.clone(), conservative_bytes);
+                total_bytes = total_bytes.saturating_add(conservative_bytes);
+            }
+        });
+        if let Some(final_snapshot_id) = pending_snapshot_id {
+            push_routed_input(&mut snapshots, final_snapshot_id, input, conservative_bytes);
+            total_bytes = total_bytes.saturating_add(conservative_bytes);
         }
-        push_routed_input::<SL, IL>(
-            &mut batches,
-            &mut batch_index_by_snapshot,
-            final_snapshot_id,
-            input,
-            conservative_bytes,
-            apply_allocation_bytes,
-            is_event,
-        );
     }
 
-    for batch in &mut batches {
-        let possible_checkpoint_count = batch.event_count.div_ceil(CHECKPOINT_INTERVAL) as u64;
-        let complete_checkpoint_bytes = batch.snapshot_checkpoint_bytes.unwrap_or(0).saturating_add(batch.apply_allocation_bytes);
-        batch.conservative_bytes =
-            batch.conservative_bytes.saturating_add(complete_checkpoint_bytes.saturating_mul(possible_checkpoint_count));
-    }
-
-    batches
+    PreparedRequest { snapshots, conservative_bytes: total_bytes }
 }
 
 fn conservative_route_bytes<I: Input>(input: &I) -> u64 {
     input.conservative_size().saturating_add(RETAINED_ID_BYTES)
 }
 
-pub(crate) fn total_conservative_bytes<IL>(batches: &[SnapshotInputBatch<IL>]) -> u64 {
-    batches.iter().fold(0, |total, batch| total.saturating_add(batch.conservative_bytes))
-}
-
-pub(crate) fn memory_full_rejections<IL>(batches: &[SnapshotInputBatch<IL>]) -> Vec<EventRejection>
+pub(crate) fn memory_full_rejections_for_request<IL>(request: &PreparedRequest<IL>) -> Vec<EventRejection>
 where
     IL: Input,
 {
     let mut input_ids = Vec::new();
-    for batch in batches {
+    for batch in request.snapshots.values() {
         batch.unique_input_ids(&mut input_ids);
     }
     input_ids.sort_unstable();
@@ -96,40 +71,10 @@ where
     input_ids.into_iter().map(|event_id| EventRejection::new(event_id, EventRejectionReason::MemoryFull)).collect()
 }
 
-fn push_routed_input<SL, IL>(
-    batches: &mut Vec<SnapshotInputBatch<IL>>,
-    batch_index_by_snapshot: &mut AHashMap<u128, usize>,
-    snapshot_id: u128,
-    input: IL,
-    conservative_bytes: u64,
-    apply_allocation_bytes: u64,
-    is_event: bool,
-) where
-    SL: SnapshotLanes<Input = IL>,
-    IL: InputLanes<SL>,
-{
-    let batch_index = *batch_index_by_snapshot.entry(snapshot_id).or_insert_with(|| {
-        let batch_index = batches.len();
-        batches.push(SnapshotInputBatch {
-            snapshot_id,
-            inputs: Vec::new(),
-            conservative_bytes: 0,
-            apply_allocation_bytes: 0,
-            event_count: 0,
-            snapshot_checkpoint_bytes: None,
-        });
-        batch_index
-    });
-    let batch = &mut batches[batch_index];
-    if batch.snapshot_checkpoint_bytes.is_none() {
-        if let Some(snapshot) = SL::materialize(snapshot_id, &input) {
-            batch.snapshot_checkpoint_bytes = Some(checkpoint_conservative_size(&snapshot));
-        }
-    }
+fn push_routed_input<IL>(snapshots: &mut AHashMap<u128, SnapshotInputBatch<IL>>, snapshot_id: u128, input: IL, conservative_bytes: u64) {
+    let batch = snapshots.entry(snapshot_id).or_insert_with(|| SnapshotInputBatch { inputs: Vec::new(), conservative_bytes: 0 });
     batch.inputs.push(input);
     batch.conservative_bytes = batch.conservative_bytes.saturating_add(conservative_bytes);
-    batch.apply_allocation_bytes = batch.apply_allocation_bytes.saturating_add(apply_allocation_bytes);
-    batch.event_count += usize::from(is_event);
 }
 
 /// Test and benchmark access to production API grouping without exposing its internal batch type.
@@ -137,17 +82,18 @@ fn push_routed_input<SL, IL>(
 pub struct SnapshotBatchBenchmark;
 
 impl SnapshotBatchBenchmark {
-    pub fn group<SL, IL, I>(inputs: I) -> Vec<(u128, Vec<u128>)>
+    pub fn group<SL, IL, I>(inputs: I) -> AHashMap<u128, Vec<u128>>
     where
         SL: SnapshotLanes<Input = IL>,
         IL: InputLanes<SL>,
         I: IntoIterator<Item = IL>,
     {
-        group_inputs_by_snapshot::<SL, IL, I>(inputs)
+        prepare_inputs_by_snapshot::<SL, IL, I>(inputs)
+            .snapshots
             .into_iter()
-            .map(|batch| {
+            .map(|(snapshot_id, batch)| {
                 let _conservative_bytes = batch.conservative_bytes;
-                (batch.snapshot_id, batch.inputs.iter().map(Input::id).collect())
+                (snapshot_id, batch.inputs.iter().map(Input::id).collect())
             })
             .collect()
     }
@@ -158,7 +104,6 @@ impl SnapshotBatchBenchmark {
         IL: InputLanes<SL>,
         I: IntoIterator<Item = IL>,
     {
-        let batches = group_inputs_by_snapshot::<SL, IL, I>(inputs);
-        total_conservative_bytes(&batches)
+        prepare_inputs_by_snapshot::<SL, IL, I>(inputs).conservative_bytes
     }
 }

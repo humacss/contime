@@ -136,16 +136,6 @@ where
         self.current_time.clone().saturating_sub(self.lower_time_horizon_delta.clone())
     }
 
-    pub(crate) fn conservative_replay_reservation(&self, apply_allocation_bytes: u64) -> u64 {
-        let checkpoint_clone = self
-            .checkpoints
-            .iter()
-            .map(|(_key, checkpoint, _history_input_count)| checkpoint_conservative_size(checkpoint))
-            .max()
-            .unwrap_or(0);
-        checkpoint_clone.saturating_add(apply_allocation_bytes.saturating_mul(self.checkpoints.len() as u64))
-    }
-
     /// Reconstructs the snapshot state at `time`.
     ///
     /// Events at exactly `time` are included in the returned snapshot.

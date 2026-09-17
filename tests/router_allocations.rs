@@ -55,3 +55,11 @@ fn one_worker_partition_uses_request_level_allocations() {
     assert_eq!(affected_workers, 1);
     assert_eq!(snapshot_batches, 1);
 }
+
+#[test]
+fn partition_initializes_storage_only_for_affected_workers() {
+    let partitioner = RoutePartitionBenchmark::new(8);
+    let request = partitioner.prepare::<TestSnapshotLanes, TestInputLanes, _>([TestEvent::Positive(7, 10, 1, 1).into()]);
+
+    assert_eq!(partitioner.partition_storage(request), (8, 1));
+}

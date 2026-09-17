@@ -27,6 +27,14 @@ where
         Self::with_capacity_and_horizon(capacity, E::Time::default())
     }
 
+    /// Reserves append and retained-ID capacity for an incoming event batch.
+    ///
+    /// Late-event tree nodes allocate individually and cannot be reserved.
+    pub fn reserve(&mut self, additional: usize) {
+        self.ordered.reserve(additional);
+        self.retained_ids.reserve(additional);
+    }
+
     /// Creates an empty history at an already active horizon.
     pub fn with_horizon(horizon: E::Time) -> Self {
         Self::with_capacity_and_horizon(0, horizon)
@@ -140,6 +148,18 @@ mod tests {
         assert_eq!(history.storage_counts(), (0, 0));
         assert_eq!(history.latest_key(), None);
         assert_eq!(history.dirty_time(), &0);
+    }
+
+    #[test]
+    fn reserving_for_an_incoming_batch_preserves_history_behavior() {
+        let mut history = EventHistory::with_horizon(10);
+        history.reserve(3);
+
+        assert_eq!(history.insert(event(1, 9)), crate::Insert::BeforeHorizon);
+        assert_eq!(history.insert(event(2, 10)), crate::Insert::Inserted);
+        assert_eq!(history.insert(event(2, 20)), crate::Insert::Duplicate);
+        assert_eq!(history.insert(event(3, 30)), crate::Insert::Inserted);
+        assert_eq!(history.iter().map(|(key, _)| (key.time, key.event_id)).collect::<Vec<_>>(), vec![(10, 2), (30, 3)]);
     }
 
     #[test]

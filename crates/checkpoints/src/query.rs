@@ -152,6 +152,46 @@ mod tests {
     }
 
     #[test]
+    fn queries_and_retention_apply_without_replay_effects() {
+        #[derive(Default)]
+        struct Trace {
+            applied: Vec<i64>,
+            replayed: Vec<i64>,
+        }
+        impl crate::ApplyWrapper<TestSnapshot, TestEvent> for Trace {
+            fn apply_event_batch(&mut self, batch: crate::EventBatch<'_, i64, TestEvent>, inner: &mut crate::ApplyInner<'_, TestSnapshot>) {
+                self.applied.push(batch.time);
+                inner.apply_event_batch(batch);
+            }
+            fn replay_event_batch(
+                &mut self,
+                batch: crate::EventBatch<'_, i64, TestEvent>,
+                inner: &mut crate::ApplyInner<'_, TestSnapshot>,
+            ) {
+                self.replayed.push(batch.time);
+                self.apply_event_batch(batch, inner);
+            }
+        }
+        let mut events = TestEvents::new(vec![event(1, 10, 7), event(2, 20, 11)]);
+        let mut store = CheckpointStore::new(7, CheckpointConfig { interval: 100 });
+        let mut trace = Trace::default();
+        crate::replay(&mut store, &mut events, &mut trace);
+        assert_eq!(trace.replayed, vec![10, 20]);
+        let before = store.iter().map(|c| (c.key.clone(), c.snapshot.clone())).collect::<Vec<_>>();
+        trace.applied.clear();
+        trace.replayed.clear();
+        assert_eq!(query_at(&store, &events, &mut trace, 10).unwrap().sum, 7);
+        assert_eq!(trace.applied, vec![10]);
+        assert!(trace.replayed.is_empty());
+        assert_eq!(store.iter().map(|c| (c.key.clone(), c.snapshot.clone())).collect::<Vec<_>>(), before);
+        assert_eq!(events.replay_acknowledgements, 1);
+        trace.applied.clear();
+        crate::advance_before(&mut store, &events, &mut trace, &15);
+        assert_eq!(trace.applied, vec![10]);
+        assert!(trace.replayed.is_empty());
+    }
+
+    #[test]
     fn query_clones_an_exact_checkpoint_without_mutating_retained_state() {
         let mut events = TestEvents::new(vec![event(1, 10, 1), event(2, 20, 2)]);
         let store = replay_fixture(&mut events, 1);

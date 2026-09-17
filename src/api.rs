@@ -1,20 +1,19 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 
-use crossbeam_channel::{unbounded, Receiver};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use crate::batch::{group_inputs_by_snapshot, memory_full_rejections, total_conservative_bytes};
+use crate::batch::{memory_full_rejections_for_request, prepare_inputs_by_snapshot};
 use crate::memory::MemoryTracker;
 use crate::rejection::merge_event_rejections;
 use crate::{ApplyWrapper, EventRejection, InputLanes, Router, RouterError, SnapshotLanes};
 
-fn collect_event_rejections(response_rx: &Receiver<Vec<EventRejection>>, expected: usize) -> Result<Vec<EventRejection>, ContimeError> {
+fn collect_event_rejections(response_rx: &Receiver<Vec<EventRejection>>) -> Vec<EventRejection> {
     let mut rejections = Vec::new();
-    for _ in 0..expected {
-        let worker_rejections = response_rx.recv().map_err(|_| ContimeError::ResponseDisconnected)?;
+    for worker_rejections in response_rx {
         merge_event_rejections(&mut rejections, worker_rejections);
     }
-    Ok(rejections)
+    rejections
 }
 
 /// Benchmark-only access to request-channel completion aggregation.
@@ -25,10 +24,10 @@ impl CompletionBenchmark {
     pub fn run(worker_count: usize) -> usize {
         let (response_tx, response_rx) = unbounded();
         for _ in 0..worker_count {
-            response_tx.send(Vec::new()).expect("benchmark response receiver remains connected");
+            drop(response_tx.clone());
         }
         drop(response_tx);
-        collect_event_rejections(&response_rx, worker_count).expect("benchmark response count is exact").len()
+        collect_event_rejections(&response_rx).len()
     }
 }
 
@@ -242,30 +241,27 @@ where
     where
         I: IntoIterator<Item = IL>,
     {
-        let batches = group_inputs_by_snapshot::<SL, IL, I>(inputs);
-        let conservative_bytes = total_conservative_bytes(&batches);
-        if !self.memory.can_fit(conservative_bytes) {
-            return Ok(memory_full_rejections(&batches));
+        let request = prepare_inputs_by_snapshot::<SL, IL, I>(inputs);
+        if !self.memory.can_fit(request.conservative_bytes) {
+            return Ok(memory_full_rejections_for_request(&request));
         }
         let (response_tx, response_rx) = unbounded();
-        let expected = self.router.dispatch_snapshot_batches(batches, Some(&response_tx))?;
-        drop(response_tx);
+        self.router.dispatch_prepared_request(request, response_tx)?;
 
-        collect_event_rejections(&response_rx, expected)
+        Ok(collect_event_rejections(&response_rx))
     }
 
-    /// Enqueues temporal inputs without waiting for replay to finish.
-    pub fn send<I>(&self, inputs: I) -> Result<(), ContimeError>
+    /// Enqueues temporal inputs. Completion is signaled by disconnection after all
+    /// affected workers drop their request-scoped sender clones.
+    pub fn send<I>(&self, inputs: I, completion: Sender<Vec<EventRejection>>) -> Result<(), ContimeError>
     where
         I: IntoIterator<Item = IL>,
     {
-        let batches = group_inputs_by_snapshot::<SL, IL, I>(inputs);
-        let conservative_bytes = total_conservative_bytes(&batches);
-        if !self.memory.can_fit(conservative_bytes) {
+        let request = prepare_inputs_by_snapshot::<SL, IL, I>(inputs);
+        if !self.memory.can_fit(request.conservative_bytes) {
             return Err(ContimeError::MemoryFull);
         }
-        self.router.dispatch_snapshot_batches(batches, None)?;
-        Ok(())
+        self.router.dispatch_prepared_request(request, completion).map_err(Into::into)
     }
 
     pub fn query_at(&self, time: SL::Time, snapshot_ids: &[u128]) -> Result<Vec<Option<SL>>, ContimeError> {

@@ -160,14 +160,14 @@ fn advance_forces_dirty_pre_horizon_replay_before_pruning() {
 }
 
 #[test]
-fn dirty_event_at_the_horizon_remains_scheduled() {
+fn event_at_the_horizon_remains_available_after_immediate_replay() {
     let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config_with_replays(1, 1, 10, 0), ()).unwrap();
     let (completion, applied) = unbounded();
     contime.send([event(1, 10, 7)], completion).unwrap();
 
     contime.advance_to(20).unwrap();
 
-    assert_eq!(applied.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(applied.try_recv(), Err(TryRecvError::Disconnected));
     assert_eq!(contime.query_at(20, [7]).unwrap().pop().unwrap().value, 7);
     contime.shutdown();
     assert_eq!(applied.try_recv(), Err(TryRecvError::Disconnected));

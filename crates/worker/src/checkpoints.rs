@@ -12,8 +12,9 @@ where
     K: Checkpoints<S>,
     C: Completion<R>,
 {
-    let slot = snapshots.get_mut(&snapshot_id).expect("dirty schedule referenced a missing event store");
-    let events = slot.events.as_mut().expect("dirty schedule referenced a metadata-only snapshot slot");
+    let slot = snapshots.get_mut(&snapshot_id).expect("worker replay referenced a missing event store");
+    let events = slot.events.as_mut().expect("worker replay referenced a metadata-only snapshot slot");
+    slot.dirty = false;
 
     if slot.checkpoints.is_none() {
         slot.checkpoints = Some(K::create(snapshot_id, checkpoints_config));

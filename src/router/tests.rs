@@ -2,11 +2,11 @@ use ahash::RandomState;
 use crossbeam_channel::unbounded;
 
 use super::{RoutePartitioner, Router};
-use crate::batch::group_inputs_by_snapshot;
+use crate::batch::prepare_inputs_by_snapshot;
 use crate::{TestEvent, TestInputLanes, TestSnapshotLanes};
 
 #[test]
-fn dispatch_snapshot_batches_reports_only_affected_workers() {
+fn dispatch_prepared_request_reports_only_affected_workers() {
     let mut router = Router::<TestSnapshotLanes, TestInputLanes>::new(8, 1_000_000);
     router.partitioner = RoutePartitioner::with_hasher(8, RandomState::with_seeds(1, 2, 3, 4));
     let first_snapshot_id = 1;
@@ -14,16 +14,13 @@ fn dispatch_snapshot_batches_reports_only_affected_workers() {
     let second_snapshot_id = (2..).find(|snapshot_id| router.worker_index(*snapshot_id) != first_worker).unwrap();
     let (response_tx, response_rx) = unbounded();
 
-    let batches = group_inputs_by_snapshot::<TestSnapshotLanes, TestInputLanes, _>([
+    let request = prepare_inputs_by_snapshot::<TestSnapshotLanes, TestInputLanes, _>([
         TestEvent::Positive(first_snapshot_id, 10, 100, 1).into(),
         TestEvent::Positive(second_snapshot_id, 10, 200, 1).into(),
     ]);
-    let affected = router.dispatch_snapshot_batches(batches, Some(&response_tx)).unwrap();
+    router.dispatch_prepared_request(request, response_tx).unwrap();
 
-    assert_eq!(affected, 2);
-    assert!(response_rx.recv().unwrap().is_empty());
-    assert!(response_rx.recv().unwrap().is_empty());
-    assert!(response_rx.try_recv().is_err());
+    assert!(response_rx.iter().flatten().collect::<Vec<_>>().is_empty());
 }
 
 #[test]

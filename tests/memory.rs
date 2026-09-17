@@ -1,5 +1,6 @@
 use contime::{
-    ContimeError, ContimeEvent, ContimeSnapshot, EventRejection, EventRejectionReason, TestEvent, TestSnapshot, TestSnapshotContime,
+    ApplyBatch, Contime, ContimeError, ContimeEvent, ContimeSnapshot, Event, EventRejection, EventRejectionReason, Input, Snapshot,
+    SnapshotEvent, SnapshotLanes, TestEvent, TestSnapshot, TestSnapshotContime,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
@@ -35,6 +36,98 @@ contime::lanes! {
     routes [InlineEvent => [InlineSnapshot]];
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GrowingEvent {
+    event_id: u128,
+    snapshot_id: u128,
+    time: i64,
+}
+
+impl Input for GrowingEvent {
+    type Time = i64;
+
+    fn id(&self) -> u128 {
+        self.event_id
+    }
+
+    fn time(&self) -> i64 {
+        self.time
+    }
+
+    fn conservative_size(&self) -> u64 {
+        size_of::<Self>() as u64
+    }
+}
+
+impl Event for GrowingEvent {}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct GrowingSnapshot {
+    snapshot_id: u128,
+    time: i64,
+    values: Vec<Vec<u8>>,
+}
+
+impl Snapshot for GrowingSnapshot {
+    type Time = i64;
+    type Input = GrowingEvent;
+
+    fn id(&self) -> u128 {
+        self.snapshot_id
+    }
+
+    fn time(&self) -> i64 {
+        self.time
+    }
+
+    fn set_time(&mut self, time: i64) {
+        self.time = time;
+    }
+
+    fn conservative_size(&self) -> u64 {
+        let outer = self.values.capacity().saturating_mul(size_of::<Vec<u8>>());
+        let inner = self.values.iter().map(Vec::capacity).sum::<usize>();
+        u64::try_from(size_of::<Self>().saturating_add(outer).saturating_add(inner)).unwrap_or(u64::MAX)
+    }
+}
+
+impl SnapshotLanes for GrowingSnapshot {
+    fn materialize(snapshot_id: u128, input: &Self::Input) -> Option<Self> {
+        (input.snapshot_id == snapshot_id).then_some(Self { snapshot_id, ..Self::default() })
+    }
+
+    fn lane_index(&self) -> usize {
+        0
+    }
+
+    fn input_lane_index(snapshot_id: u128, input: &Self::Input) -> Option<usize> {
+        (input.snapshot_id == snapshot_id).then_some(0)
+    }
+}
+
+impl SnapshotEvent<GrowingSnapshot> for GrowingEvent {
+    fn snapshot_id(&self) -> u128 {
+        self.snapshot_id
+    }
+
+    fn set_snapshot_identity(&self, snapshot: &mut GrowingSnapshot) {
+        snapshot.snapshot_id = self.snapshot_id;
+    }
+}
+
+impl contime::ApplyEvents<GrowingEvent> for GrowingSnapshot {
+    fn apply_events(&mut self, batch: ApplyBatch<'_, GrowingEvent>) {
+        for _event in batch.events {
+            self.values.push(vec![0; 1_024]);
+        }
+        self.time = batch.time;
+    }
+}
+
+fn growing_events(count: u128) -> impl Iterator<Item = GrowingEvent> {
+    (1..=count).map(|event_id| GrowingEvent { event_id, snapshot_id: 1, time: event_id as i64 })
+}
+
 fn query_one(contime: &TestSnapshotContime, time: i64, snapshot_id: u128) -> TestSnapshot {
     contime.query_at(time, &[snapshot_id]).unwrap().pop().flatten().unwrap().into()
 }
@@ -54,8 +147,10 @@ fn api_precheck_rejects_the_complete_apply_request() {
 #[test]
 fn api_precheck_returns_memory_full_error_for_send() {
     let contime = TestSnapshotContime::new(1, 1);
+    let (completion_tx, completion_rx) = crossbeam_channel::bounded(1);
 
-    assert!(matches!(contime.send([TestEvent::Positive(1, 10, 10, 1).into()]), Err(ContimeError::MemoryFull)));
+    assert!(matches!(contime.send([TestEvent::Positive(1, 10, 10, 1).into()], completion_tx), Err(ContimeError::MemoryFull)));
+    assert!(completion_rx.try_recv().is_err());
 }
 
 #[test]
@@ -67,6 +162,44 @@ fn one_batch_reserves_cumulative_checkpoint_growth() {
 
     assert!(rejections.is_empty());
     assert_eq!(query_one(&contime, 1_000, 1).items.len(), 1_000);
+}
+
+#[test]
+fn growing_checkpoints_are_accounted_from_the_materialized_snapshot() {
+    let contime = Contime::<GrowingSnapshot, GrowingEvent>::new(1, 2 * 1024 * 1024);
+
+    let rejections = contime.apply(growing_events(200)).expect("growing checkpoints must not exceed their reservation");
+
+    assert!(rejections.is_empty());
+    let snapshot = contime.query_at(200, &[1]).unwrap().pop().flatten().unwrap();
+    assert_eq!(snapshot.values.len(), 200);
+}
+
+#[test]
+fn checkpoint_pressure_does_not_reject_authoritative_events() {
+    let contime = Contime::<GrowingSnapshot, GrowingEvent>::new(1, 20 * 1024);
+
+    let rejections = contime.apply(growing_events(200)).expect("event memory fits even though checkpoint memory does not");
+
+    assert!(rejections.is_empty());
+    let snapshot = contime.query_at(200, &[1]).unwrap().pop().flatten().unwrap();
+    assert_eq!(snapshot.values.len(), 200);
+}
+
+#[test]
+fn replacing_replayed_checkpoints_releases_the_previous_reservation() {
+    let contime = Contime::<GrowingSnapshot, GrowingEvent>::new(1, 220 * 1024);
+    assert!(contime.apply(growing_events(100)).unwrap().is_empty());
+
+    for offset in 1..=100_u128 {
+        let rejections = contime
+            .apply([GrowingEvent { event_id: 1_000 + offset, snapshot_id: 1, time: 50 }])
+            .expect("checkpoint replacement must not leak its prior reservation");
+        assert!(rejections.is_empty());
+    }
+
+    let snapshot = contime.query_at(100, &[1]).unwrap().pop().flatten().unwrap();
+    assert_eq!(snapshot.values.len(), 200);
 }
 
 #[test]
@@ -116,7 +249,7 @@ fn test_memory_full() {
 
 #[test]
 fn test_memory_full_then_advance_frees() {
-    let budget = 500u64;
+    let budget = 1_000u64;
     let c = TestSnapshotContime::new(1, budget);
 
     // Fill up memory

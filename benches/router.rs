@@ -102,15 +102,15 @@ fn router_enqueue(c: &mut Criterion) {
     group.finish();
 }
 
-fn api_completion(c: &mut Criterion) {
-    let mut group = c.benchmark_group("api_completion");
+fn completion_by_disconnect(c: &mut Criterion) {
+    let mut group = c.benchmark_group("completion_by_disconnect");
     for worker_count in [1, 2, 8] {
-        group.bench_with_input(BenchmarkId::new("empty_rejections", worker_count), &worker_count, |b, &worker_count| {
+        group.bench_with_input(BenchmarkId::from_parameter(worker_count), &worker_count, |b, &worker_count| {
             b.iter(|| black_box(CompletionBenchmark::run(worker_count)));
         });
     }
     group.finish();
 }
 
-criterion_group!(benches, router_partition, router_enqueue, api_completion);
+criterion_group!(benches, router_partition, router_enqueue, completion_by_disconnect);
 criterion_main!(benches);

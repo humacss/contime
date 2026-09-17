@@ -1,20 +1,17 @@
-use std::time::{Duration, Instant};
-
 use ahash::AHashMap;
-use crossbeam_channel::{Receiver, RecvTimeoutError};
+use crossbeam_channel::{Receiver, TryRecvError};
 
 use crate::checkpoints::update_snapshot;
 use crate::events::insert_batch;
 use crate::listen::NotificationCollections;
 use crate::query::{query_events, query_snapshots};
-use crate::schedule::Schedule;
 use crate::types::{
     AdvanceInput, ApplyInput, Checkpoints, Completion, EventQueryInput, EventQueryResponse, Events, QueryCheckpoints, QueryEvents,
-    ReplayUpdate, RouteInput, SnapshotListenInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, WorkInput, WorkInputKind,
-    WorkerConfig,
+    RouteInput, SnapshotListenInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, WorkInput, WorkInputKind, WorkerConfig,
 };
 
-/// Receives event batches and schedules their checkpoint updates.
+/// Drains ready event batches into one apply cycle and updates each changed
+/// snapshot once per cycle.
 ///
 /// The caller chooses the execution context. This function does not create or
 /// own a thread.
@@ -23,81 +20,51 @@ pub fn work<B, S, K>(
     config: WorkerConfig,
     events_config: S::Config,
     checkpoints_config: K::Config,
-    mut checkpoints_context: <K as Checkpoints<S>>::Context,
+    checkpoints_context: <K as Checkpoints<S>>::Context,
 ) where
     B: ApplyInput,
     S: Events<<B::Route as RouteInput>::Input>,
     K: Checkpoints<S, Time = S::Time>,
     B::Completion: Completion<S::Rejection>,
 {
+    work_with_batch_limit::<B, S, K>(input, config, events_config, checkpoints_config, checkpoints_context, usize::MAX);
+}
+
+fn work_with_batch_limit<B, S, K>(
+    input: Receiver<B>,
+    _config: WorkerConfig,
+    events_config: S::Config,
+    checkpoints_config: K::Config,
+    mut checkpoints_context: <K as Checkpoints<S>>::Context,
+    maximum_batches_per_cycle: usize,
+) where
+    B: ApplyInput,
+    S: Events<<B::Route as RouteInput>::Input>,
+    K: Checkpoints<S, Time = S::Time>,
+    B::Completion: Completion<S::Rejection>,
+{
+    assert!(maximum_batches_per_cycle > 0);
     let mut snapshots = AHashMap::<u128, SnapshotSlot<S, K, B::Completion, S::Rejection>>::new();
-    let mut schedule = Schedule::new(config.deadline_compaction_minimum, config.deadline_compaction_multiplier);
+    let mut dirty_snapshot_ids = Vec::new();
     let horizon = S::Time::default();
 
-    loop {
-        if schedule.is_empty() {
-            match input.recv() {
-                Ok(batch) => {
-                    insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
-                    update_budget::<S, K, B::Completion, S::Rejection, _>(
-                        &mut snapshots,
-                        &mut schedule,
-                        &checkpoints_config,
-                        &mut checkpoints_context,
-                        config.replays_per_receive,
-                        config.maximum_dirty_age,
-                        &mut |_, _| {},
-                    );
-                }
-                Err(_) => break,
-            }
-            continue;
+    while let Ok(batch) = input.recv() {
+        dirty_snapshot_ids.clear();
+        insert_batch(batch, &mut snapshots, &mut dirty_snapshot_ids, &events_config, &horizon);
+        for batch in input.try_iter().take(maximum_batches_per_cycle - 1) {
+            insert_batch(batch, &mut snapshots, &mut dirty_snapshot_ids, &events_config, &horizon);
         }
-
-        let deadline = schedule.next_deadline(config.maximum_dirty_age).expect("dirty schedule had no deadline");
-        let timeout = deadline.saturating_duration_since(Instant::now());
-
-        match input.recv_timeout(timeout) {
-            Ok(batch) => {
-                insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
-                update_budget::<S, K, B::Completion, S::Rejection, _>(
-                    &mut snapshots,
-                    &mut schedule,
-                    &checkpoints_config,
-                    &mut checkpoints_context,
-                    config.replays_per_receive,
-                    config.maximum_dirty_age,
-                    &mut |_, _| {},
-                );
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                update_overdue::<S, K, B::Completion, S::Rejection, _>(
-                    &mut snapshots,
-                    &mut schedule,
-                    &checkpoints_config,
-                    &mut checkpoints_context,
-                    config.maximum_dirty_age,
-                    &mut |_, _| {},
-                );
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                update_all::<S, K, B::Completion, S::Rejection, _>(
-                    &mut snapshots,
-                    &mut schedule,
-                    &checkpoints_config,
-                    &mut checkpoints_context,
-                    &mut |_, _| {},
-                );
-                break;
-            }
+        for snapshot_id in dirty_snapshot_ids.drain(..) {
+            update_snapshot(snapshot_id, &mut snapshots, &checkpoints_config, &mut checkpoints_context);
         }
     }
 }
 
-/// Receives apply and query messages on one worker-local queue.
+/// Receives apply and query messages on one worker-local queue, coalescing
+/// adjacent ready applies without crossing another message kind.
 pub fn work_messages<M, S, K>(
     input: Receiver<M>,
-    config: WorkerConfig,
+    _config: WorkerConfig,
     events_config: S::Config,
     history_retention: <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
     checkpoints_config: K::Config,
@@ -125,155 +92,88 @@ pub fn work_messages<M, S, K>(
     type ApplyCompletion<M> = <<M as WorkInput>::Apply as ApplyInput>::Completion;
     type ApplyEvent<M> = <ApplyRoute<M> as RouteInput>::Input;
     type EventTime<M, S> = <S as Events<ApplyEvent<M>>>::Time;
-
+    type MessageKind<M> = WorkInputKind<
+        <M as WorkInput>::Apply,
+        <M as WorkInput>::SnapshotQuery,
+        <M as WorkInput>::EventQuery,
+        <M as WorkInput>::SnapshotListen,
+        <M as WorkInput>::Advance,
+    >;
     let mut snapshots = AHashMap::<u128, SnapshotSlot<S, K, ApplyCompletion<M>, S::Rejection>>::new();
     let mut listeners = NotificationCollections::<EventTime<M, S>, <M::SnapshotListen as SnapshotListenInput>::Listener>::new();
-    let mut schedule = Schedule::new(config.deadline_compaction_minimum, config.deadline_compaction_multiplier);
     let mut current_time = EventTime::<M, S>::default();
     let mut horizon = EventTime::<M, S>::default();
-
+    let mut dirty_snapshot_ids = Vec::new();
+    let mut pending = None::<MessageKind<M>>;
     loop {
-        let received = if schedule.is_empty() {
-            input.recv().map_err(|_| RecvTimeoutError::Disconnected)
-        } else {
-            let deadline = schedule.next_deadline(config.maximum_dirty_age).expect("dirty schedule had no deadline");
-            input.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        };
-
-        match received {
-            Ok(message) => match message.into_kind() {
-                WorkInputKind::Apply(batch) => {
-                    insert_batch(batch, &mut snapshots, &mut schedule, &events_config, &horizon, Instant::now());
-                    update_budget::<S, K, ApplyCompletion<M>, S::Rejection, _>(
-                        &mut snapshots,
-                        &mut schedule,
-                        &checkpoints_config,
-                        &mut checkpoints_context,
-                        config.replays_per_receive,
-                        config.maximum_dirty_age,
-                        &mut |update, snapshots| listeners.record(update, snapshots),
-                    );
-                    listeners.flush();
-                }
-                WorkInputKind::SnapshotQuery(query) => query_snapshots(query, &snapshots, &checkpoints_config, &mut checkpoints_context),
-                WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _, _, _, _>(query, &snapshots),
-                WorkInputKind::SnapshotListen(registration) => {
-                    let (time, snapshot_ids, listener) = registration.into_parts();
-                    listeners.register(time, snapshot_ids, listener, &mut snapshots);
-                }
-                WorkInputKind::Advance(advance) => {
-                    let (target_time, completion) = advance.into_parts();
-                    crate::advance::advance_worker::<ApplyEvent<M>, _, _, _, _, _>(
-                        &mut snapshots,
-                        &mut schedule,
-                        &checkpoints_config,
-                        &mut checkpoints_context,
-                        &mut current_time,
-                        &mut horizon,
-                        &history_retention,
-                        target_time,
-                        completion,
-                        &mut |update, snapshots| listeners.record(update, snapshots),
-                    );
-                    listeners.flush();
-                }
+        let message = match pending.take() {
+            Some(message) => message,
+            None => match input.recv() {
+                Ok(message) => message.into_kind(),
+                Err(_) => break,
             },
-            Err(RecvTimeoutError::Timeout) => {
-                update_overdue::<S, K, ApplyCompletion<M>, S::Rejection, _>(
-                    &mut snapshots,
-                    &mut schedule,
-                    &checkpoints_config,
-                    &mut checkpoints_context,
-                    config.maximum_dirty_age,
-                    &mut |update, snapshots| listeners.record(update, snapshots),
-                );
+        };
+        match message {
+            WorkInputKind::Apply(batch) => {
+                dirty_snapshot_ids.clear();
+                insert_batch(batch, &mut snapshots, &mut dirty_snapshot_ids, &events_config, &horizon);
+                loop {
+                    match input.try_recv() {
+                        Ok(message) => match message.into_kind() {
+                            WorkInputKind::Apply(batch) => {
+                                insert_batch(batch, &mut snapshots, &mut dirty_snapshot_ids, &events_config, &horizon);
+                            }
+                            message => {
+                                pending = Some(message);
+                                break;
+                            }
+                        },
+                        Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                    }
+                }
+                for snapshot_id in dirty_snapshot_ids.drain(..) {
+                    let update = update_snapshot(snapshot_id, &mut snapshots, &checkpoints_config, &mut checkpoints_context);
+                    listeners.record(update, &mut snapshots);
+                }
                 listeners.flush();
             }
-            Err(RecvTimeoutError::Disconnected) => {
-                update_all::<S, K, ApplyCompletion<M>, S::Rejection, _>(
+            WorkInputKind::SnapshotQuery(query) => query_snapshots(query, &snapshots, &checkpoints_config, &mut checkpoints_context),
+            WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _, _, _, _>(query, &snapshots),
+            WorkInputKind::SnapshotListen(registration) => {
+                let (time, snapshot_ids, listener) = registration.into_parts();
+                listeners.register(time, snapshot_ids, listener, &mut snapshots);
+            }
+            WorkInputKind::Advance(advance) => {
+                let (target_time, completion) = advance.into_parts();
+                crate::advance::advance_worker::<ApplyEvent<M>, _, _, _, _, _>(
                     &mut snapshots,
-                    &mut schedule,
                     &checkpoints_config,
                     &mut checkpoints_context,
+                    &mut current_time,
+                    &mut horizon,
+                    &history_retention,
+                    target_time,
+                    completion,
                     &mut |update, snapshots| listeners.record(update, snapshots),
                 );
                 listeners.flush();
-                break;
             }
         }
     }
 }
 
-fn update_budget<S, K, C, R, F>(
-    snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
-    schedule: &mut Schedule,
-    checkpoints_config: &K::Config,
-    checkpoints_context: &mut K::Context,
-    replay_budget: usize,
-    maximum_dirty_age: Duration,
-    on_replayed: &mut F,
-) where
-    K: Checkpoints<S>,
-    C: Completion<R>,
-    F: FnMut(ReplayUpdate<K::Time>, &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>),
-{
-    for _ in 0..replay_budget {
-        let Some(snapshot_id) = schedule.pop_next(Instant::now(), maximum_dirty_age) else {
-            break;
-        };
-        let update = update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
-        on_replayed(update, snapshots);
-    }
-}
-
-fn update_overdue<S, K, C, R, F>(
-    snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
-    schedule: &mut Schedule,
-    checkpoints_config: &K::Config,
-    checkpoints_context: &mut K::Context,
-    maximum_dirty_age: Duration,
-    on_replayed: &mut F,
-) where
-    K: Checkpoints<S>,
-    C: Completion<R>,
-    F: FnMut(ReplayUpdate<K::Time>, &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>),
-{
-    loop {
-        let Some(snapshot_id) = schedule.pop_overdue(Instant::now(), maximum_dirty_age) else {
-            break;
-        };
-        let update = update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
-        on_replayed(update, snapshots);
-    }
-}
-
-fn update_all<S, K, C, R, F>(
-    snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
-    schedule: &mut Schedule,
-    checkpoints_config: &K::Config,
-    checkpoints_context: &mut K::Context,
-    on_replayed: &mut F,
-) where
-    K: Checkpoints<S>,
-    C: Completion<R>,
-    F: FnMut(ReplayUpdate<K::Time>, &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>),
-{
-    while let Some(snapshot_id) = schedule.pop_largest(Instant::now()) {
-        let update = update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
-        on_replayed(update, snapshots);
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use ahash::AHashMap;
     use std::hint::black_box;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use criterion::{BatchSize, Criterion};
-    use crossbeam_channel::unbounded;
+    use criterion::{BatchSize, Criterion, SamplingMode, Throughput};
+    use crossbeam_channel::{unbounded, Receiver};
 
-    use super::work;
+    use super::{work, work_with_batch_limit};
     use crate::{ApplyBatch, Checkpoints, EventInsert, Events, RoutedInput, WorkerConfig};
 
     struct TestInput(u128);
@@ -321,12 +221,105 @@ mod tests {
         fn advance_before(&mut self, _events: &TestEvents, _context: &mut Self::Context, _horizon: &u64) {}
     }
 
+    struct OrderedCheckpoints(u128);
+
+    impl Checkpoints<TestEvents> for OrderedCheckpoints {
+        type Config = ();
+        type Context = Arc<Mutex<Vec<u128>>>;
+        type Time = u64;
+
+        fn create(snapshot_id: u128, _config: &()) -> Self {
+            Self(snapshot_id)
+        }
+
+        fn update(&mut self, _events: &mut TestEvents, context: &mut Self::Context) -> Self::Time {
+            context.lock().unwrap().push(self.0);
+            0
+        }
+
+        fn advance_before(&mut self, _events: &TestEvents, _context: &mut Self::Context, _horizon: &u64) {}
+    }
+
+    struct SpaceTimeInput {
+        time: u64,
+        effect_count: usize,
+    }
+
+    #[derive(Default)]
+    struct SpaceTimeEvents(Vec<SpaceTimeInput>);
+
+    impl Events<SpaceTimeInput> for SpaceTimeEvents {
+        type Config = ();
+        type Rejection = ();
+        type Time = u64;
+
+        fn create(_id: u128, _config: &(), _horizon: &u64) -> Self {
+            Self::default()
+        }
+
+        fn insert(&mut self, input: SpaceTimeInput) -> EventInsert<()> {
+            self.0.push(input);
+            EventInsert { changed: true, rejections: Vec::new() }
+        }
+
+        fn dirty_time(&self) -> &u64 {
+            self.0.first().map_or(&0, |input| &input.time)
+        }
+
+        fn prune_before(&mut self, _horizon: &u64) {}
+    }
+
+    #[derive(Default)]
+    struct SpaceTimeCheckpoints {
+        applied: usize,
+    }
+
+    impl Checkpoints<SpaceTimeEvents> for SpaceTimeCheckpoints {
+        type Config = ();
+        type Context = Arc<AtomicUsize>;
+        type Time = u64;
+
+        fn create(_snapshot_id: u128, _config: &()) -> Self {
+            Self::default()
+        }
+
+        fn update(&mut self, events: &mut SpaceTimeEvents, total_effects: &mut Self::Context) -> Self::Time {
+            let mut effects = AHashMap::new();
+            for input in &events.0[self.applied..] {
+                for effect_index in 0..input.effect_count {
+                    let effect_id = u128::from(input.time) << 64 | effect_index as u128;
+                    effects.insert(effect_id, input.time);
+                }
+            }
+            self.applied = events.0.len();
+            total_effects.fetch_add(effects.len(), Ordering::Relaxed);
+            events.0.last().map_or(0, |input| input.time)
+        }
+
+        fn advance_before(&mut self, _events: &SpaceTimeEvents, _context: &mut Self::Context, _horizon: &u64) {}
+    }
+
     type TestCompletion = crossbeam_channel::Sender<Vec<()>>;
 
     fn batch(first_id: u128, count: u128) -> ApplyBatch<TestInput, TestCompletion> {
         let (completion, _responses) = unbounded();
         let inputs = (0..count).map(|offset| RoutedInput { snapshot_id: 7, input: TestInput(first_id + offset) }).collect();
         ApplyBatch { inputs, completion }
+    }
+
+    fn spacetime_batches(batch_count: usize, effect_count: usize) -> Receiver<ApplyBatch<SpaceTimeInput, TestCompletion>> {
+        let (sender, receiver) = unbounded();
+        for batch_index in 0..batch_count {
+            let (completion, _responses) = unbounded();
+            sender
+                .send(ApplyBatch {
+                    inputs: vec![RoutedInput { snapshot_id: 7, input: SpaceTimeInput { time: batch_index as u64 + 1, effect_count } }],
+                    completion,
+                })
+                .unwrap();
+        }
+        drop(sender);
+        receiver
     }
 
     fn config(replays_per_receive: usize) -> WorkerConfig {
@@ -351,6 +344,56 @@ mod tests {
     }
 
     #[test]
+    fn one_batch_replays_changed_snapshots_in_first_seen_order() {
+        let (sender, receiver) = unbounded();
+        let context = Arc::new(Mutex::new(Vec::new()));
+        let (completion, _responses) = unbounded();
+        sender
+            .send(ApplyBatch {
+                inputs: vec![
+                    RoutedInput { snapshot_id: 7, input: TestInput(1) },
+                    RoutedInput { snapshot_id: 9, input: TestInput(2) },
+                    RoutedInput { snapshot_id: 9, input: TestInput(3) },
+                ],
+                completion,
+            })
+            .unwrap();
+        drop(sender);
+
+        let mut worker_config = config(1);
+        worker_config.maximum_dirty_age = Duration::from_secs(60);
+        work::<_, TestEvents, OrderedCheckpoints>(receiver, worker_config, (), (), Arc::clone(&context));
+
+        assert_eq!(*context.lock().unwrap(), vec![7, 9]);
+    }
+
+    #[test]
+    fn ready_batches_are_inserted_before_one_checkpoint_update() {
+        let (sender, receiver) = unbounded();
+        let context = Arc::new(Mutex::new(Vec::new()));
+        sender.send(batch(1, 1)).unwrap();
+        sender.send(batch(2, 1)).unwrap();
+        drop(sender);
+
+        work::<_, TestEvents, TestCheckpoints>(receiver, config(1), (), (), Arc::clone(&context));
+
+        assert_eq!(*context.lock().unwrap(), vec![vec![1, 2]]);
+    }
+
+    #[test]
+    fn one_batch_cycle_limit_preserves_one_replay_per_ready_batch() {
+        let (sender, receiver) = unbounded();
+        let context = Arc::new(Mutex::new(Vec::new()));
+        sender.send(batch(1, 1)).unwrap();
+        sender.send(batch(2, 1)).unwrap();
+        drop(sender);
+
+        work_with_batch_limit::<_, TestEvents, TestCheckpoints>(receiver, config(1), (), (), Arc::clone(&context), 1);
+
+        assert_eq!(*context.lock().unwrap(), vec![vec![1], vec![1, 2]]);
+    }
+
+    #[test]
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_work() {
         let mut criterion = Criterion::default();
@@ -371,6 +414,42 @@ mod tests {
                 BatchSize::LargeInput,
             );
         });
+        criterion.final_summary();
+    }
+
+    #[test]
+    #[ignore = "inline Criterion benchmark"]
+    fn benchmark_spacetime_shaped_replay_cycles() {
+        let mut criterion =
+            Criterion::default().sample_size(10).warm_up_time(Duration::from_millis(100)).measurement_time(Duration::from_secs(2));
+
+        for batch_count in [2, 200] {
+            let effect_count = 1_000;
+            let mut group = criterion.benchmark_group(format!("worker/work/spacetime_shape/{batch_count}_batches/{effect_count}_effects"));
+            group.sampling_mode(SamplingMode::Flat);
+            group.throughput(Throughput::Elements((batch_count * effect_count) as u64));
+            for (name, maximum_batches_per_cycle) in [("one_batch_cycles", 1), ("ready_batch_cycle", usize::MAX)] {
+                group.bench_function(name, |bencher| {
+                    bencher.iter_batched(
+                        || spacetime_batches(batch_count, effect_count),
+                        |receiver| {
+                            let total_effects = Arc::new(AtomicUsize::new(0));
+                            work_with_batch_limit::<_, SpaceTimeEvents, SpaceTimeCheckpoints>(
+                                receiver,
+                                config(1),
+                                (),
+                                (),
+                                Arc::clone(&total_effects),
+                                maximum_batches_per_cycle,
+                            );
+                            black_box(total_effects.load(Ordering::Relaxed));
+                        },
+                        BatchSize::LargeInput,
+                    );
+                });
+            }
+            group.finish();
+        }
         criterion.final_summary();
     }
 }

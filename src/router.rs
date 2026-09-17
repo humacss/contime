@@ -9,9 +9,8 @@ mod partition;
 pub use partition::RoutePartitionBenchmark;
 use partition::RoutePartitioner;
 
-use crate::batch::{group_inputs_by_snapshot, SnapshotInputBatch};
+use crate::batch::{prepare_inputs_by_snapshot, PreparedRequest};
 use crate::memory::MemoryTracker;
-use crate::worker::Completion;
 use crate::{ApplyWrapper, EventRejection, InputLanes, SnapshotLanes, Worker, WorkerInbound};
 
 #[derive(Debug)]
@@ -51,25 +50,30 @@ where
         Self { router: Router::with_history_horizon(worker_count, memory_budget_bytes, lower_time_horizon_delta) }
     }
 
-    pub fn prepare_snapshot_batches<I>(&self, inputs: I) -> Vec<SnapshotInputBatch<IL>>
+    pub fn prepare_snapshot_batches<I>(&self, inputs: I) -> PreparedRequest<IL>
     where
         I: IntoIterator<Item = IL>,
     {
-        group_inputs_by_snapshot::<SL, IL, I>(inputs)
+        prepare_inputs_by_snapshot::<SL, IL, I>(inputs)
     }
 
-    pub fn apply_snapshot_batches(&self, batches: Vec<SnapshotInputBatch<IL>>) -> Vec<EventRejection> {
+    pub fn apply_snapshot_batches(&self, request: PreparedRequest<IL>) -> Vec<EventRejection> {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
-        let expected =
-            self.router.dispatch_snapshot_batches(batches, Some(&response_tx)).expect("benchmark router workers remain connected");
-        drop(response_tx);
+        self.router.dispatch_prepared_request(request, response_tx).expect("benchmark router workers remain connected");
         let mut rejections = Vec::new();
-        for _ in 0..expected {
-            rejections.extend(response_rx.recv().expect("each benchmark worker completes its batch"));
+        for worker_rejections in response_rx {
+            rejections.extend(worker_rejections);
         }
         rejections.sort_unstable();
         rejections.dedup();
         rejections
+    }
+
+    pub fn apply_inputs<I>(&self, inputs: I) -> Vec<EventRejection>
+    where
+        I: IntoIterator<Item = IL>,
+    {
+        self.apply_snapshot_batches(self.prepare_snapshot_batches(inputs))
     }
 
     pub fn snapshot_ids_on_distinct_workers(&self) -> [u128; 2] {
@@ -198,30 +202,27 @@ where
         self.memory.clone()
     }
 
-    pub(crate) fn dispatch_snapshot_batches(
+    pub(crate) fn dispatch_prepared_request(
         &self,
-        batches: Vec<SnapshotInputBatch<IL>>,
-        response: Option<&Sender<Vec<EventRejection>>>,
-    ) -> Result<usize, RouterError> {
-        let worker_inputs = self.partitioner.partition_snapshot_batches(batches);
+        request: PreparedRequest<IL>,
+        completion: Sender<Vec<EventRejection>>,
+    ) -> Result<(), RouterError> {
+        let worker_inputs = self.partitioner.partition_prepared_request(request);
 
-        let mut affected_workers = 0;
         for (worker_index, worker_batch) in worker_inputs.into_iter().enumerate() {
-            if worker_batch.snapshot_batches.is_empty() {
+            let Some(worker_batch) = worker_batch else {
                 continue;
-            }
-            let completion = response.map_or(Completion::None, |response| Completion::Respond(response.clone()));
+            };
             self.workers[worker_index]
                 .worker_inbound_tx
                 .send(WorkerInbound::Inputs {
                     snapshot_batches: worker_batch.snapshot_batches,
                     conservative_bytes: worker_batch.conservative_bytes,
-                    completion,
+                    completion: completion.clone(),
                 })
                 .map_err(|_| RouterError::WorkerUnavailable)?;
-            affected_workers += 1;
         }
-        Ok(affected_workers)
+        Ok(())
     }
 
     pub(crate) fn dispatch_query(

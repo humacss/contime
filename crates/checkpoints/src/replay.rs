@@ -52,7 +52,9 @@ where
 
         let bucket_count = u64::try_from(bucket.len()).expect("event bucket length exceeded u64");
         let history_event_count = session.advance_event_count(bucket_count);
-        crate::apply(session.snapshot_mut(), EventBatch { snapshot_id, time: bucket_time, events: &bucket }, history_event_count, wrapper);
+        let mut inner = crate::ApplyInner::new(session.snapshot_mut(), history_event_count);
+        wrapper.replay_event_batch(EventBatch { snapshot_id, time: bucket_time, events: &bucket }, &mut inner);
+        assert!(inner.has_applied(), "a replay wrapper must call the inner apply at least once per event batch");
 
         next_event = event_iter.next();
         if next_event.is_some() {

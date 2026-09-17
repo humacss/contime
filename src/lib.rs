@@ -17,10 +17,12 @@
 //! Markers are global temporal records routed into replay batches for custom
 //! [`ApplyWrapper`] interpretation; they never apply to snapshots directly.
 //!
-//! The apply pipeline is `API inputs -> snapshot batches -> worker messages ->
-//! snapshot histories`. [`Input::conservative_size`] accounts for retained
-//! input bytes, while [`Event::conservative_allocation_size`] separately
-//! accounts for snapshot-state allocation caused by applying an event.
+//! The apply pipeline is `API inputs -> snapshot-ID batch map -> affected-worker
+//! messages -> snapshot histories`. Independent snapshot order is irrelevant;
+//! each history canonicalizes inputs by `(time, input ID)`. [`Input::conservative_size`]
+//! provides the conservative retained input size ConTime reserves once per routed snapshot history.
+//! Materialized checkpoints reserve their exact conservative snapshot size
+//! when a worker retains them.
 //!
 //! # Where To Start
 //!
@@ -67,7 +69,7 @@ use worker::{Worker, WorkerInbound};
 pub use api::CompletionBenchmark;
 pub use api::{Contime, ContimeError};
 #[doc(hidden)]
-pub use batch::{SnapshotBatchBenchmark, SnapshotInputBatch};
+pub use batch::{PreparedRequest, SnapshotBatchBenchmark, SnapshotInputBatch};
 #[doc(hidden)]
 pub use contime_macros::__lanes_merge;
 pub use contime_macros::{lanes, ContimeEvent, ContimeSnapshot};

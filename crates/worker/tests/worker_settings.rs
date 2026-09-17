@@ -86,19 +86,16 @@ fn run_hot_snapshot(replays_per_receive: usize) -> Vec<Vec<u128>> {
 }
 
 #[test]
-fn zero_replays_per_receive_batches_hot_snapshot_until_disconnect() {
-    assert_eq!(run_hot_snapshot(0), vec![(0..10).collect::<Vec<_>>()]);
+fn ready_batches_replay_their_changed_snapshot_once() {
+    let expected = vec![(0..10).collect::<Vec<_>>()];
+
+    for old_replay_budget in [0, 1, 4] {
+        assert_eq!(run_hot_snapshot(old_replay_budget), expected);
+    }
 }
 
 #[test]
-fn one_replay_per_receive_updates_hot_snapshot_after_every_batch() {
-    let expected = (1..=10).map(|length| (0..length).collect::<Vec<_>>()).collect::<Vec<_>>();
-
-    assert_eq!(run_hot_snapshot(1), expected);
-}
-
-#[test]
-fn replay_budget_controls_updates_across_four_hot_snapshots() {
+fn one_ready_cycle_replays_each_changed_snapshot_once() {
     fn replay_count(replays_per_receive: usize) -> usize {
         let (sender, receiver) = unbounded();
         for input_id in 0..10 {
@@ -112,9 +109,9 @@ fn replay_budget_controls_updates_across_four_hot_snapshots() {
         replay_count
     }
 
-    assert_eq!(replay_count(0), 4);
-    assert_eq!(replay_count(1), 13);
-    assert_eq!(replay_count(4), 40);
+    for old_replay_budget in [0, 1, 4] {
+        assert_eq!(replay_count(old_replay_budget), 4);
+    }
 }
 
 #[test]
