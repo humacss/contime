@@ -108,6 +108,13 @@ where
     fn apply_event_batch(&mut self, batch: EventBatch<'_, S::Time, E>, apply_inner: &mut ApplyInner<'_, S>) {
         apply_inner.apply_event_batch(batch);
     }
+
+    /// Applies a batch while replaying changes to retained event history.
+    /// Override to publish effects after application. Queries and retention
+    /// reconstruction call only `apply_event_batch`, never this hook.
+    fn replay_event_batch(&mut self, batch: EventBatch<'_, S::Time, E>, apply_inner: &mut ApplyInner<'_, S>) {
+        self.apply_event_batch(batch, apply_inner);
+    }
 }
 
 impl<S, E> ApplyWrapper<S, E> for () where S: ApplyEvents<E> {}

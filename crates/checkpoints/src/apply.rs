@@ -23,14 +23,29 @@ where
     where
         S: ApplyEvents<E>,
     {
+        self.apply_event_batch_with(batch, S::apply_events)
+    }
+
+    /// Applies a batch with a caller-supplied function, which may borrow external
+    /// execution context. The function must preserve deterministic snapshot
+    /// results across live and reconstruction replay. Empty batches do not invoke
+    /// it. Timestamp assignment and participation accounting remain owned here.
+    pub fn apply_event_batch_with<E>(
+        &mut self,
+        batch: EventBatch<'_, S::Time, E>,
+        apply: impl FnOnce(&mut S, ApplyBatch<'_, S::Time, E>),
+    ) -> u64 {
         if !batch.events.is_empty() {
             let time = batch.time.clone();
-            self.snapshot.apply_events(ApplyBatch {
-                snapshot_id: batch.snapshot_id,
-                time: batch.time,
-                history_event_count: self.history_event_count,
-                events: batch.events,
-            });
+            apply(
+                self.snapshot,
+                ApplyBatch {
+                    snapshot_id: batch.snapshot_id,
+                    time: batch.time,
+                    history_event_count: self.history_event_count,
+                    events: batch.events,
+                },
+            );
             self.snapshot.set_time(time);
         }
 
@@ -66,6 +81,33 @@ mod tests {
     use criterion::Criterion;
 
     use super::apply;
+
+    #[test]
+    fn callback_borrows_context_and_preserves_apply_bookkeeping() {
+        let mut snapshot = TestSnapshot::default();
+        let context = 3;
+        let event = TestEvent(2);
+        let events = [&event];
+        let mut inner = crate::ApplyInner::new(&mut snapshot, 7);
+        let count = inner.apply_event_batch_with(EventBatch { snapshot_id: 1, time: 10, events: &events }, |snapshot, batch| {
+            assert_eq!(snapshot.time, 0);
+            assert_eq!(batch.history_event_count, 7);
+            snapshot.sum += batch.events[0].0 * context;
+        });
+        assert_eq!(count, 7);
+        assert!(inner.has_applied());
+        assert_eq!(inner.snapshot().sum, 6);
+        assert_eq!(inner.snapshot().time, 10);
+        let mut empty_snapshot = TestSnapshot::default();
+        let mut empty = crate::ApplyInner::new(&mut empty_snapshot, 7);
+        assert!(!empty.has_applied());
+        empty.apply_event_batch_with::<TestEvent>(EventBatch { snapshot_id: 1, time: 20, events: &[] }, |_, _| {
+            panic!("empty batch must not call apply")
+        });
+        assert!(empty.has_applied());
+        assert_eq!(empty.history_event_count(), 7);
+        assert_eq!(empty.snapshot().time, 0);
+    }
     use crate::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, EventBatch, Snapshot};
 
     #[derive(Clone)]

@@ -78,8 +78,11 @@ impl InputLanes<ManualSnapshot> for ManualInput {
 }
 
 #[test]
-fn manual_input_lanes_keep_a_zero_allocation_default() {
+fn manual_marker_lanes_need_no_apply_allocation_contract() {
     let input = ManualInput { id: 1, time: 10 };
+    let snapshot = ManualSnapshot::default();
 
-    assert_eq!(<ManualInput as InputLanes<ManualSnapshot>>::conservative_allocation_size(&input), 0);
+    assert!(!<ManualInput as InputLanes<ManualSnapshot>>::is_event(&input));
+    assert_eq!(24, input.conservative_size());
+    assert_eq!(24, snapshot.conservative_size());
 }

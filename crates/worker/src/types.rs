@@ -251,18 +251,19 @@ pub(crate) struct NotificationId {
 pub(crate) struct SnapshotSlot<S, K, C, R> {
     pub(crate) events: Option<S>,
     pub(crate) checkpoints: Option<K>,
+    pub(crate) dirty: bool,
     pub(crate) waiters: Vec<Request<C, R>>,
     pub(crate) notification_ids: Vec<NotificationId>,
 }
 
 impl<S, K, C, R> SnapshotSlot<S, K, C, R> {
     pub(crate) const fn metadata_only() -> Self {
-        Self { events: None, checkpoints: None, waiters: Vec::new(), notification_ids: Vec::new() }
+        Self { events: None, checkpoints: None, dirty: false, waiters: Vec::new(), notification_ids: Vec::new() }
     }
 
     #[cfg(test)]
     pub(crate) fn with_events(events: S) -> Self {
-        Self { events: Some(events), checkpoints: None, waiters: Vec::new(), notification_ids: Vec::new() }
+        Self { events: Some(events), checkpoints: None, dirty: false, waiters: Vec::new(), notification_ids: Vec::new() }
     }
 }
 
@@ -277,7 +278,9 @@ pub(crate) fn new_request<C, R>(completion: C) -> Request<C, R> {
 }
 
 pub(crate) fn register_waiter<S, K, C, R>(slot: &mut SnapshotSlot<S, K, C, R>, request: &Request<C, R>) {
-    if slot.waiters.iter().any(|waiter| Rc::ptr_eq(waiter, request)) {
+    // A worker inserts every route for one request contiguously. If this
+    // request already waits on the snapshot, it is therefore the last waiter.
+    if slot.waiters.last().is_some_and(|waiter| Rc::ptr_eq(waiter, request)) {
         return;
     }
 
@@ -328,6 +331,7 @@ mod tests {
 
         assert!(slot.events.is_none());
         assert!(slot.checkpoints.is_none());
+        assert!(!slot.dirty);
         assert!(slot.waiters.is_empty());
         assert!(slot.notification_ids.is_empty());
     }

@@ -54,6 +54,29 @@ fn inputs() -> Vec<TestInputLanes> {
     (1..=3).map(|event_id| TestEvent::Positive(7, 10, event_id, 1).into()).collect()
 }
 
+fn warm_input() -> TestInputLanes {
+    TestEvent::Positive(7, 1, 1, 1).into()
+}
+
+fn measured_input() -> TestInputLanes {
+    TestEvent::Positive(7, 2, 2, 1).into()
+}
+
+#[test]
+fn benchmark_adapters_apply_a_real_warm_input_before_measured_work() {
+    let router = RouterApplyBenchmark::<TestSnapshotLanes, TestInputLanes>::new(1, MEMORY_BUDGET_BYTES, 100);
+    assert!(router.apply_inputs([warm_input()]).is_empty());
+    assert!(router.apply_inputs([measured_input()]).is_empty());
+    let router_snapshot: TestSnapshot = router.snapshot_at(7, 2).unwrap().into();
+    assert_eq!(router_snapshot.sum, 2);
+
+    let worker = WorkerApplyBenchmark::<TestSnapshotLanes, TestInputLanes>::new(MEMORY_BUDGET_BYTES, 100);
+    assert!(worker.apply_inputs(7, [warm_input()]).is_empty());
+    assert!(worker.apply_inputs(7, [measured_input()]).is_empty());
+    let worker_snapshot: TestSnapshot = worker.snapshot_at(7, 2).unwrap().into();
+    assert_eq!(worker_snapshot.sum, 2);
+}
+
 #[test]
 fn worker_applies_pre_grouped_snapshot_batches_without_regrouping() {
     let worker = WorkerApplyBenchmark::<TestSnapshotLanes, TestInputLanes>::new(MEMORY_BUDGET_BYTES, 100);

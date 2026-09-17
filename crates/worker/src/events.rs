@@ -1,18 +1,15 @@
 use std::collections::hash_map::Entry;
-use std::time::Instant;
 
 use ahash::AHashMap;
 
-use crate::schedule::Schedule;
 use crate::types::{finish_if_ready, new_request, register_waiter, ApplyInput, Completion, Events, Request, RouteInput, SnapshotSlot};
 
 pub(crate) fn insert_batch<B, S, K>(
     batch: B,
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, B::Completion, S::Rejection>>,
-    schedule: &mut Schedule,
+    dirty_snapshot_ids: &mut Vec<u128>,
     events_config: &S::Config,
     horizon: &S::Time,
-    now: Instant,
 ) where
     B: ApplyInput,
     S: Events<<B::Route as RouteInput>::Input>,
@@ -21,7 +18,7 @@ pub(crate) fn insert_batch<B, S, K>(
     let (inputs, completion) = batch.into_parts();
     let request = new_request(completion);
     for routed in inputs {
-        insert_event(routed, &request, snapshots, schedule, events_config, horizon, now);
+        insert_event(routed, &request, snapshots, dirty_snapshot_ids, events_config, horizon);
     }
     finish_if_ready(&request);
 }
@@ -30,10 +27,9 @@ fn insert_event<R, S, K, C>(
     routed: R,
     request: &Request<C, S::Rejection>,
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, S::Rejection>>,
-    schedule: &mut Schedule,
+    dirty_snapshot_ids: &mut Vec<u128>,
     events_config: &S::Config,
     horizon: &S::Time,
-    now: Instant,
 ) where
     R: RouteInput,
     S: Events<R::Input>,
@@ -50,7 +46,10 @@ fn insert_event<R, S, K, C>(
     request.borrow_mut().rejections.extend(result.rejections);
 
     if result.changed {
-        schedule.mark_dirty(snapshot_id, now);
+        if !slot.dirty {
+            slot.dirty = true;
+            dirty_snapshot_ids.push(snapshot_id);
+        }
         register_waiter(slot, request);
     }
 }
@@ -66,7 +65,6 @@ mod tests {
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use super::insert_batch;
-    use crate::schedule::Schedule;
     use crate::types::SnapshotSlot;
     use crate::{ApplyBatch, ApplyInput, EventInsert, Events, RouteInput, RoutedInput};
 
@@ -180,11 +178,11 @@ mod tests {
         let (completion, _responses) = unbounded();
         let batch = AdapterBatch { inputs: vec![AdapterRoute { snapshot_id: 7, input: TestInput(9) }], completion };
         let mut snapshots = AHashMap::new();
-        let mut schedule = Schedule::new(usize::MAX, 2);
-
-        insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
+        let mut dirty = Vec::new();
+        insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut dirty, &(), &0);
 
         assert_eq!(snapshots.get(&7).unwrap().events.as_ref().unwrap().0, vec![9]);
+        assert_eq!(dirty, vec![7]);
     }
 
     #[test]
@@ -192,11 +190,11 @@ mod tests {
         let (completion, _responses) = unbounded();
         let batch = ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestInput(9) }], completion };
         let mut snapshots = AHashMap::new();
-        let mut schedule = Schedule::new(usize::MAX, 2);
-
-        insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
+        let mut dirty = Vec::new();
+        insert_batch::<_, DirectEvents, ()>(batch, &mut snapshots, &mut dirty, &(), &0);
 
         assert_eq!(snapshots.get(&7).unwrap().events.as_ref().unwrap().0, vec![9]);
+        assert_eq!(dirty, vec![7]);
     }
 
     #[test]
@@ -205,12 +203,12 @@ mod tests {
         let batch = ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestInput(9) }], completion };
         let observed = Arc::new(Mutex::new(Vec::new()));
         let mut snapshots = AHashMap::new();
-        let mut schedule = Schedule::new(usize::MAX, 2);
-
-        insert_batch::<_, HorizonEvents, ()>(batch, &mut snapshots, &mut schedule, &observed, &55, Instant::now());
+        let mut dirty = Vec::new();
+        insert_batch::<_, HorizonEvents, ()>(batch, &mut snapshots, &mut dirty, &observed, &55);
 
         assert_eq!(*observed.lock().unwrap(), vec![55]);
         assert_eq!(snapshots.get(&7).unwrap().events.as_ref().unwrap().horizon, 55);
+        assert_eq!(dirty, vec![7]);
     }
 
     fn batch(count: u128) -> (ApplyBatch<TestInput, crossbeam_channel::Sender<Vec<()>>>, crossbeam_channel::Receiver<Vec<()>>) {
@@ -223,12 +221,12 @@ mod tests {
     fn events_are_inserted_without_completing_before_checkpoints_update() {
         let (batch, responses) = batch(2);
         let mut snapshots = AHashMap::new();
-        let mut schedule = Schedule::new(usize::MAX, 2);
-
-        insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
+        let mut dirty = Vec::new();
+        insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut dirty, &(), &0);
 
         assert_eq!(snapshots.get(&7).unwrap().events.as_ref().unwrap().0, vec![0, 1]);
-        assert!(!schedule.is_empty());
+        assert_eq!(dirty, vec![7]);
+        assert!(snapshots.get(&7).unwrap().dirty);
         assert_eq!(responses.try_recv(), Err(TryRecvError::Empty));
     }
 
@@ -239,23 +237,23 @@ mod tests {
         criterion.bench_function("worker/events/1000_inputs/one_snapshot", |bencher| {
             let mut snapshots = AHashMap::new();
             snapshots.insert(7, SnapshotSlot::<TestEvents, (), _, ()>::with_events(TestEvents(Vec::with_capacity(1_000))));
-            let mut schedule = Schedule::new(usize::MAX, 2);
-
             bencher.iter_custom(|iterations| {
                 let mut measured = Duration::ZERO;
+                let mut dirty = Vec::new();
                 for _ in 0..iterations {
                     let batch = batch(1_000).0;
                     let started = Instant::now();
-                    insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut schedule, &(), &0, Instant::now());
+                    insert_batch::<_, TestEvents, ()>(batch, &mut snapshots, &mut dirty, &(), &0);
+                    black_box(&dirty);
                     measured += started.elapsed();
 
                     let slot = snapshots.get_mut(&7).unwrap();
                     slot.events.as_mut().unwrap().0.clear();
                     slot.waiters.clear();
-                    while schedule.pop_largest(Instant::now()).is_some() {}
-                    schedule.is_empty();
+                    slot.dirty = false;
+                    dirty.clear();
                 }
-                black_box((&snapshots, &schedule));
+                black_box(&snapshots);
                 measured
             });
         });

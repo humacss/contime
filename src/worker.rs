@@ -1,13 +1,11 @@
 use std::collections::hash_map::Entry;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use ahash::AHashMap;
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::batch::{group_inputs_by_snapshot, memory_full_rejections, total_conservative_bytes, SnapshotInputBatch};
+use crate::batch::{prepare_inputs_by_snapshot, SnapshotInputBatch};
 use crate::memory::MemoryTracker;
 use crate::rejection::merge_event_rejections;
 use crate::{ApplyWrapper, ContimeTime, EventRejection, EventRejectionReason, InputLanes, SnapshotHistory, SnapshotLanes};
@@ -25,13 +23,8 @@ where
     worker: Worker<SL, IL, C>,
 }
 
-pub enum Completion<T> {
-    None,
-    Respond(Sender<T>),
-}
-
 pub enum WorkerInbound<SL: SnapshotLanes, IL> {
-    Inputs { snapshot_batches: Vec<SnapshotInputBatch<IL>>, conservative_bytes: u64, completion: Completion<Vec<EventRejection>> },
+    Inputs { snapshot_batches: Vec<(u128, SnapshotInputBatch<IL>)>, conservative_bytes: u64, completion: Sender<Vec<EventRejection>> },
     SnapshotsAt { snapshot_requests: Vec<(usize, u128)>, time: SL::Time, reply: Sender<Vec<(usize, Option<SL>)>> },
     AdvanceTime { time: SL::Time, reply: Sender<()> },
     Shutdown,
@@ -45,7 +38,6 @@ where
 {
     pub worker_inbound_tx: Sender<WorkerInbound<SL, IL>>,
     threads: Vec<JoinHandle<()>>,
-    is_running: Arc<AtomicBool>,
     _context: PhantomData<C>,
 }
 
@@ -56,7 +48,6 @@ where
     C: ApplyWrapper<SL>,
 {
     fn drop(&mut self) {
-        self.is_running.store(false, Ordering::Relaxed);
         let _ = self.worker_inbound_tx.send(WorkerInbound::<SL, IL>::Shutdown);
 
         for thread in self.threads.drain(..) {
@@ -80,13 +71,11 @@ where
         lower_time_horizon_delta: SL::Time,
         apply_context: C,
     ) -> Self {
-        let is_running = Arc::new(AtomicBool::new(true));
-        let worker_running = Arc::clone(&is_running);
         let thread = thread::spawn(move || {
-            handle_worker(worker_running, worker_inbound_rx, memory, lower_time_horizon_delta, apply_context);
+            handle_worker(worker_inbound_rx, memory, lower_time_horizon_delta, apply_context);
         });
 
-        Self { worker_inbound_tx, threads: vec![thread], is_running, _context: PhantomData }
+        Self { worker_inbound_tx, threads: vec![thread], _context: PhantomData }
     }
 }
 
@@ -109,25 +98,33 @@ where
     IL: InputLanes<SL> + Send + 'static,
     C: ApplyWrapper<SL> + Send + 'static,
 {
-    pub fn prepare_snapshot_batch<I>(&self, snapshot_id: u128, inputs: I) -> SnapshotInputBatch<IL>
+    pub fn prepare_snapshot_batch<I>(&self, snapshot_id: u128, inputs: I) -> (u128, SnapshotInputBatch<IL>)
     where
         I: IntoIterator<Item = IL>,
     {
-        let mut batches = group_inputs_by_snapshot::<SL, IL, I>(inputs);
-        assert_eq!(batches.len(), 1, "a direct worker fixture must prepare exactly one snapshot batch");
-        let batch = batches.pop().expect("one prepared snapshot batch");
-        assert_eq!(batch.snapshot_id, snapshot_id, "the prepared worker batch routed to another snapshot");
+        let request = prepare_inputs_by_snapshot::<SL, IL, I>(inputs);
+        assert_eq!(request.snapshots.len(), 1, "a direct worker fixture must prepare exactly one snapshot batch");
+        let batch = request.snapshots.into_iter().next().expect("one prepared snapshot batch");
+        assert_eq!(batch.0, snapshot_id, "the prepared worker batch routed to another snapshot");
         batch
     }
 
-    pub fn apply_snapshot_batches(&self, snapshot_batches: Vec<SnapshotInputBatch<IL>>) -> Vec<EventRejection> {
+    pub fn apply_snapshot_batches(&self, snapshot_batches: Vec<(u128, SnapshotInputBatch<IL>)>) -> Vec<EventRejection> {
         let (response_tx, response_rx) = crossbeam_channel::unbounded();
-        let conservative_bytes = total_conservative_bytes(&snapshot_batches);
+        let conservative_bytes = snapshot_batches.iter().fold(0_u64, |total, (_, batch)| total.saturating_add(batch.conservative_bytes));
         self.worker
             .worker_inbound_tx
-            .send(WorkerInbound::Inputs { snapshot_batches, conservative_bytes, completion: Completion::Respond(response_tx) })
+            .send(WorkerInbound::Inputs { snapshot_batches, conservative_bytes, completion: response_tx })
             .expect("benchmark worker remains connected");
-        response_rx.recv().expect("benchmark worker returns one completion")
+        response_rx.into_iter().flatten().collect()
+    }
+
+    pub fn apply_inputs<I>(&self, snapshot_id: u128, inputs: I) -> Vec<EventRejection>
+    where
+        I: IntoIterator<Item = IL>,
+    {
+        let batch = self.prepare_snapshot_batch(snapshot_id, inputs);
+        self.apply_snapshot_batches(vec![batch])
     }
 
     pub fn warm_up(&self, time: SL::Time) {
@@ -155,7 +152,6 @@ where
 }
 
 fn handle_worker<SL, IL, C>(
-    is_running: Arc<AtomicBool>,
     worker_inbound_rx: Receiver<WorkerInbound<SL, IL>>,
     memory: MemoryTracker,
     lower_time_horizon_delta: SL::Time,
@@ -168,11 +164,9 @@ fn handle_worker<SL, IL, C>(
     let mut history_by_id = AHashMap::<SnapshotId, SnapshotHistory<SL>>::new();
     let mut current_time = SL::Time::default();
 
-    while is_running.load(Ordering::Relaxed) {
-        let inbound = worker_inbound_rx.recv();
-
+    while let Ok(inbound) = worker_inbound_rx.recv() {
         match inbound {
-            Ok(WorkerInbound::AdvanceTime { time: new_time, reply }) => {
+            WorkerInbound::AdvanceTime { time: new_time, reply } => {
                 current_time = new_time.clone();
                 for history in history_by_id.values_mut() {
                     let bytes_delta = history.advance_with_context(new_time.clone(), &mut apply_context);
@@ -180,52 +174,24 @@ fn handle_worker<SL, IL, C>(
                 }
                 let _ = reply.send(());
             }
-            Ok(WorkerInbound::Inputs { snapshot_batches, conservative_bytes, completion }) => {
-                let existing_replay_bytes = snapshot_batches.iter().fold(0_u64, |total, batch| {
-                    total.saturating_add(
-                        history_by_id
-                            .get(&batch.snapshot_id)
-                            .map_or(0, |history| history.conservative_replay_reservation(batch.apply_allocation_bytes)),
-                    )
-                });
-                let reservation_bytes = conservative_bytes.saturating_add(existing_replay_bytes);
-                if !memory.try_reserve(reservation_bytes) {
-                    complete(completion, memory_full_rejections(&snapshot_batches));
+            WorkerInbound::Inputs { snapshot_batches, conservative_bytes, completion } => {
+                if !memory.try_reserve(conservative_bytes) {
+                    complete(completion, memory_full_rejections_for_worker(&snapshot_batches));
                     continue;
                 }
 
-                let mut actual_delta = 0_i64;
-                let mut rejections = Vec::new();
-                for batch in snapshot_batches {
-                    if let Some(stale_rejections) = stale_unseen_batch_rejections(
-                        history_by_id.contains_key(&batch.snapshot_id),
-                        &batch,
-                        current_time.clone(),
-                        lower_time_horizon_delta.clone(),
-                    ) {
-                        merge_event_rejections(&mut rejections, stale_rejections);
-                        continue;
-                    }
-                    let history = match history_by_id.entry(batch.snapshot_id) {
-                        Entry::Occupied(entry) => entry.into_mut(),
-                        Entry::Vacant(entry) => {
-                            let (history, base_delta) = SnapshotHistory::new_with_snapshot_id(
-                                batch.snapshot_id,
-                                current_time.clone(),
-                                lower_time_horizon_delta.clone(),
-                            );
-                            actual_delta = actual_delta.saturating_add(base_delta);
-                            entry.insert(history)
-                        }
-                    };
-                    let result = history.apply_routed_input_batch(batch.inputs, &mut apply_context);
-                    actual_delta = actual_delta.saturating_add(result.bytes_delta);
-                    merge_event_rejections(&mut rejections, result.rejections);
-                }
-                memory.reconcile_reservation(reservation_bytes, actual_delta);
-                complete(completion, rejections);
+                let result = apply_snapshot_batches(
+                    snapshot_batches,
+                    &mut history_by_id,
+                    current_time.clone(),
+                    lower_time_horizon_delta.clone(),
+                    &mut apply_context,
+                    &memory,
+                );
+                memory.reconcile_reservation(conservative_bytes, result.actual_delta);
+                complete(completion, result.rejections);
             }
-            Ok(WorkerInbound::SnapshotsAt { snapshot_requests, time, reply }) => {
+            WorkerInbound::SnapshotsAt { snapshot_requests, time, reply } => {
                 let mut results = Vec::with_capacity(snapshot_requests.len());
                 for (position, snapshot_id) in snapshot_requests {
                     let snapshot = history_by_id
@@ -235,9 +201,55 @@ fn handle_worker<SL, IL, C>(
                 }
                 let _ = reply.send(results);
             }
-            Ok(WorkerInbound::Shutdown) | Err(_) => return,
+            WorkerInbound::Shutdown => break,
         }
     }
+}
+
+struct WorkerApplyResult {
+    actual_delta: i64,
+    rejections: Vec<EventRejection>,
+}
+
+fn apply_snapshot_batches<SL, IL, C>(
+    snapshot_batches: Vec<(u128, SnapshotInputBatch<IL>)>,
+    history_by_id: &mut AHashMap<SnapshotId, SnapshotHistory<SL>>,
+    current_time: SL::Time,
+    lower_time_horizon_delta: SL::Time,
+    apply_context: &mut C,
+    memory: &MemoryTracker,
+) -> WorkerApplyResult
+where
+    SL: SnapshotLanes<Input = IL> + 'static,
+    IL: InputLanes<SL>,
+    C: ApplyWrapper<SL>,
+{
+    let mut actual_delta = 0_i64;
+    let mut rejections = Vec::new();
+    for (snapshot_id, batch) in snapshot_batches {
+        if let Some(stale_rejections) = stale_unseen_batch_rejections(
+            history_by_id.contains_key(&snapshot_id),
+            &batch,
+            current_time.clone(),
+            lower_time_horizon_delta.clone(),
+        ) {
+            merge_event_rejections(&mut rejections, stale_rejections);
+            continue;
+        }
+        let history = match history_by_id.entry(snapshot_id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let (history, base_delta) =
+                    SnapshotHistory::new_with_snapshot_id(snapshot_id, current_time.clone(), lower_time_horizon_delta.clone());
+                actual_delta = actual_delta.saturating_add(base_delta);
+                entry.insert(history)
+            }
+        };
+        let result = history.apply_routed_input_batch_with_memory(batch.inputs, apply_context, memory);
+        actual_delta = actual_delta.saturating_add(result.bytes_delta);
+        merge_event_rejections(&mut rejections, result.rejections);
+    }
+    WorkerApplyResult { actual_delta, rejections }
 }
 
 fn stale_unseen_batch_rejections<SL, IL>(
@@ -261,9 +273,22 @@ where
         .then(|| batch.inputs.iter().map(|input| EventRejection::new(input.id(), EventRejectionReason::BeforeHistoryHorizon)).collect())
 }
 
-fn complete<T>(completion: Completion<T>, value: T) {
-    if let Completion::Respond(response) = completion {
-        let _ = response.send(value);
+fn memory_full_rejections_for_worker<IL>(snapshot_batches: &[(u128, SnapshotInputBatch<IL>)]) -> Vec<EventRejection>
+where
+    IL: crate::Input,
+{
+    let mut input_ids = Vec::new();
+    for (_, batch) in snapshot_batches {
+        batch.unique_input_ids(&mut input_ids);
+    }
+    input_ids.sort_unstable();
+    input_ids.dedup();
+    input_ids.into_iter().map(|event_id| EventRejection::new(event_id, EventRejectionReason::MemoryFull)).collect()
+}
+
+fn complete(completion: Sender<Vec<EventRejection>>, rejections: Vec<EventRejection>) {
+    if !rejections.is_empty() {
+        let _ = completion.send(rejections);
     }
 }
 
@@ -271,31 +296,40 @@ fn complete<T>(completion: Completion<T>, value: T) {
 mod tests {
     use crossbeam_channel::{bounded, TryRecvError};
 
-    use super::{complete, stale_unseen_batch_rejections, Completion};
-    use crate::batch::group_inputs_by_snapshot;
+    use super::{complete, stale_unseen_batch_rejections};
+    use crate::batch::prepare_inputs_by_snapshot;
     use crate::{EventRejection, EventRejectionReason, TestEvent, TestInputLanes, TestSnapshotLanes};
 
     #[test]
-    fn responding_completion_sends_exactly_one_batch_result() {
+    fn rejection_completion_sends_the_rejections_before_disconnect() {
         let (response_tx, response_rx) = bounded(2);
         let expected = vec![EventRejection::new(7, EventRejectionReason::MemoryFull)];
 
-        complete(Completion::Respond(response_tx.clone()), expected.clone());
+        complete(response_tx, expected.clone());
 
         assert_eq!(response_rx.recv().unwrap(), expected);
-        assert_eq!(response_rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(response_rx.try_recv(), Err(TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn successful_completion_sends_no_value_before_disconnect() {
+        let (response_tx, response_rx) = bounded(1);
+
+        complete(response_tx, Vec::<EventRejection>::new());
+
+        assert_eq!(response_rx.try_recv(), Err(TryRecvError::Disconnected));
     }
 
     #[test]
     fn stale_only_batch_for_unseen_snapshot_is_rejected_before_history_creation() {
-        let mut batches = group_inputs_by_snapshot::<TestSnapshotLanes, TestInputLanes, _>([
+        let request = prepare_inputs_by_snapshot::<TestSnapshotLanes, TestInputLanes, _>([
             TestEvent::Positive(7, 49, 11, 1).into(),
             TestEvent::Positive(7, 20, 12, 1).into(),
         ]);
-        let batch = batches.pop().unwrap();
+        let batch = request.snapshots.get(&7).unwrap();
 
         assert_eq!(
-            stale_unseen_batch_rejections(false, &batch, 100, 50),
+            stale_unseen_batch_rejections(false, batch, 100, 50),
             Some(vec![
                 EventRejection::new(11, EventRejectionReason::BeforeHistoryHorizon),
                 EventRejection::new(12, EventRejectionReason::BeforeHistoryHorizon),

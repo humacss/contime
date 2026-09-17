@@ -6,8 +6,6 @@ mod checkpoints;
 mod events;
 mod listen;
 mod query;
-mod queue;
-mod schedule;
 mod types;
 mod work;
 

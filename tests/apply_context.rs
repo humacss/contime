@@ -410,7 +410,7 @@ fn query_materialization_does_not_run_after_apply() {
 }
 
 #[test]
-fn send_event_returns_after_enqueue_without_waiting_for_apply() {
+fn send_returns_after_enqueue_and_success_is_completion_by_disconnect() {
     let (entered_tx, entered_rx) = flume::bounded(1);
     let (release_tx, release_rx) = flume::bounded(1);
     let applied = Arc::new(Mutex::new(Vec::new()));
@@ -420,12 +420,15 @@ fn send_event_returns_after_enqueue_without_waiting_for_apply() {
         BlockingApplyTrace { entered_tx, release_rx, applied: Arc::clone(&applied) },
     );
 
-    contime.send([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }].map(Into::into)).unwrap();
+    let (completion_tx, completion_rx) = crossbeam_channel::unbounded();
+    contime.send([OnContextValueChanged { event_id: 10, time: 10, entity_id: 3, value: 10 }].map(Into::into), completion_tx).unwrap();
 
     entered_rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
     assert!(applied.lock().unwrap().is_empty());
+    assert_eq!(completion_rx.try_recv(), Err(crossbeam_channel::TryRecvError::Empty));
 
     release_tx.send(()).unwrap();
+    assert_eq!(completion_rx.recv_timeout(std::time::Duration::from_secs(1)), Err(crossbeam_channel::RecvTimeoutError::Disconnected),);
     let snapshot = contime.query_at(11, &[3]).unwrap().pop().flatten().unwrap();
     assert_eq!(snapshot, SnapshotLanes::ContextValueAt(ContextValueAt { entity_id: 3, time: 11, value: 10 }));
 }

@@ -1,12 +1,10 @@
 use ahash::AHashMap;
 
 use crate::checkpoints::update_snapshot;
-use crate::schedule::Schedule;
 use crate::types::{AdvanceTime, Checkpoints, Completion, Events, ReplayUpdate, SnapshotSlot};
 
 pub(crate) fn advance_worker<I, S, K, C, R, F>(
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
-    schedule: &mut Schedule,
     checkpoints_config: &K::Config,
     checkpoints_context: &mut K::Context,
     current_time: &mut S::Time,
@@ -33,11 +31,10 @@ pub(crate) fn advance_worker<I, S, K, C, R, F>(
         .iter()
         .filter_map(|(snapshot_id, slot)| {
             let events = slot.events.as_ref()?;
-            (schedule.is_dirty(*snapshot_id) && events.dirty_time() < horizon).then_some(*snapshot_id)
+            (slot.dirty && events.dirty_time() < horizon).then_some(*snapshot_id)
         })
         .collect::<Vec<_>>();
     for snapshot_id in replay_ids {
-        schedule.take(snapshot_id);
         let update = update_snapshot(snapshot_id, snapshots, checkpoints_config, checkpoints_context);
         on_replayed(update, snapshots);
     }
@@ -57,13 +54,11 @@ pub(crate) fn advance_worker<I, S, K, C, R, F>(
 mod tests {
     use std::hint::black_box;
     use std::sync::{Arc, Mutex};
-    use std::time::Instant;
 
     use ahash::AHashMap;
     use criterion::{BatchSize, Criterion, Throughput};
     use crossbeam_channel::{unbounded, TryRecvError};
 
-    use crate::schedule::Schedule;
     use crate::types::SnapshotSlot;
     use crate::{Checkpoints, EventInsert, Events};
 
@@ -121,12 +116,9 @@ mod tests {
 
     fn fixture(
         dirty_time: i64,
-        scheduled: bool,
-    ) -> (
-        AHashMap<u128, SnapshotSlot<TestEvents, TestCheckpoints, crossbeam_channel::Sender<Vec<()>>, ()>>,
-        Schedule,
-        Arc<Mutex<Vec<&'static str>>>,
-    ) {
+        dirty: bool,
+    ) -> (AHashMap<u128, SnapshotSlot<TestEvents, TestCheckpoints, crossbeam_channel::Sender<Vec<()>>, ()>>, Arc<Mutex<Vec<&'static str>>>)
+    {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut snapshots = AHashMap::new();
         snapshots.insert(
@@ -136,18 +128,15 @@ mod tests {
                 checkpoints: Some(TestCheckpoints { log: Arc::clone(&log) }),
                 waiters: Vec::new(),
                 notification_ids: Vec::new(),
+                dirty,
             },
         );
-        let mut schedule = Schedule::new(usize::MAX, 2);
-        if scheduled {
-            schedule.mark_dirty(7, Instant::now());
-        }
-        (snapshots, schedule, log)
+        (snapshots, log)
     }
 
     #[test]
     fn advance_replays_before_anchor_and_event_pruning() {
-        let (mut snapshots, mut schedule, log) = fixture(5, true);
+        let (mut snapshots, log) = fixture(5, true);
         let mut current_time = 0;
         let mut horizon = 0;
         let (completion, done) = unbounded::<()>();
@@ -155,7 +144,6 @@ mod tests {
 
         super::advance_worker::<TestInput, _, _, _, _, _>(
             &mut snapshots,
-            &mut schedule,
             &Arc::clone(&log),
             &mut (),
             &mut current_time,
@@ -175,13 +163,12 @@ mod tests {
 
     #[test]
     fn dirty_state_at_the_horizon_remains_scheduled() {
-        let (mut snapshots, mut schedule, _log) = fixture(10, true);
+        let (mut snapshots, _log) = fixture(10, true);
         let mut current_time = 0;
         let mut horizon = 0;
 
         super::advance_worker::<TestInput, _, _, _, _, _>(
             &mut snapshots,
-            &mut schedule,
             &Arc::new(Mutex::new(Vec::new())),
             &mut (),
             &mut current_time,
@@ -192,18 +179,17 @@ mod tests {
             &mut |_, _| {},
         );
 
-        assert!(schedule.take(7));
+        assert!(snapshots.get(&7).unwrap().dirty);
     }
 
     #[test]
     fn older_advancement_is_a_successful_no_op() {
-        let (mut snapshots, mut schedule, log) = fixture(5, true);
+        let (mut snapshots, log) = fixture(5, true);
         let mut current_time = 100;
         let mut horizon = 90;
 
         super::advance_worker::<TestInput, _, _, _, _, _>(
             &mut snapshots,
-            &mut schedule,
             &Arc::clone(&log),
             &mut (),
             &mut current_time,
@@ -268,10 +254,8 @@ mod tests {
 
     type BenchSnapshots = AHashMap<u128, SnapshotSlot<BenchEvents, BenchCheckpoints, crossbeam_channel::Sender<Vec<()>>, ()>>;
 
-    fn benchmark_fixture(with_checkpoints: bool, dirty: bool) -> (BenchSnapshots, Schedule) {
+    fn benchmark_fixture(with_checkpoints: bool, dirty: bool) -> BenchSnapshots {
         let mut snapshots = AHashMap::with_capacity(1_000);
-        let mut schedule = Schedule::new(usize::MAX, 2);
-        let now = Instant::now();
         for snapshot_id in 0..1_000_u128 {
             snapshots.insert(
                 snapshot_id,
@@ -280,13 +264,11 @@ mod tests {
                     checkpoints: with_checkpoints.then_some(BenchCheckpoints),
                     waiters: Vec::new(),
                     notification_ids: Vec::new(),
+                    dirty,
                 },
             );
-            if dirty {
-                schedule.mark_dirty(snapshot_id, now);
-            }
         }
-        (snapshots, schedule)
+        snapshots
     }
 
     #[test]
@@ -299,13 +281,12 @@ mod tests {
             group.bench_function(name, |bencher| {
                 bencher.iter_batched(
                     || benchmark_fixture(with_checkpoints, dirty),
-                    |(mut snapshots, mut schedule)| {
+                    |mut snapshots| {
                         let mut current_time = 0;
                         let mut horizon = 0;
                         let mut context = 0;
                         super::advance_worker::<TestInput, _, _, _, _, _>(
                             &mut snapshots,
-                            &mut schedule,
                             &(),
                             &mut context,
                             &mut current_time,
@@ -315,7 +296,7 @@ mod tests {
                             (),
                             &mut |_, _| {},
                         );
-                        black_box((snapshots, schedule, context));
+                        black_box((snapshots, context));
                     },
                     BatchSize::LargeInput,
                 );

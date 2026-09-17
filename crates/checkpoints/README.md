@@ -15,7 +15,17 @@ independent traits.
 - Resume from the latest retained checkpoint before the dirty timestamp.
 - Replay complete same-time event buckets in canonical order.
 - Pass each canonical timestamp bucket through an injectable apply wrapper.
+- Retained-history replay calls `ApplyWrapper::replay_event_batch`, whose default
+  delegates to `apply_event_batch`. Query and retention reconstruction call only
+  ordinary apply. Consumers attach effect emission to the replay hook, keeping
+  reconstruction read-only without global suppression flags.
 - Allow wrappers to inspect, filter, or partition effective event batches.
+- `ApplyInner::apply_event_batch_with(batch, callback)` permits application with
+  borrowed caller context. Existing `apply_event_batch` delegates to this hook.
+  ConTime still assigns time after nonempty application and records participation
+  for empty batches without calling the callback. History counts are unchanged.
+  Context is not checkpointed; callbacks must produce identical state during
+  live and reconstruction replay, regardless of external cache contents.
 - Move the mutable tip forward in place until its event interval is full.
 - Preserve a full tip as a fixed checkpoint and append the next tip.
 - Correct existing checkpoints in place when late events require replay.

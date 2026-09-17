@@ -331,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_budget_sends_deferred_snapshots_in_a_later_notification() {
+    fn one_apply_batch_sends_one_notification_regardless_of_the_old_replay_budget() {
         let (input, receiver) = unbounded();
         let (notifications, observed) = unbounded();
         input.send(Message::Listen(Listen { time: 0, snapshot_ids: vec![1, 2, 3], listener: TestListener(notifications) })).unwrap();
@@ -349,15 +349,67 @@ mod tests {
         work_messages::<_, TestEvents, TestCheckpoints>(receiver, worker_config, (), 0, (), ());
 
         assert!(matches!(observed.recv().unwrap(), ListenerMessage::Registered { .. }));
-        let first = observed.recv().unwrap();
-        let second = observed.recv().unwrap();
-        let ListenerMessage::Replayed { snapshot_ids: first, .. } = first else { panic!("expected replay") };
-        let ListenerMessage::Replayed { snapshot_ids: second, .. } = second else { panic!("expected replay") };
-        assert_eq!(first.len(), 1);
-        assert_eq!(second.len(), 2);
-        let mut replayed = first.into_iter().chain(second).collect::<Vec<_>>();
+        let ListenerMessage::Replayed { snapshot_ids: mut replayed, .. } = observed.recv().unwrap() else { panic!("expected replay") };
         replayed.sort_unstable();
         assert_eq!(replayed, vec![1, 2, 3]);
+        assert!(observed.try_recv().is_err());
+    }
+
+    #[test]
+    fn adjacent_apply_messages_share_one_replay_cycle() {
+        let (input, receiver) = unbounded();
+        let (notifications, observed) = unbounded();
+        input.send(Message::Listen(Listen { time: 0, snapshot_ids: vec![7], listener: TestListener(notifications) })).unwrap();
+
+        let (first_completion, first_done) = unbounded();
+        input
+            .send(Message::Apply(ApplyBatch {
+                inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }],
+                completion: first_completion,
+            }))
+            .unwrap();
+        let (second_completion, second_done) = unbounded();
+        input
+            .send(Message::Apply(ApplyBatch {
+                inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(2) }],
+                completion: second_completion,
+            }))
+            .unwrap();
+        drop(input);
+
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), ());
+
+        assert!(matches!(observed.recv().unwrap(), ListenerMessage::Registered { .. }));
+        assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 0, snapshot_ids: vec![7] });
+        assert!(observed.try_recv().is_err());
+        assert_eq!(first_done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+        assert_eq!(second_done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn a_query_is_an_apply_cycle_barrier() {
+        let (input, receiver) = unbounded();
+        let (first_completion, _first_done) = unbounded();
+        input
+            .send(Message::Apply(ApplyBatch {
+                inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }],
+                completion: first_completion,
+            }))
+            .unwrap();
+        let (snapshot_response, snapshots) = unbounded();
+        input.send(Message::Snapshots(SnapshotQuery { response: snapshot_response })).unwrap();
+        let (second_completion, _second_done) = unbounded();
+        input
+            .send(Message::Apply(ApplyBatch {
+                inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(2) }],
+                completion: second_completion,
+            }))
+            .unwrap();
+        drop(input);
+
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), ());
+
+        assert_eq!(*snapshots.recv().unwrap()[0], TestSnapshot { snapshot_id: 7, count: 1 });
     }
 
     struct BenchmarkSnapshotQuery;
@@ -403,6 +455,7 @@ mod tests {
             crate::types::SnapshotSlot::<TestEvents, TestCheckpoints, Completion, ()> {
                 events: Some(TestEvents((0..1_000).map(TestEvent).collect())),
                 checkpoints: Some(TestCheckpoints),
+                dirty: false,
                 waiters: Vec::new(),
                 notification_ids: Vec::new(),
             },

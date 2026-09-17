@@ -1,10 +1,10 @@
 use ahash::RandomState;
 
-use crate::batch::{group_inputs_by_snapshot, SnapshotInputBatch};
+use crate::batch::{prepare_inputs_by_snapshot, PreparedRequest, SnapshotInputBatch};
 use crate::{InputLanes, SnapshotLanes};
 
 pub(crate) struct WorkerInputBatch<IL> {
-    pub(crate) snapshot_batches: Vec<SnapshotInputBatch<IL>>,
+    pub(crate) snapshot_batches: Vec<(u128, SnapshotInputBatch<IL>)>,
     pub(crate) conservative_bytes: u64,
 }
 
@@ -27,18 +27,15 @@ impl RoutePartitioner {
         self.hasher.hash_one(snapshot_id) as usize % self.worker_count
     }
 
-    pub(crate) fn partition_snapshot_batches<IL>(&self, batches: Vec<SnapshotInputBatch<IL>>) -> Vec<WorkerInputBatch<IL>> {
-        let batch_capacity = batches.len().div_ceil(self.worker_count);
+    pub(crate) fn partition_prepared_request<IL>(&self, request: PreparedRequest<IL>) -> Vec<Option<WorkerInputBatch<IL>>> {
         let mut worker_batches = Vec::with_capacity(self.worker_count);
-        worker_batches.resize_with(self.worker_count, || WorkerInputBatch {
-            snapshot_batches: Vec::with_capacity(batch_capacity),
-            conservative_bytes: 0,
-        });
+        worker_batches.resize_with(self.worker_count, || None);
 
-        for batch in batches {
-            let worker = &mut worker_batches[self.worker_index(batch.snapshot_id)];
+        for (snapshot_id, batch) in request.snapshots {
+            let worker = worker_batches[self.worker_index(snapshot_id)]
+                .get_or_insert_with(|| WorkerInputBatch { snapshot_batches: Vec::new(), conservative_bytes: 0 });
             worker.conservative_bytes = worker.conservative_bytes.saturating_add(batch.conservative_bytes);
-            worker.snapshot_batches.push(batch);
+            worker.snapshot_batches.push((snapshot_id, batch));
         }
 
         worker_batches
@@ -56,19 +53,25 @@ impl RoutePartitionBenchmark {
         Self { partitioner: RoutePartitioner::new(worker_count) }
     }
 
-    pub fn prepare<SL, IL, I>(&self, inputs: I) -> Vec<SnapshotInputBatch<IL>>
+    pub fn prepare<SL, IL, I>(&self, inputs: I) -> PreparedRequest<IL>
     where
         SL: SnapshotLanes<Input = IL>,
         IL: InputLanes<SL>,
         I: IntoIterator<Item = IL>,
     {
-        group_inputs_by_snapshot::<SL, IL, I>(inputs)
+        prepare_inputs_by_snapshot::<SL, IL, I>(inputs)
     }
 
-    pub fn partition<IL>(&self, batches: Vec<SnapshotInputBatch<IL>>) -> (usize, usize) {
-        let worker_batches = self.partitioner.partition_snapshot_batches(batches);
-        let affected_workers = worker_batches.iter().filter(|batch| !batch.snapshot_batches.is_empty()).count();
-        let snapshot_batches = worker_batches.iter().map(|batch| batch.snapshot_batches.len()).sum();
+    pub fn partition<IL>(&self, request: PreparedRequest<IL>) -> (usize, usize) {
+        let worker_batches = self.partitioner.partition_prepared_request(request);
+        let affected_workers = worker_batches.iter().flatten().count();
+        let snapshot_batches = worker_batches.iter().flatten().map(|batch| batch.snapshot_batches.len()).sum();
         (affected_workers, snapshot_batches)
+    }
+
+    pub fn partition_storage<IL>(&self, request: PreparedRequest<IL>) -> (usize, usize) {
+        let worker_batches = self.partitioner.partition_prepared_request(request);
+        let initialized_workers = worker_batches.iter().flatten().count();
+        (worker_batches.len(), initialized_workers)
     }
 }

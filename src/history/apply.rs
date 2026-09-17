@@ -4,6 +4,7 @@ use super::checkpoints::{
     apply_events_to_checkpoint, commit_applied_checkpoint, get_checkpoint_for_apply, AppliedCheckpoint, CheckpointForApply,
 };
 use super::LocalSnapshotHistory;
+use crate::memory::MemoryTracker;
 
 /// The public primitive for applying effective event batches within one raw history bucket.
 pub struct ApplyInner<'a, S>
@@ -102,9 +103,10 @@ where
         C: ApplyWrapper<S>,
     {
         let applied_batch = self.insert_input_batch(inputs);
-        self.apply_inserted_input_batch(applied_batch, context)
+        self.apply_inserted_input_batch(applied_batch, context, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn apply_routed_input_batch<C>(&mut self, inputs: Vec<S::Input>, context: &mut C) -> HistoryApplyResult
     where
         C: ApplyWrapper<S>,
@@ -119,11 +121,40 @@ where
                 true
             }
         });
-        let bytes_delta = self.apply_inserted_input_batch(applied_batch, context);
+        let bytes_delta = self.apply_inserted_input_batch(applied_batch, context, None);
         HistoryApplyResult { bytes_delta, rejections }
     }
 
-    fn apply_inserted_input_batch<C>(&mut self, applied_batch: InsertedInputBatch<S::Time>, context: &mut C) -> i64
+    pub(crate) fn apply_routed_input_batch_with_memory<C>(
+        &mut self,
+        inputs: Vec<S::Input>,
+        context: &mut C,
+        memory: &MemoryTracker,
+    ) -> HistoryApplyResult
+    where
+        C: ApplyWrapper<S>,
+    {
+        let earliest_retained_time = self.earliest_retained_time();
+        let mut rejections = Vec::new();
+        let applied_batch = self.insert_input_batch_filter(inputs, |input| {
+            if input.time() < earliest_retained_time {
+                rejections.push(EventRejection::new(input.id(), EventRejectionReason::BeforeHistoryHorizon));
+                false
+            } else {
+                true
+            }
+        });
+        let input_bytes_delta = applied_batch.bytes_delta;
+        self.apply_inserted_input_batch(applied_batch, context, Some(memory));
+        HistoryApplyResult { bytes_delta: input_bytes_delta, rejections }
+    }
+
+    fn apply_inserted_input_batch<C>(
+        &mut self,
+        applied_batch: InsertedInputBatch<S::Time>,
+        context: &mut C,
+        memory: Option<&MemoryTracker>,
+    ) -> i64
     where
         C: ApplyWrapper<S>,
     {
@@ -142,10 +173,18 @@ where
                 .drain(..)
                 .map(|(_key, checkpoint, _history_input_count)| super::checkpoint_conservative_size(&checkpoint) as i64)
                 .sum::<i64>();
+            if let Some(memory) = memory {
+                memory.release(checkpoint_bytes as u64);
+                return applied_batch.bytes_delta;
+            }
             return applied_batch.bytes_delta - checkpoint_bytes;
         };
         let applied_checkpoint = self.apply_inputs_to_checkpoint(checkpoint, context);
-        applied_batch.bytes_delta + self.commit_applied_checkpoint(applied_checkpoint)
+        let checkpoint_delta = match memory {
+            Some(memory) => self.commit_applied_checkpoint_with_memory(applied_checkpoint, memory),
+            None => self.commit_applied_checkpoint(applied_checkpoint),
+        };
+        applied_batch.bytes_delta + checkpoint_delta
     }
 
     fn get_checkpoint_for_apply(
@@ -167,6 +206,10 @@ where
 
     fn commit_applied_checkpoint(&mut self, applied_checkpoint: AppliedCheckpoint<S>) -> i64 {
         commit_applied_checkpoint(self, applied_checkpoint)
+    }
+
+    fn commit_applied_checkpoint_with_memory(&mut self, applied_checkpoint: AppliedCheckpoint<S>, memory: &MemoryTracker) -> i64 {
+        super::checkpoints::commit_applied_checkpoint_with_memory(self, applied_checkpoint, memory)
     }
 
     fn insert_input_batch(&mut self, inputs: Vec<S::Input>) -> InsertedInputBatch<S::Time> {

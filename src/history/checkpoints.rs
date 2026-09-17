@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::ops::Bound;
 
+use crate::memory::MemoryTracker;
 use crate::{ApplyInner, ApplyWrapper, ContimeKey, ContimeTime, InputBatch, InputLanes, Snapshot, SnapshotLanes};
 
 use super::storage::LocalSnapshotHistory;
@@ -228,6 +229,58 @@ where
     }
 
     bytes_delta
+}
+
+pub(super) fn commit_applied_checkpoint_with_memory<S>(
+    history: &mut LocalSnapshotHistory<S>,
+    applied_checkpoint: AppliedCheckpoint<S>,
+    memory: &MemoryTracker,
+) -> i64
+where
+    S: SnapshotLanes + 'static,
+{
+    let mut bytes_delta = applied_checkpoint.bytes_delta;
+
+    if let Some(stale_start) = applied_checkpoint.stale_start {
+        let removed_delta = drain_checkpoints_from(&mut history.checkpoints, stale_start);
+        memory.release(removed_delta.unsigned_abs());
+        bytes_delta += removed_delta;
+    }
+
+    for (key, checkpoint, history_input_count) in applied_checkpoint.materialized_checkpoints {
+        bytes_delta += push_checkpoint_if_memory_allows(history, key, checkpoint, history_input_count, memory);
+    }
+
+    if let Some(latest_key) = applied_checkpoint.final_key {
+        if history.checkpoints.back().map(|(key, _checkpoint, _history_input_count)| key) != Some(&latest_key) {
+            bytes_delta += push_checkpoint_if_memory_allows(
+                history,
+                latest_key,
+                applied_checkpoint.final_snapshot,
+                applied_checkpoint.final_history_input_count,
+                memory,
+            );
+        }
+    }
+
+    bytes_delta
+}
+
+fn push_checkpoint_if_memory_allows<S>(
+    history: &mut LocalSnapshotHistory<S>,
+    key: ContimeKey<S::Time>,
+    checkpoint: S,
+    history_input_count: u64,
+    memory: &MemoryTracker,
+) -> i64
+where
+    S: SnapshotLanes + 'static,
+{
+    let checkpoint_bytes = checkpoint_conservative_size(&checkpoint);
+    if !memory.try_reserve(checkpoint_bytes) {
+        return 0;
+    }
+    push_checkpoint(&mut history.checkpoints, key, checkpoint, history_input_count)
 }
 
 fn get_recomputed_checkpoint_for_apply<S>(

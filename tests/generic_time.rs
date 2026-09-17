@@ -60,11 +60,7 @@ impl Input for CompositeEvent {
     }
 }
 
-impl Event for CompositeEvent {
-    fn conservative_allocation_size(&self) -> u64 {
-        std::mem::size_of::<i32>() as u64
-    }
-}
+impl Event for CompositeEvent {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CompositeSnapshot {

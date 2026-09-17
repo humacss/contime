@@ -20,6 +20,8 @@ for adapting independently defined message types and choosing where
 ## Initial scope
 
 - Receive complete apply batches without owning the worker thread.
+- Coalesce adjacent, immediately available apply messages into one worker
+  cycle without crossing query, listener, or advancement barriers.
 - Insert each routed input directly into its snapshot event store.
 - Keep canonical event insertion separate from checkpoint materialization.
 - Prefer the dirty snapshot with the largest pending input count.
@@ -47,10 +49,11 @@ Input and checkpoint ownership, memory accounting, and admission policy remain
 orchestrator concerns. The worker only coordinates the implementations supplied
 through its event-store and checkpoint traits.
 
-The receive timeout is always derived from the oldest dirty timestamp. A batch
-arrival inserts its history and triggers up to `replays_per_receive` replays. A
-timeout replays every snapshot whose deadline has passed before calculating the
-next deadline.
+Each apply cycle inserts every adjacent message already waiting in the worker
+queue, then replays each changed snapshot once. Per-request completion and
+rejection state remains independent even when several requests share a replay.
+A query, listener registration, or horizon advancement ends the current apply
+cycle and observes all preceding work before later applies are consumed.
 
 Worker-local time advancement is monotonic. The worker derives its horizon
 from `current_time.saturating_sub(history_retention)`, forces replay only for a
@@ -112,22 +115,14 @@ the supplied checkpoint implementation, boxing, and the response callback. The
 event case includes one history lookup, range filtering, cloning 1,000 handles,
 and the response callback. Neither case includes router or API transport.
 
-Local release-mode Criterion results on 2026-08-29:
+Local release-mode Criterion results on 2026-09-03 compare immediate replay
+with ready-batch coalescing. All 1,000 batches are queued before worker entry;
+the checkpoint implementation records one inexpensive update per replay.
 
-| Public workload | Replays per receive | Time | Routed inputs/s |
+| Public workload | Immediate replay | Coalesced cycle | Improvement |
 | --- | ---: | ---: | ---: |
-| 1,000 batches, one snapshot/input | 0 | 354.77 us | 2.82 million |
-| 1,000 batches, one snapshot/input | 1 | 164.18 us | 6.09 million |
-| 1,000 batches, one snapshot/input | 4 | 187.52 us | 5.33 million |
-| 1,000 batches, one snapshot/input | 16 | 187.54 us | 5.33 million |
-| 1,000 batches, four snapshots/inputs | 0 | 1.0931 ms | 3.66 million |
-| 1,000 batches, four snapshots/inputs | 1 | 385.83 us | 10.37 million |
-| 1,000 batches, four snapshots/inputs | 4 | 443.26 us | 9.02 million |
-| 1,000 batches, four snapshots/inputs | 16 | 461.30 us | 8.67 million |
-
-One replay per receive was fastest in both current integration workloads. The
-setting remains configurable because replay cost and snapshot fan-out are
-consumer-dependent.
+| 1,000 batches, one snapshot/input | 113.70 us | 88.778 us | 21.9% |
+| 1,000 batches, four snapshots/inputs | 170.07 us | 115.64 us | 32.0% |
 
 ### Input ownership comparison
 

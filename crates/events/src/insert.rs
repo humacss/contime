@@ -172,6 +172,11 @@ mod tests {
         (history, events)
     }
 
+    fn empty_ordered_fixture() -> (EventHistory<TestEvent>, Vec<TestEvent>) {
+        let events = (0..1_000).map(|value| event(value, value as i64)).collect();
+        (EventHistory::with_horizon(0), events)
+    }
+
     fn benchmark_fixture(criterion: &mut Criterion, name: &str, fixture: fn() -> (EventHistory<TestEvent>, Vec<TestEvent>)) {
         criterion.bench_function(&format!("events/insert/1000_{name}"), |bencher| {
             bencher.iter_batched(
@@ -195,6 +200,32 @@ mod tests {
         benchmark_fixture(&mut criterion, "ordered", ordered_fixture);
         benchmark_fixture(&mut criterion, "late", late_fixture);
         benchmark_fixture(&mut criterion, "duplicate", duplicate_fixture);
+
+        criterion.bench_function("events/insert/1000_ordered_unreserved", |bencher| {
+            bencher.iter_batched(
+                empty_ordered_fixture,
+                |(mut history, events)| {
+                    for event in events {
+                        black_box(history.insert(event));
+                    }
+                    black_box(history)
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        criterion.bench_function("events/insert/1000_ordered_reserved_in_timed_path", |bencher| {
+            bencher.iter_batched(
+                empty_ordered_fixture,
+                |(mut history, events)| {
+                    history.reserve(events.len());
+                    for event in events {
+                        black_box(history.insert(event));
+                    }
+                    black_box(history)
+                },
+                BatchSize::LargeInput,
+            );
+        });
 
         criterion.final_summary();
     }
