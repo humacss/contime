@@ -9,7 +9,7 @@ where
 {
     /// Creates an empty checkpoint store for one snapshot ID.
     pub fn new(snapshot_id: u128, config: CheckpointConfig) -> Self {
-        Self { snapshot_id, interval: config.interval, anchor: None, checkpoints: VecDeque::new() }
+        Self { snapshot_id, interval: config.interval, anchor: None, checkpoints: VecDeque::new(), retained_horizon: None }
     }
 
     pub fn snapshot_id(&self) -> u128 {
