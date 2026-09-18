@@ -45,6 +45,14 @@ closure signals that every affected worker has completed.
 Query reconstruction is read-only: it does not modify retained checkpoints,
 acknowledge event history, force replay, or change worker scheduling.
 
+## Explicit idle wait
+
+`wait_until_idle(Duration)` waits until queued and active work has finished,
+returning `Ok(())`, `IdleError::Timeout`, or an immediate
+`IdleError::ComponentStopped` if a router/worker exits. For tests, stop submitting work, wait,
+then query and assert. Waiting does not advance time, prune history, or change
+ordinary query behavior; a timeout stops waiting without cancelling processing.
+
 ## Deferred scope
 
 - Cross-worker transactional admission

@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use contime_memory::{ConservativeTrackedSize, TrackedArc};
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, Sender};
 
 /// Process-wide conservative memory accounting shared by every core adapter.
 #[derive(Clone)]
@@ -173,12 +173,13 @@ where
 }
 
 /// Deterministic router execution supplied to the runtime.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RouterProcess<I, S>
 where
     I: Input,
 {
     pub(crate) seed: u64,
+    pub(crate) activity: Receiver<Sender<bool>>,
     pub(crate) input: PhantomData<fn() -> (I, S)>,
 }
 
@@ -193,6 +194,7 @@ where
     pub(crate) history_retention: I::Time,
     pub(crate) budget: MemoryBudget,
     pub(crate) wrapper: W,
+    pub(crate) activity: Receiver<Sender<bool>>,
     pub(crate) types: PhantomData<fn() -> (I, S)>,
 }
 
@@ -216,5 +218,7 @@ where
 {
     pub(crate) runtime: contime_runtime::Runtime<RouterMessage<I, S>, contime_router::RouterError, std::convert::Infallible>,
     pub(crate) budget: MemoryBudget,
+    pub(crate) subscriptions: Vec<Sender<Sender<bool>>>,
+    pub(crate) queues: Vec<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub(crate) types: PhantomData<fn() -> (S, W)>,
 }

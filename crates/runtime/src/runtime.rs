@@ -19,6 +19,12 @@ impl<I> fmt::Display for RuntimeSendError<I> {
 impl<I> std::error::Error for RuntimeSendError<I> where I: fmt::Debug {}
 
 impl<I, RE, WE> Runtime<I, RE, WE> {
+    /// Read-only emptiness checks. A stopped queue returns false; these handles
+    /// do not keep receivers connected and do not consume messages.
+    pub fn queue_checks(&self) -> &[std::sync::Arc<dyn Fn() -> bool + Send + Sync>] {
+        &self.queue_checks
+    }
+
     /// Borrows the shared input sender consumed by all routers.
     pub fn input(&self) -> &Sender<I> {
         &self.input
@@ -121,7 +127,7 @@ mod tests {
     fn send_returns_the_input_when_the_shared_queue_is_closed() {
         let (input, receiver) = crossbeam_channel::unbounded();
         drop(receiver);
-        let runtime = Runtime::<u64, (), ()> { input, routers: Vec::new(), workers: Vec::new() };
+        let runtime = Runtime::<u64, (), ()> { input, routers: Vec::new(), workers: Vec::new(), queue_checks: Vec::new() };
 
         let error = runtime.send(42).unwrap_err();
 

@@ -13,14 +13,35 @@ where
 {
     pub fn start(config: ConTimeConfig<I::Time>, wrapper: W) -> Result<Self, contime_runtime::StartError> {
         let budget = MemoryBudget::new(config.memory_limit, config.memory_buffer);
-        let routers = (0..config.router_count).map(|_| RouterProcess::<I, S>::new(config.router_seed)).collect();
+        let mut subscriptions = Vec::new();
+        let mut activity = || {
+            let (sender, registrations) = crossbeam_channel::unbounded();
+            subscriptions.push(sender);
+            registrations
+        };
+        let routers = (0..config.router_count)
+            .map(|_| {
+                let mut router = RouterProcess::<I, S>::new(config.router_seed);
+                router.activity = activity();
+                router
+            })
+            .collect();
         let workers = (0..config.worker_count)
             .map(|_| {
-                WorkerProcess::new(config.worker, config.checkpoints, config.history_retention.clone(), budget.clone(), wrapper.clone())
+                let mut worker = WorkerProcess::new(
+                    config.worker,
+                    config.checkpoints,
+                    config.history_retention.clone(),
+                    budget.clone(),
+                    wrapper.clone(),
+                );
+                worker.activity = activity();
+                worker
             })
             .collect();
         let runtime = contime_runtime::Runtime::start(routers, workers)?;
-        Ok(Self { runtime, budget, types: PhantomData })
+        let queues = runtime.queue_checks().to_vec();
+        Ok(Self { runtime, budget, subscriptions, queues, types: PhantomData })
     }
 }
 

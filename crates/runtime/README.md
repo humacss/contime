@@ -22,6 +22,12 @@ implementations to those contracts.
 The runtime owns thread and channel lifecycle only. It does not inspect,
 clone, route, apply, replay, or otherwise interpret messages.
 
+`queue_checks()` exposes read-only emptiness checks created with the queues:
+one for the shared router queue and one per worker. They retain only weak
+receiver references, so observation cannot keep a stopped queue connected.
+A stopped queue returns false. Queue emptiness alone does not establish idle;
+the caller must also account for active processing.
+
 The shared receiver guarantees that each input message is taken by exactly one
 router; it does not guarantee that several routers finish dispatching messages
 in receive order. Each worker channel preserves the order in which that worker

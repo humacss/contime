@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::unbounded;
@@ -51,10 +52,16 @@ where
     }
 
     let (input_sender, input_receiver) = unbounded::<R::Input>();
+    let input_receiver = Arc::new(input_receiver);
+    let weak = Arc::downgrade(&input_receiver);
+    let mut queue_checks: Vec<Arc<dyn Fn() -> bool + Send + Sync>> = vec![Arc::new(move || weak.upgrade().is_some_and(|q| q.is_empty()))];
     let mut worker_senders = Vec::with_capacity(workers.len());
     let mut worker_receivers = Vec::with_capacity(workers.len());
     for _ in 0..workers.len() {
         let (sender, receiver) = unbounded::<W::Input>();
+        let receiver = Arc::new(receiver);
+        let weak = Arc::downgrade(&receiver);
+        queue_checks.push(Arc::new(move || weak.upgrade().is_some_and(|q| q.is_empty())));
         worker_senders.push(sender);
         worker_receivers.push(Some(receiver));
     }
@@ -62,7 +69,7 @@ where
     let mut worker_handles = Vec::with_capacity(workers.len());
     for (index, worker) in workers.into_iter().enumerate() {
         let receiver = worker_receivers[index].take().expect("each worker receiver is consumed exactly once");
-        match deps.spawn(format!("contime-worker-{index}"), move || worker.run(receiver)) {
+        match deps.spawn(format!("contime-worker-{index}"), move || worker.run(receiver.as_ref().clone())) {
             Ok(handle) => worker_handles.push(handle),
             Err(source) => {
                 drop(input_sender);
@@ -80,7 +87,7 @@ where
     for (index, router) in routers.into_iter().enumerate() {
         let router_input = input_receiver.clone();
         let router_workers = worker_senders.clone();
-        match deps.spawn(format!("contime-router-{index}"), move || router.run(router_input, router_workers)) {
+        match deps.spawn(format!("contime-router-{index}"), move || router.run(router_input.as_ref().clone(), router_workers)) {
             Ok(handle) => router_handles.push(handle),
             Err(source) => {
                 drop(input_sender);
@@ -95,7 +102,7 @@ where
 
     drop(input_receiver);
     drop(worker_senders);
-    Ok(Runtime { input: input_sender, routers: router_handles, workers: worker_handles })
+    Ok(Runtime { input: input_sender, routers: router_handles, workers: worker_handles, queue_checks })
 }
 
 fn join_ignoring_outcomes<E>(handles: Vec<JoinHandle<Result<(), E>>>) {
@@ -144,9 +151,13 @@ mod tests {
     #[test]
     fn start_accepts_preassembled_router_and_worker_instances() {
         let runtime = Runtime::start(vec![TestRouter, TestRouter], vec![TestWorker]).unwrap();
-
+        let checks = runtime.queue_checks().to_vec();
+        assert_eq!(checks.len(), 2); // Shared router queue plus one worker queue.
+        assert!(checks.iter().all(|empty| empty()));
         let _input = runtime.input();
         let report = runtime.shutdown();
+        // Retaining inspection handles must not prevent shutdown/disconnection.
+        assert!(checks.iter().all(|empty| !empty()));
         assert_eq!(report.routers.len(), 2);
         assert_eq!(report.workers.len(), 1);
     }
