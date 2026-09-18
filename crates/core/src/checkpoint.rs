@@ -210,6 +210,36 @@ mod tests {
     }
 
     #[test]
+    fn retention_hook_size_changes_are_accounted_for() {
+        struct Compact;
+        impl contime_checkpoints::ApplyWrapper<TestSnapshot, TestInput> for Compact {
+            fn retain_snapshot(&mut self, snapshot: &mut TestSnapshot, _: &i64) {
+                snapshot.retained = 64;
+            }
+        }
+        let plain_budget = MemoryBudget::new(100_000, 1_000);
+        let compact_budget = MemoryBudget::new(100_000, 1_000);
+        let mut plain_history = history(&plain_budget, 2);
+        let mut compact_history = history(&compact_budget, 2);
+        let mut plain =
+            <CheckpointStorage<TestSnapshot, ()> as WorkerCheckpoints<History<TestInput>>>::create(7, &config(plain_budget.clone()));
+        let mut compact =
+            <CheckpointStorage<TestSnapshot, Compact> as WorkerCheckpoints<History<TestInput>>>::create(7, &config(compact_budget.clone()));
+        plain.update(&mut plain_history, &mut ());
+        compact.update(&mut compact_history, &mut Compact);
+        assert_eq!(plain_budget.used(), compact_budget.used());
+
+        plain.advance_before(&plain_history, &mut (), &1);
+        compact.advance_before(&compact_history, &mut Compact, &1);
+        // Anchor T0 retains 72 bytes, tip T1 retains 80. Both compact to 64.
+        assert_eq!(plain_budget.used() - compact_budget.used(), 24);
+        assert_eq!(compact.state.checkpoints.anchor().unwrap().snapshot.value, 1);
+        assert_eq!(compact.state.checkpoints.current().unwrap().snapshot.value, 2);
+        drop((plain, compact, plain_history, compact_history));
+        assert_eq!((plain_budget.used(), compact_budget.used()), (0, 0));
+    }
+
+    #[test]
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_checkpoint() {
         let mut criterion = Criterion::default();

@@ -9,6 +9,9 @@ where
     W: ApplyWrapper<S, E>,
     T: Clone + Default + Ord,
 {
+    if store.retained_horizon.as_ref().is_some_and(|previous| horizon <= previous) {
+        return AdvanceResult { removed_checkpoints: 0 };
+    }
     let checkpoint_index = store.checkpoints.partition_point(|checkpoint| checkpoint.key.time < *horizon).checked_sub(1);
     let (mut snapshot, mut boundary, mut history_event_count) = checkpoint_index.map_or_else(
         || {
@@ -55,12 +58,17 @@ where
         boundary = Some(bucket_last_key);
     }
 
-    if let Some(snapshot) = snapshot {
+    if let Some(mut snapshot) = snapshot {
+        wrapper.retain_snapshot(&mut snapshot, horizon);
         store.anchor = Some(ReplayAnchor { boundary, snapshot, history_event_count });
     }
 
     let removed_checkpoints = store.checkpoints.partition_point(|checkpoint| checkpoint.key.time < *horizon);
     store.checkpoints.drain(..removed_checkpoints);
+    for checkpoint in &mut store.checkpoints {
+        wrapper.retain_snapshot(&mut checkpoint.snapshot, horizon);
+    }
+    store.retained_horizon = Some(horizon.clone());
     AdvanceResult { removed_checkpoints }
 }
 
@@ -144,6 +152,52 @@ mod tests {
 
     fn events(count: u128) -> TestEvents {
         TestEvents { dirty_time: 0, events: (1..=count).map(|value| TestEvent { id: value, time: value as i64, value: 1 }).collect() }
+    }
+
+    #[test]
+    fn retention_hook_only_runs_for_retained_snapshots_during_pruning() {
+        #[derive(Default)]
+        struct Retention(Vec<(i64, i64)>);
+        impl crate::ApplyWrapper<TestSnapshot, TestEvent> for Retention {
+            fn retain_snapshot(&mut self, snapshot: &mut TestSnapshot, horizon: &i64) {
+                self.0.push((snapshot.time, *horizon));
+            }
+        }
+        let mut wrapper = Retention::default();
+        let mut events = events(100);
+        let mut store = CheckpointStore::new(7, CheckpointConfig { interval: 25 });
+        replay(&mut store, &mut events, &mut wrapper);
+        assert!(wrapper.0.is_empty());
+        assert_eq!(crate::query_at(&store, &events, &mut wrapper, 60).unwrap().sum, 60);
+        assert!(wrapper.0.is_empty());
+
+        advance_before(&mut store, &events, &mut wrapper, &60);
+        assert_eq!(wrapper.0, [(59, 60), (75, 60), (100, 60)]);
+        let anchor = store.anchor().unwrap();
+        assert_eq!(anchor.snapshot.time, 59);
+        assert_eq!(anchor.history_event_count, 59);
+        assert_eq!(
+            store.iter().map(|c| (c.key.time, c.snapshot.time, c.history_event_count)).collect::<Vec<_>>(),
+            [(75, 75, 75), (100, 100, 100)]
+        );
+
+        events.events.retain(|event| event.time >= 60);
+        let calls = wrapper.0.len();
+        advance_before(&mut store, &events, &mut wrapper, &60);
+        advance_before(&mut store, &events, &mut wrapper, &50);
+        assert_eq!(wrapper.0.len(), calls, "the pruning boundary did not advance");
+        events.events.push(TestEvent { id: 101, time: 60, value: 7 });
+        events.events.sort_by_key(|event| (event.time, event.id));
+        events.dirty_time = 60;
+        replay(&mut store, &mut events, &mut wrapper);
+        assert_eq!(crate::query_at(&store, &events, &mut wrapper, 100).unwrap().sum, 107);
+        assert_eq!(wrapper.0.len(), calls, "late replay and queries are not pruning");
+
+        advance_before(&mut store, &events, &mut wrapper, &110);
+        events.events.retain(|event| event.time >= 110);
+        wrapper.0.clear();
+        advance_before(&mut store, &events, &mut wrapper, &120);
+        assert_eq!(wrapper.0, [(100, 120)], "quiet histories still receive the new pruning boundary");
     }
 
     #[test]

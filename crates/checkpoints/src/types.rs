@@ -115,6 +115,14 @@ where
     fn replay_event_batch(&mut self, batch: EventBatch<'_, S::Time, E>, apply_inner: &mut ApplyInner<'_, S>) {
         self.apply_event_batch(batch, apply_inner);
     }
+
+    /// Compact consumer-owned data when the retained history boundary advances.
+    /// Called for the reconstructed replay anchor and every remaining checkpoint,
+    /// never during ordinary application, replay, or query reconstruction.
+    /// Preserve snapshot time and all state needed to query or replay at/after
+    /// `horizon`. Mutations must not affect clones held by other readers.
+    /// This hook must not emit events; its default is a no-op.
+    fn retain_snapshot(&mut self, _snapshot: &mut S, _horizon: &S::Time) {}
 }
 
 impl<S, E> ApplyWrapper<S, E> for () where S: ApplyEvents<E> {}
@@ -155,6 +163,7 @@ where
     pub(crate) interval: u64,
     pub(crate) anchor: Option<ReplayAnchor<S>>,
     pub(crate) checkpoints: VecDeque<Checkpoint<S>>,
+    pub(crate) retained_horizon: Option<S::Time>,
 }
 
 /// Checkpoint-owned state used while one replay walks canonical events.

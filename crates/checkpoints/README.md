@@ -41,6 +41,16 @@ into that anchor and removes older cadence checkpoints. Queries older than the
 anchor return the anchor as a best-effort result. Worker scheduling, event
 mutation, completion handling, and memory policy remain outside this crate.
 
+Wrappers may implement `retain_snapshot(snapshot, horizon)` to compact data
+inside the reconstructed anchor and every remaining checkpoint during pruning.
+It defaults to no-op and never runs during ordinary apply, replay, or queries.
+Repeated/older pruning horizons do nothing; a newer horizon invokes the hook
+even without new events. Preserve snapshot time and state/replay semantics at
+or after the boundary, and do not mutate shared values held by old readers.
+The hook is infallible and must not publish effects. Checkpoint keys and event
+counts are unchanged. ConTime Core accounts for size changes in its existing
+tracked checkpoint update.
+
 ## Unit benchmark snapshot
 
 Local release-mode Criterion results on 2026-08-29:
