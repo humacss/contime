@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -77,6 +78,7 @@ pub struct Runtime<I, RE, WE> {
     pub(crate) input: Sender<I>,
     pub(crate) routers: Vec<JoinHandle<Result<(), RE>>>,
     pub(crate) workers: Vec<JoinHandle<Result<(), WE>>>,
+    pub(crate) queue_checks: Vec<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 #[cfg(test)]

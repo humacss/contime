@@ -94,6 +94,86 @@ fn event_for(snapshot_id: u128, id: u128, time: u64, value: u64) -> TestEvent {
 }
 
 #[test]
+fn idle_wait_finishes_all_queued_batches_without_advancing_time() {
+    let core = ConTime::<TestEvent, TestSnapshot, ()>::start(config(3, 4, 1_000), ()).unwrap();
+    core.wait_until_idle(Duration::from_secs(2)).unwrap();
+    for id in 0..128 {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        core.send([event_for(id, id, 10, 1)], tx).unwrap();
+    }
+    core.wait_until_idle(Duration::from_secs(2)).unwrap();
+    let snapshots = core.query_at(10, 0..128).unwrap();
+    assert_eq!(snapshots.len(), 128);
+    assert!(snapshots.iter().all(|snapshot| snapshot.value == 1));
+    // Waiting must not prune or advance history.
+    assert!(core.apply([event_for(0, 999, 0, 7)]).unwrap().is_empty());
+    assert_eq!(core.query_at(10, [0]).unwrap()[0].value, 8);
+    core.shutdown();
+}
+
+#[test]
+fn repeated_idle_subscriptions_do_not_stop_later_work() {
+    let core = ConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 3, 1_000), ()).unwrap();
+    for round in 0..20 {
+        core.wait_until_idle(Duration::from_secs(2)).unwrap();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        core.send([event_for(7, round, 10, 1)], tx).unwrap();
+        core.wait_until_idle(Duration::from_secs(2)).unwrap();
+        assert_eq!(core.query_at(10, [7]).unwrap()[0].value, round as u64 + 1);
+    }
+    core.shutdown();
+}
+
+#[test]
+fn independent_callers_can_wait_for_the_same_idle_topology() {
+    let core = ConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 3, 1_000), ()).unwrap();
+    std::thread::scope(|scope| {
+        let first = scope.spawn(|| core.wait_until_idle(Duration::from_secs(2)));
+        let second = scope.spawn(|| core.wait_until_idle(Duration::from_secs(2)));
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+    });
+    core.shutdown();
+}
+
+#[derive(Clone)]
+struct BlockReplay {
+    entered: crossbeam_channel::Sender<()>,
+    release: crossbeam_channel::Receiver<()>,
+}
+
+impl checkpoints::ApplyWrapper<TestSnapshot, TestEvent> for BlockReplay {
+    fn replay_event_batch(
+        &mut self,
+        batch: checkpoints::EventBatch<'_, u64, TestEvent>,
+        inner: &mut checkpoints::ApplyInner<'_, TestSnapshot>,
+    ) {
+        inner.apply_event_batch(batch);
+        self.entered.send(()).unwrap();
+        self.release.recv().unwrap();
+    }
+}
+
+#[test]
+fn idle_wait_includes_after_apply_and_does_not_block_empty_queries() {
+    let (entered, observed) = crossbeam_channel::unbounded();
+    let (release, blocked) = crossbeam_channel::unbounded();
+    let core = ConTime::start(config(2, 2, 1_000), BlockReplay { entered, release: blocked }).unwrap();
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    core.send([event(1, 10, 1)], tx).unwrap();
+    observed.recv_timeout(Duration::from_secs(2)).unwrap();
+    let completed = core.wait_until_idle(Duration::from_millis(20));
+    let (query_tx, query_rx) = crossbeam_channel::unbounded();
+    core.send_query_at(10, [], query_tx).unwrap();
+    let query = query_rx.recv_timeout(Duration::from_secs(2));
+    release.send(()).unwrap();
+    assert_eq!(completed, Err(contime_core::IdleError::Timeout));
+    assert!(matches!(query, Err(crossbeam_channel::RecvTimeoutError::Disconnected)));
+    core.wait_until_idle(Duration::from_secs(2)).unwrap();
+    core.shutdown();
+}
+
+#[test]
 fn late_buckets_and_boundary_updates_preserve_checkpoints() {
     for interval in [1, 2, 3, 10, 100] {
         for late_count in [1, 2, 10, 50] {

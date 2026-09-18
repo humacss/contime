@@ -6,8 +6,8 @@ impl<I, S> RouterProcess<I, S>
 where
     I: Input,
 {
-    pub const fn new(seed: u64) -> Self {
-        Self { seed, input: std::marker::PhantomData }
+    pub fn new(seed: u64) -> Self {
+        Self { seed, activity: crossbeam_channel::never(), input: std::marker::PhantomData }
     }
 }
 
@@ -21,7 +21,7 @@ where
     type Error = contime_router::RouterError;
 
     fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
-        contime_router::route_messages(self.seed, input, &workers)
+        contime_router::route_messages(self.seed, input, &workers, self.activity)
     }
 }
 

@@ -20,7 +20,7 @@ where
         budget: MemoryBudget,
         wrapper: W,
     ) -> Self {
-        Self { worker, checkpoints, history_retention, budget, wrapper, types: PhantomData }
+        Self { worker, checkpoints, history_retention, budget, wrapper, activity: crossbeam_channel::never(), types: PhantomData }
     }
 }
 
@@ -42,6 +42,7 @@ where
             self.history_retention,
             checkpoint_config,
             self.wrapper,
+            self.activity,
         );
         Ok(())
     }

@@ -35,8 +35,14 @@ where
     route_with_deps(seed, input, &DefaultDeps { worker_outputs })
 }
 
-/// Runs apply and query routing over one caller-selected message queue.
-pub fn route_messages<M, W>(seed: u64, input: Receiver<M>, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
+/// Runs with activity subscriptions: false means idle, true means working.
+/// Registrations are serviced only in the idle phase; work receivers are ordinary channels.
+pub fn route_messages<M, W>(
+    seed: u64,
+    input: Receiver<M>,
+    worker_outputs: &[Sender<W>],
+    registrations: Receiver<Sender<bool>>,
+) -> Result<(), RouterError>
 where
     M: RouteInput,
     M::Apply: RouteInputBatch,
@@ -56,19 +62,88 @@ where
     if worker_outputs.is_empty() {
         return Err(RouterError::NoWorkers);
     }
+    MessageRouter {
+        seed,
+        hasher: RouterHasher::new(seed),
+        input: &input,
+        worker_outputs,
+        registrations: &registrations,
+        activity_listeners: Vec::new(),
+    }
+    .activity_loop()
+}
 
-    let hasher = RouterHasher::new(seed);
-    let deps = DefaultDeps { worker_outputs };
-    while let Ok(message) = input.recv() {
-        match message.into_kind() {
-            RouteInputKind::Apply(batch) => route_batch(&hasher, batch, &deps)?,
-            RouteInputKind::SnapshotQuery(query) => crate::route_snapshot_query(seed, query, worker_outputs)?,
-            RouteInputKind::EventQuery(query) => crate::route_event_query(seed, query, worker_outputs)?,
-            RouteInputKind::SnapshotListen(registration) => crate::route_snapshot_listeners(seed, registration, worker_outputs)?,
-            RouteInputKind::Advance(advance) => crate::route_advance(advance, worker_outputs)?,
+struct MessageRouter<'a, M, W> {
+    seed: u64,
+    hasher: RouterHasher,
+    input: &'a Receiver<M>,
+    worker_outputs: &'a [Sender<W>],
+    registrations: &'a Receiver<Sender<bool>>,
+    activity_listeners: Vec<Sender<bool>>,
+}
+
+impl<M, W> MessageRouter<'_, M, W>
+where
+    M: RouteInput,
+    M::Apply: RouteInputBatch,
+    <M::Apply as RouteInputBatch>::Input: RoutableInput + Clone,
+    <M::Apply as RouteInputBatch>::Completion: Clone,
+    M::SnapshotQuery: SnapshotQueryInput,
+    <M::SnapshotQuery as SnapshotQueryInput>::Time: Clone,
+    M::EventQuery: EventQueryInput,
+    M::SnapshotListen: SnapshotListenInput,
+    M::Advance: AdvanceInput,
+    W: WorkerOutput<<M::Apply as RouteInputBatch>::Input, <M::Apply as RouteInputBatch>::Completion>
+        + SnapshotQueryWorkerOutput<<M::SnapshotQuery as SnapshotQueryInput>::Time, <M::SnapshotQuery as SnapshotQueryInput>::Response>
+        + EventQueryWorkerOutput<<M::EventQuery as EventQueryInput>::Time, <M::EventQuery as EventQueryInput>::Response>
+        + SnapshotListenWorkerOutput<<M::SnapshotListen as SnapshotListenInput>::Time, <M::SnapshotListen as SnapshotListenInput>::Listener>
+        + AdvanceWorkerOutput<<M::Advance as AdvanceInput>::Time, <M::Advance as AdvanceInput>::Completion>,
+{
+    /// Waits and reports activity without consuming work.
+    fn activity_loop(&mut self) -> Result<(), RouterError> {
+        let mut ready = crossbeam_channel::Select::new();
+        let work_ready = ready.recv(self.input);
+        let subscription = ready.recv(self.registrations);
+        loop {
+            if ready.ready() != work_ready {
+                match self.registrations.try_recv() {
+                    Ok(listener) => {
+                        if listener.send(false).is_ok() {
+                            self.activity_listeners.push(listener);
+                        }
+                    }
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => ready.remove(subscription),
+                    Err(crossbeam_channel::TryRecvError::Empty) => {}
+                }
+                continue;
+            }
+            self.activity_listeners.retain(|listener| listener.send(true).is_ok());
+            if self.route_pending()? == crossbeam_channel::TryRecvError::Disconnected {
+                return Ok(());
+            }
+            self.activity_listeners.retain(|listener| listener.send(false).is_ok());
         }
     }
-    Ok(())
+
+    /// Drains and routes available messages without waiting.
+    fn route_pending(&mut self) -> Result<crossbeam_channel::TryRecvError, RouterError> {
+        let deps = DefaultDeps { worker_outputs: self.worker_outputs };
+        loop {
+            let message = match self.input.try_recv() {
+                Ok(message) => message,
+                Err(reason) => return Ok(reason),
+            };
+            match message.into_kind() {
+                RouteInputKind::Apply(batch) => route_batch(&self.hasher, batch, &deps)?,
+                RouteInputKind::SnapshotQuery(query) => crate::route_snapshot_query(self.seed, query, self.worker_outputs)?,
+                RouteInputKind::EventQuery(query) => crate::route_event_query(self.seed, query, self.worker_outputs)?,
+                RouteInputKind::SnapshotListen(registration) => {
+                    crate::route_snapshot_listeners(self.seed, registration, self.worker_outputs)?
+                }
+                RouteInputKind::Advance(advance) => crate::route_advance(advance, self.worker_outputs)?,
+            }
+        }
+    }
 }
 
 fn route_with_deps<D, B, W>(seed: u64, input: Receiver<B>, deps: &D) -> Result<(), RouterError>

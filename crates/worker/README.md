@@ -64,6 +64,15 @@ are successful no-ops, and sender closure signals completion.
 
 ## Worker configuration
 
+`work_messages` accepts an ordinary work receiver and a registration receiver
+carrying `Sender<bool>` subscribers (`false` = idle, `true` = working).
+Pass `crossbeam_channel::never()` when no activity subscriptions are needed.
+The idle loop owns registrations and notifications. Working is published before
+dequeue; idle only after replay/hooks, listener flush, and locally buffered work
+finish. The working loop does no activity management. The worker crate owns no
+global idle state and does not depend on Core.
+
+
 `WorkerConfig` supplies the maximum dirty age, replay budget per received
 batch, deadline-compaction lower bound, and
 deadline-compaction multiplier. A replay budget of zero accumulates work until

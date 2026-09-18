@@ -48,6 +48,14 @@ the adjacent API and worker boundaries.
 
 ## Exclusions
 
+`route_messages` accepts an ordinary work receiver and a registration receiver
+carrying `Sender<bool>` subscribers (`false` = idle, `true` = working).
+Pass `crossbeam_channel::never()` when no activity subscriptions are needed.
+The idle loop owns registrations and notifications, publishing working before
+dequeue. The working loop drains and dispatches without activity management.
+Work-message contents and worker sends are unchanged.
+
+
 The crate owns no threads, workers, memory accounting, horizon policy or
 state, rejection semantics, response waiting, cross-router barriers, or
 recovery orchestration.

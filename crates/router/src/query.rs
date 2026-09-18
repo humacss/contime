@@ -279,7 +279,7 @@ mod tests {
         input.send(RouterMessage::Advance(Advance { time: 50, completion: Response(advance_response) })).unwrap();
         drop(input);
 
-        route_messages(9, receiver, &[worker]).unwrap();
+        route_messages(9, receiver, &[worker], crossbeam_channel::never()).unwrap();
 
         let messages = output.try_iter().collect::<Vec<_>>();
         assert_eq!(messages.len(), 5);
@@ -293,5 +293,29 @@ mod tests {
         let WorkerMessage::Advance { time, completion } = &messages[4] else { panic!("wrong message") };
         assert_eq!(*time, 50);
         let _ = &completion.0;
+    }
+
+    #[test]
+    fn activity_registration_waits_for_idle_and_notifies_every_listener() {
+        let (input, receiver) = unbounded();
+        let (worker, output) = crossbeam_channel::bounded::<WorkerMessage>(0);
+        let (register, registrations) = unbounded();
+        let thread = std::thread::spawn(move || crate::route_messages(9, receiver, &[worker], registrations));
+        let timeout = std::time::Duration::from_secs(2);
+        let (first, first_reports) = unbounded();
+        register.send(first).unwrap();
+        assert!(!first_reports.recv_timeout(timeout).unwrap());
+        let (response, _results) = unbounded();
+        input.send(RouterMessage::Apply(InputBatch { inputs: vec![ApplyEvent(7)], completion: Response(response) })).unwrap();
+        assert!(first_reports.recv_timeout(timeout).unwrap());
+        // Dispatch cannot finish until the worker accepts this rendezvous send.
+        let (second, second_reports) = unbounded();
+        register.send(second).unwrap();
+        assert!(matches!(second_reports.try_recv(), Err(crossbeam_channel::TryRecvError::Empty)));
+        assert!(matches!(output.recv_timeout(timeout).unwrap(), WorkerMessage::Apply { count: 1 }));
+        assert!(!first_reports.recv_timeout(timeout).unwrap());
+        assert!(!second_reports.recv_timeout(timeout).unwrap());
+        drop(input);
+        thread.join().unwrap().unwrap();
     }
 }
