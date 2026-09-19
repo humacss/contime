@@ -11,7 +11,6 @@ use pprof::criterion::{Output, PProfProfiler};
 const BATCH_COUNT: usize = 100;
 const INPUTS_PER_BATCH: usize = 1_000;
 const WORKER_COUNT: usize = 8;
-const SEED: u64 = 7;
 
 #[derive(Clone)]
 enum SnapshotIds {
@@ -169,7 +168,7 @@ fn benchmark_32_byte_event(criterion: &mut Criterion) {
             bencher.iter_batched(
                 || fixture((0..INPUTS_PER_BATCH).map(|input_index| benchmark_event32(input_index, route_count)).collect()),
                 |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
-                    route(SEED, input_receiver, &worker_outputs).unwrap();
+                    route(contime_router::Placement::default(), input_receiver, &worker_outputs).unwrap();
                     black_box((worker_outputs, worker_receivers, completion_receivers))
                 },
                 BatchSize::LargeInput,
@@ -185,7 +184,7 @@ fn benchmark_32_byte_event(criterion: &mut Criterion) {
                     )
                 },
                 |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
-                    route(SEED, input_receiver, &worker_outputs).unwrap();
+                    route(contime_router::Placement::default(), input_receiver, &worker_outputs).unwrap();
                     black_box((worker_outputs, worker_receivers, completion_receivers))
                 },
                 BatchSize::LargeInput,
@@ -216,7 +215,7 @@ fn benchmark_single_worker(criterion: &mut Criterion) {
         bencher.iter_batched(
             || fixture_with_worker_count(benchmark_events::<0>(1).collect(), 1),
             |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
-                route(SEED, input_receiver, &worker_outputs).unwrap();
+                route(contime_router::Placement::default(), input_receiver, &worker_outputs).unwrap();
                 black_box((worker_outputs, worker_receivers, completion_receivers))
             },
             BatchSize::LargeInput,
@@ -233,7 +232,7 @@ fn benchmark_matrix<const PAYLOAD_BYTES: usize>(criterion: &mut Criterion, event
             bencher.iter_batched(
                 || owned_fixture::<PAYLOAD_BYTES>(route_count),
                 |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
-                    route(SEED, input_receiver, &worker_outputs).unwrap();
+                    route(contime_router::Placement::default(), input_receiver, &worker_outputs).unwrap();
                     black_box((worker_outputs, worker_receivers, completion_receivers))
                 },
                 BatchSize::LargeInput,
@@ -243,7 +242,7 @@ fn benchmark_matrix<const PAYLOAD_BYTES: usize>(criterion: &mut Criterion, event
             bencher.iter_batched(
                 || shared_fixture::<PAYLOAD_BYTES>(route_count),
                 |(input_receiver, worker_outputs, worker_receivers, completion_receivers)| {
-                    route(SEED, input_receiver, &worker_outputs).unwrap();
+                    route(contime_router::Placement::default(), input_receiver, &worker_outputs).unwrap();
                     black_box((worker_outputs, worker_receivers, completion_receivers))
                 },
                 BatchSize::LargeInput,

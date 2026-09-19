@@ -71,7 +71,7 @@ fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<u64> {
     ConTimeConfig {
         router_count,
         worker_count,
-        router_seed: 9,
+        placement: contime_router::Placement::default(),
         memory_limit: usize::MAX,
         memory_buffer: 0,
         history_retention: 0,
@@ -100,14 +100,19 @@ fn receive_registration_batches(receiver: &Receiver<SnapshotListenerMessage<u64>
     batches
 }
 
-fn receive_replay_batches(receiver: &Receiver<SnapshotListenerMessage<u64>>, expected_batches: usize) {
-    for _ in 0..expected_batches {
-        let SnapshotListenerMessage::Replayed { time, snapshot_ids } = receiver.recv().unwrap() else {
+fn receive_replay_batches(receiver: &Receiver<SnapshotListenerMessage<u64>>, expected_ids: usize) {
+    let mut replayed = BTreeSet::new();
+    // Called after idle: coalescing and timestamp steps determine notification
+    // count, so verify every affected snapshot instead of assuming batch count.
+    for message in receiver.try_iter() {
+        let SnapshotListenerMessage::Replayed { time, snapshot_ids } = message else {
             panic!("unexpected registration acknowledgement in measured workload")
         };
         assert_eq!(time, u64::MAX);
         assert!(!snapshot_ids.is_empty());
+        replayed.extend(snapshot_ids);
     }
+    assert_eq!(replayed, (0..expected_ids as u128).collect());
 }
 
 fn prepare_batches(snapshot_count: usize, batch_count: usize, next_id: &mut u128) -> Vec<Vec<BenchEvent>> {
@@ -125,9 +130,11 @@ fn prepare_batches(snapshot_count: usize, batch_count: usize, next_id: &mut u128
 }
 
 fn warm_runtime(contime: &ConTime<BenchEvent, BenchSnapshot, ()>, snapshot_count: usize, next_id: &mut u128) {
+    contime.advance_to(1).unwrap();
     let (rejections, completed) = unbounded::<RejectionMessage<RejectionReason>>();
     contime.send(prepare_batches(snapshot_count, 1, next_id).pop().unwrap(), rejections).unwrap();
     assert!(completed.into_iter().next().is_none());
+    contime.wait_until_idle(Duration::from_secs(5)).unwrap();
 }
 
 fn benchmark_replay_overhead(criterion: &mut Criterion) {
@@ -149,8 +156,8 @@ fn benchmark_replay_overhead(criterion: &mut Criterion) {
                     let listener = listeners_enabled.then(|| {
                         let (notifications, observed) = unbounded();
                         contime.send_listen_snapshots(u64::MAX, 0..snapshot_count as u128, notifications).unwrap();
-                        let worker_batch_count = receive_registration_batches(&observed, snapshot_count);
-                        (observed, worker_batch_count)
+                        receive_registration_batches(&observed, snapshot_count);
+                        observed
                     });
 
                     bencher.iter_batched(
@@ -162,8 +169,9 @@ fn benchmark_replay_overhead(criterion: &mut Criterion) {
                             }
                             drop(completion);
                             assert!(completed.into_iter().next().is_none());
-                            if let Some((observed, worker_batch_count)) = &listener {
-                                receive_replay_batches(observed, batch_count * worker_batch_count);
+                            contime.wait_until_idle(Duration::from_secs(5)).unwrap();
+                            if let Some(observed) = &listener {
+                                receive_replay_batches(observed, snapshot_count);
                             }
                         },
                         criterion::BatchSize::LargeInput,

@@ -63,7 +63,12 @@ fn query_benchmarks(criterion: &mut Criterion) {
                     bencher.iter_batched(
                         || workers(worker_count),
                         |(senders, receivers)| {
-                            route_snapshot_query(7, SnapshotQuery { ids: (0..query_count as u128).collect() }, &senders).unwrap();
+                            route_snapshot_query(
+                                contime_router::Placement::default(),
+                                SnapshotQuery { ids: (0..query_count as u128).collect() },
+                                &senders,
+                            )
+                            .unwrap();
                             black_box(receivers)
                         },
                         criterion::BatchSize::SmallInput,
@@ -76,7 +81,7 @@ fn query_benchmarks(criterion: &mut Criterion) {
             bencher.iter_batched(
                 || workers(worker_count),
                 |(senders, receivers)| {
-                    route_event_query(7, EventQuery, &senders).unwrap();
+                    route_event_query(contime_router::Placement::default(), EventQuery, &senders).unwrap();
                     black_box(receivers)
                 },
                 criterion::BatchSize::SmallInput,

@@ -7,12 +7,36 @@ impl<I, S, W> ConTime<I, S, W>
 where
     I: Input,
 {
+    /// Low-level enqueue with a caller-owned rejection stream. Closure of this
+    /// stream acknowledges insertion, not completion of scheduled replay.
+    /// Prefer [`Self::apply`] with [`Self::errors`] for ordinary submissions.
     pub fn send(
         &self,
         inputs: impl IntoIterator<Item = I>,
         rejection_sender: Sender<RejectionMessage<RejectionReason>>,
     ) -> Result<(), ApiError> {
-        send_to(&self.budget, self.runtime.input(), inputs, rejection_sender)
+        send_to(&self.budget, &self.input, inputs, rejection_sender)
+    }
+
+    /// Submits causal output from an active application. Outputs must be
+    /// enqueued before that application returns and cannot precede its time.
+    /// Unlike external input, these records use the proven safe boundary.
+    pub fn apply_internal(&self, source: I::Time, inputs: impl IntoIterator<Item = I>) -> Result<(), ApiError> {
+        let inputs = match prepare_inputs(&self.budget, inputs.into_iter().collect()) {
+            Ok(inputs) => inputs,
+            Err(rejections) => {
+                for rejection in rejections {
+                    let _ = self.error_sender.send(rejection);
+                }
+                return Ok(());
+            }
+        };
+        self.input
+            .send(RouterMessage::Internal {
+                source,
+                batch: crate::RouterBatch { inputs, completion: crate::CompletionHandle { sender: self.error_sender.clone() } },
+            })
+            .map_err(|_| ApiError::OutputChannelClosed)
     }
 }
 
@@ -120,7 +144,7 @@ mod tests {
         ConTimeConfig {
             router_count: 1,
             worker_count: 1,
-            router_seed: 9,
+            placement: contime_router::Placement::default(),
             memory_limit,
             memory_buffer,
             history_retention: 0,
@@ -135,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn one_receiver_closure_reports_that_every_sent_batch_was_applied() {
+    fn receiver_closure_reports_admission_and_idle_wait_reports_application() {
         let observed = Arc::new(AtomicUsize::new(0));
         let contime =
             ConTime::<TestInput, TestSnapshot, RecordingWrapper>::start(config(100_000, 1_000), RecordingWrapper(Arc::clone(&observed)))
@@ -147,6 +171,9 @@ mod tests {
         drop(sender);
 
         assert_eq!(receiver.into_iter().collect::<Vec<_>>(), Vec::new());
+        assert_eq!(observed.load(Ordering::Relaxed), 0);
+        contime.advance_to(1).unwrap();
+        contime.wait_until_idle(Duration::from_secs(2)).unwrap();
         assert_eq!(observed.load(Ordering::Relaxed), 12);
         contime.shutdown();
     }

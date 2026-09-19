@@ -8,7 +8,6 @@ description = "Isolated deterministic input routing for ConTime"
 publish = false
 
 [dependencies]
-ahash = "0.8.12"
 crossbeam-channel = "0.5"
 
 [dev-dependencies]

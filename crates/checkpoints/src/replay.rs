@@ -1,5 +1,45 @@
 use crate::{ApplyEvents, ApplyResult, ApplyWrapper, CheckpointKey, CheckpointStore, EventBatch, EventRef, Events};
 
+/// Applies at most one complete canonical timestamp bucket through `target`.
+///
+/// The valid tip is the continuation cursor. After a history mutation, first
+/// call `invalidate_from` with its earliest affected timestamp. This function
+/// does not acknowledge the history: the caller owns incremental scheduling.
+pub fn replay_next<H, S, W, E, T>(checkpoints: &mut CheckpointStore<S>, events: &H, wrapper: &mut W, target: &T) -> ApplyResult
+where
+    H: Events<Time = T, Event = E>,
+    S: ApplyEvents<E> + crate::Snapshot<Time = T>,
+    W: ApplyWrapper<S, E>,
+    T: Clone + Default + Ord,
+{
+    let mut iter = events.iter_after(checkpoints.replay_boundary());
+    let Some(first) = iter.next().filter(|event| event.time <= target) else {
+        return ApplyResult { applied_events: 0, retained_checkpoints: checkpoints.len() };
+    };
+    let time = first.time.clone();
+    let mut last_key = key_from_event(&first);
+    let mut bucket = vec![first.event];
+    for event in iter {
+        if event.time != &time {
+            break;
+        }
+        last_key = key_from_event(&event);
+        bucket.push(event.event);
+    }
+    let snapshot_id = checkpoints.snapshot_id();
+    let mut session = checkpoints.resume_replay();
+    if session.working_snapshot.is_none() {
+        let mut snapshot = S::create(snapshot_id, first.event);
+        snapshot.set_time(T::default());
+        session.initialize(snapshot);
+    }
+    let count = session.advance_event_count(u64::try_from(bucket.len()).expect("event bucket length exceeded u64"));
+    let mut inner = crate::ApplyInner::new(session.snapshot_mut(), count);
+    wrapper.replay_event_batch(EventBatch { snapshot_id, time, events: &bucket }, &mut inner);
+    assert!(inner.has_applied(), "a replay wrapper must call the inner apply at least once per event batch");
+    session.finish(last_key)
+}
+
 /// Iterates changed canonical event buckets, commits checkpoint state, and
 /// acknowledges the event history after successful completion.
 pub fn replay<H, S, W, E, T>(checkpoints: &mut CheckpointStore<S>, events: &mut H, wrapper: &mut W) -> ApplyResult
@@ -194,6 +234,108 @@ mod tests {
     }
 
     #[test]
+    fn incremental_replay_yields_after_a_complete_timestamp_and_respects_target() {
+        let mut store = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval: 3 });
+        let events = TestEvents::new(10, vec![event(2, 10, 2), event(1, 10, 1), event(3, 20, 3), event(4, 30, 4)]);
+        assert_eq!(store.next_replay_time(&events), Some(10));
+        assert_eq!(super::replay_next(&mut store, &events, &mut (), &20).applied_events, 2);
+        assert_eq!(store.current().unwrap().snapshot.batch_sizes, vec![2]);
+        assert_eq!(store.next_replay_time(&events), Some(20));
+        assert_eq!(super::replay_next(&mut store, &events, &mut (), &20).applied_events, 1);
+        assert_eq!(store.current().unwrap().snapshot.sum, 6);
+        assert_eq!(store.len(), 1);
+        assert_eq!(super::replay_next(&mut store, &events, &mut (), &20).applied_events, 0);
+        assert_eq!(store.next_replay_time(&events), Some(30));
+        super::replay_next(&mut store, &events, &mut (), &30);
+        assert_eq!(store.current().unwrap().snapshot.batch_times, vec![10, 20, 30]);
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.next_replay_time(&events), None);
+        assert_eq!(events.replay_acknowledgements, 0);
+    }
+
+    #[test]
+    fn incremental_late_insertion_invalidates_queries_and_replays_the_whole_bucket() {
+        let mut store = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval: 1 });
+        let original = TestEvents::new(10, vec![event(1, 10, 1), event(3, 20, 3), event(4, 30, 4)]);
+        while store.next_replay_time(&original).is_some() {
+            super::replay_next(&mut store, &original, &mut (), &30);
+        }
+        let edited = TestEvents::new(20, vec![event(1, 10, 1), event(2, 20, 2), event(3, 20, 3), event(4, 30, 4)]);
+        store.invalidate_from(&20);
+        assert_eq!(store.current().unwrap().key.time, 10);
+        assert_eq!(crate::query_at(&store, &edited, &mut (), 30).unwrap().sum, 10);
+        assert_eq!(store.current().unwrap().snapshot.sum, 1);
+        assert_eq!(super::replay_next(&mut store, &edited, &mut (), &30).applied_events, 2);
+        assert_eq!(store.current().unwrap().snapshot.batch_times, vec![10, 20]);
+        assert_eq!(store.current().unwrap().snapshot.sum, 6);
+        super::replay_next(&mut store, &edited, &mut (), &30);
+        assert_eq!(store.current().unwrap().snapshot.sum, 10);
+    }
+
+    #[test]
+    fn incremental_replay_matches_full_replay_after_late_edits_and_pruning() {
+        for interval in [0, 1, 3, 10, 100] {
+            let mut store = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval });
+            let mut events = TestEvents::new(0, (0..20).map(|id| event(id, id as i64 * 10, 1)).collect());
+            while store.next_replay_time(&events).is_some() {
+                super::replay_next(&mut store, &events, &mut (), &200);
+            }
+            crate::advance_before(&mut store, &events, &mut (), &65);
+            events.events.retain(|event| event.time >= 65);
+            for (id, time) in [(101, 150), (102, 70), (103, 150), (104, 65)] {
+                events.events.push(event(id, time, 3));
+                events.events.sort_by_key(|event| (event.time, event.id));
+                store.invalidate_from(&time);
+                while store.next_replay_time(&events).is_some() {
+                    super::replay_next(&mut store, &events, &mut (), &200);
+                }
+                let all = (0..20)
+                    .map(|id| event(id, id as i64 * 10, 1))
+                    .chain(events.events.iter().filter(|event| event.id >= 100).cloned())
+                    .collect();
+                let mut reference_events = TestEvents::new(0, all);
+                let mut reference = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval });
+                replay(&mut reference, &mut reference_events, &mut ());
+                for query_time in [65, 70, 100, 150, 200] {
+                    let actual = crate::query_at(&store, &events, &mut (), query_time).unwrap();
+                    let expected = crate::query_at(&reference, &reference_events, &mut (), query_time).unwrap();
+                    assert_eq!(actual.sum, expected.sum, "interval={interval}, edit={time}, query={query_time}");
+                    assert_eq!(actual.batch_times, expected.batch_times);
+                }
+                assert_eq!(store.current().unwrap().history_event_count, reference.current().unwrap().history_event_count);
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_replay_moves_the_partial_tip_without_cloning_on_each_step() {
+        struct CountClones(std::rc::Rc<std::cell::Cell<usize>>);
+        impl Clone for CountClones {
+            fn clone(&self) -> Self {
+                self.0.set(self.0.get() + 1);
+                Self(self.0.clone())
+            }
+        }
+        impl Snapshot for CountClones {
+            type Time = i64;
+            fn set_time(&mut self, _: i64) {}
+        }
+        impl ApplyEvents<TestEvent> for CountClones {
+            fn create(_: u128, _: &TestEvent) -> Self {
+                Self(Default::default())
+            }
+            fn apply_events(&mut self, _: ApplyBatch<'_, i64, TestEvent>) {}
+        }
+        let events = TestEvents::new(0, (0..20).map(|id| event(id, id as i64, 1)).collect());
+        let mut store = CheckpointStore::<CountClones>::new(7, CheckpointConfig { interval: 100 });
+        for _ in 0..20 {
+            super::replay_next(&mut store, &events, &mut (), &20);
+        }
+        // The initial clean anchor is the only clone; every partial tip moves.
+        assert_eq!(store.current().unwrap().snapshot.0.get(), 1);
+    }
+
+    #[test]
     fn replay_applies_every_complete_timestamp_bucket_once() {
         let mut events = TestEvents::new(0, vec![event(2, 10, 2), event(1, 10, 1), event(3, 20, 3)]);
         let mut checkpoints = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval: 100 });
@@ -307,6 +449,16 @@ mod tests {
 
         benchmark_replay_case(&mut criterion, "checkpoints/replay/1000_events/one_timestamp", &mut one_timestamp);
         benchmark_replay_case(&mut criterion, "checkpoints/replay/1000_events/unique_timestamps", &mut unique_timestamps);
+        criterion.bench_function("checkpoints/replay_next/1000_events/unique_timestamps", |bencher| {
+            bencher.iter_batched(
+                || CheckpointStore::<BenchmarkSnapshot>::new(7, CheckpointConfig { interval: 100 }),
+                |mut checkpoints| {
+                    while super::replay_next(&mut checkpoints, &unique_timestamps, &mut (), &1_000).applied_events != 0 {}
+                    black_box(checkpoints)
+                },
+                BatchSize::LargeInput,
+            );
+        });
         criterion.final_summary();
     }
 }

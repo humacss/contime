@@ -68,10 +68,10 @@ fn config() -> ConTimeConfig<u64> {
     ConTimeConfig {
         router_count: 2,
         worker_count: 4,
-        router_seed: 9,
+        placement: contime_router::Placement::default(),
         memory_limit: 1_000_000,
         memory_buffer: 1_000,
-        history_retention: 0,
+        history_retention: 100,
         worker: contime_worker::WorkerConfig {
             maximum_dirty_age: Duration::from_micros(100),
             replays_per_receive: 1,
@@ -102,6 +102,7 @@ fn public_listener_collection_batches_matching_replays_and_ignores_later_events(
 
     let (rejections, completed) = unbounded::<RejectionMessage<RejectionReason>>();
     contime.send(snapshot_ids.iter().map(|&snapshot_id| TestEvent { id: snapshot_id + 1, snapshot_id, time: 10 }), rejections).unwrap();
+    contime.advance_to(10).unwrap();
 
     let mut replayed = BTreeSet::new();
     while replayed.len() < snapshot_ids.len() {
@@ -117,11 +118,15 @@ fn public_listener_collection_batches_matching_replays_and_ignores_later_events(
     let (rejections, completed) = unbounded::<RejectionMessage<RejectionReason>>();
     contime.send([TestEvent { id: 1, snapshot_id: 0, time: 0 }], rejections).unwrap();
     assert!(completed.into_iter().collect::<Vec<_>>().is_empty());
-    assert!(observed.recv_timeout(Duration::from_millis(20)).is_err());
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    assert!(observed.is_empty());
 
     let (rejections, completed) = unbounded::<RejectionMessage<RejectionReason>>();
     contime.send(snapshot_ids.iter().map(|&snapshot_id| TestEvent { id: 1_000 + snapshot_id, snapshot_id, time: 11 }), rejections).unwrap();
+    contime.advance_to(11).unwrap();
     assert!(completed.into_iter().collect::<Vec<_>>().is_empty());
-    assert!(observed.recv_timeout(Duration::from_millis(20)).is_err());
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    assert!(observed.is_empty());
+    assert!(contime.query_at(11, snapshot_ids).unwrap().iter().all(|snapshot| snapshot.count == 2));
     contime.shutdown();
 }

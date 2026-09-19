@@ -1,10 +1,10 @@
 use crossbeam_channel::Sender;
 
-use crate::hash::RouterHasher;
+use crate::Placement;
 use crate::{RouterError, SnapshotListenInput, SnapshotListenWorkerOutput};
 
 /// Partitions snapshot-listener registrations by owning worker.
-pub fn route_snapshot_listeners<R, W>(seed: u64, registration: R, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
+pub fn route_snapshot_listeners<R, W>(placement: Placement, registration: R, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
 where
     R: SnapshotListenInput,
     W: SnapshotListenWorkerOutput<R::Time, R::Listener>,
@@ -14,14 +14,14 @@ where
     }
 
     let worker_count = worker_outputs.len();
-    let hasher = RouterHasher::new(seed);
+
     let (time, snapshot_ids, listener) = registration.into_parts();
     let base_capacity = snapshot_ids.len().div_ceil(worker_count);
     let mut partitions = Vec::with_capacity(worker_count);
     partitions.resize_with(worker_count, || None::<Vec<u128>>);
 
     for snapshot_id in snapshot_ids {
-        let worker_index = hasher.worker_index(snapshot_id, worker_count);
+        let worker_index = placement.worker_index(snapshot_id, worker_count);
         partitions[worker_index].get_or_insert_with(|| Vec::with_capacity(base_capacity.saturating_add(1))).push(snapshot_id);
     }
 
@@ -95,7 +95,7 @@ mod tests {
         let (listener, notifications) = unbounded();
 
         route_snapshot_listeners(
-            7,
+            crate::Placement::default(),
             Registration { time: 55, snapshot_ids: vec![1, 2, 3, 4, 5, 6], listener: Listener(listener) },
             &outputs,
         )
@@ -126,7 +126,12 @@ mod tests {
         let outputs = workers.iter().map(|(sender, _)| sender.clone()).collect::<Vec<_>>();
         let (listener, notifications) = unbounded();
 
-        route_snapshot_listeners(7, Registration { time: 55, snapshot_ids: Vec::new(), listener: Listener(listener) }, &outputs).unwrap();
+        route_snapshot_listeners(
+            crate::Placement::default(),
+            Registration { time: 55, snapshot_ids: Vec::new(), listener: Listener(listener) },
+            &outputs,
+        )
+        .unwrap();
 
         assert!(workers.into_iter().all(|(_, receiver)| receiver.try_recv().is_err()));
         assert!(notifications.try_recv().is_err());
@@ -147,7 +152,7 @@ mod tests {
                         (workers, outputs, notifications, registration)
                     },
                     |(workers, outputs, notifications, registration)| {
-                        route_snapshot_listeners(7, registration, &outputs).unwrap();
+                        route_snapshot_listeners(crate::Placement::default(), registration, &outputs).unwrap();
                         black_box((workers, notifications));
                     },
                     BatchSize::LargeInput,

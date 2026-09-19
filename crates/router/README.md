@@ -23,7 +23,7 @@ it is not a workspace member. It has no dependency on `contime` or
 ## Responsibilities
 
 - Receive router-local input batches.
-- Hash snapshot IDs from a caller-provided seed.
+- Map snapshot IDs modulo the worker count, without hashing by default.
 - Flatten directly into final worker vectors.
 - Send one batch per affected worker.
 - Partition snapshot queries into one message per affected worker.
@@ -31,6 +31,11 @@ it is not a workspace member. It has no dependency on `contime` or
   message per affected worker, preserving its collection boundary.
 - Route single-history event queries directly to one worker.
 - Dispatch apply and both query kinds over one unified queue.
+
+All routing functions take the same `Placement` value. `Placement::default()`
+uses the full `u128` snapshot ID; `Placement::with_mapper(fn(u128) -> u128)`
+lets a consumer supply a stable mapping or hash before modulus. Keep that
+mapping identical for every router, apply, query, and listener in a topology.
 
 The router is generic over input ownership. A single snapshot route moves the
 existing input without cloning it; each additional snapshot route calls
@@ -72,7 +77,6 @@ Run the inline Criterion benchmark separately in release mode:
 
 ```bash
 cargo test --manifest-path crates/router/Cargo.toml --release --lib benchmark_route -- --ignored --nocapture
-cargo test --manifest-path crates/router/Cargo.toml --release --lib benchmark_hash -- --ignored --nocapture
 cargo test --manifest-path crates/router/Cargo.toml --release --lib benchmark_snapshot_listener_routing -- --ignored --nocapture
 ```
 
@@ -94,6 +98,9 @@ Criterion writes the graph to
 inside this crate.
 
 ## Benchmarks
+
+The measurements below describe the historical seeded-hash implementation.
+They are retained as a baseline, not measurements of the new modulus placement.
 
 Timestamped collection routing results recorded on 2026-09-02:
 

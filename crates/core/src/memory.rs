@@ -4,6 +4,13 @@ use contime_memory::{SizeDelta, TrackedMemoryBudget};
 
 use crate::{types::MemoryState, MemoryBudget};
 
+impl<I: crate::Input, S, W> crate::ConTime<I, S, W> {
+    /// Share this instance's accounting budget with externally tracked allocations.
+    pub fn memory_budget(&self) -> MemoryBudget {
+        self.budget.clone()
+    }
+}
+
 impl MemoryBudget {
     pub fn new(maximum: usize, buffer: usize) -> Self {
         Self { state: std::sync::Arc::new(MemoryState { used: std::sync::atomic::AtomicUsize::new(0), maximum, buffer }) }

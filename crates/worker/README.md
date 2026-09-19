@@ -17,50 +17,40 @@ The crate is isolated. It does not depend on `contime`, `contime-api`,
 for adapting independently defined message types and choosing where
 `contime_worker::work` runs.
 
-## Initial scope
+## Incremental message workers
 
-- Receive complete apply batches without owning the worker thread.
-- Coalesce adjacent, immediately available apply messages into one worker
-  cycle without crossing query, listener, or advancement barriers.
-- Insert each routed input directly into its snapshot event store.
-- Keep canonical event insertion separate from checkpoint materialization.
-- Prefer the dirty snapshot with the largest pending input count.
-- Override that preference when the oldest dirty snapshot reaches the
-  configured maximum dirty age.
-- Track both the actual pending count and the count last written to the count
-  heap. A stale heap count may conservatively overestimate the actual count;
-  the heap is updated only when the actual count exceeds it.
-- Treat the count heap and deadline deque as disposable indexes over canonical
-  pending-count and dirty-time state. Popped stale count entries are discarded
-  or repaired from canonical state before selection.
-- Compact stale deadline entries in one order-preserving pass when their count
-  exceeds both the configured lower bound and active-snapshot multiplier.
-- Replay a configurable number of non-overdue snapshots after each received
-  batch. Deadlines and disconnected-input draining remain mandatory.
-- Complete a request only after every snapshot changed by it has replayed.
-- Serve snapshot and event-history queries from the same worker queue.
-- Reconstruct query-local snapshots without forcing or reprioritizing replay.
-- Clone event handles before returning them across a thread boundary.
-- Register timestamped consumer-owned listener collections independently from
-  snapshot history and emit one batched notification per collection per worker
-  replay pass.
+`work_messages` drains available messages, then computes one complete timestamp
+bucket for one snapshot. A keyed priority queue orders pending snapshots by
+their actual next timestamp and snapshot ID. Each snapshot has at most one
+queue entry. After each step, the worker flushes replay notifications and
+returns to its message queue.
 
-Input and checkpoint ownership, memory accounting, and admission policy remain
-orchestrator concerns. The worker only coordinates the implementations supplied
-through its event-store and checkpoint traits.
+Apply messages insert canonical history and immediately invalidate affected
+checkpoints through `IncrementalCheckpoints::invalidate`. The checkpoint
+adapter acknowledges that history changes have transferred to scheduling;
+`next_time` tracks unfinished replay independently. Late inputs invalidate the
+complete same-time bucket and its suffix. Request completion means insertion
+and invalidation finished, and does not wait for replay.
 
-Each apply cycle inserts every adjacent message already waiting in the worker
-queue, then replays each changed snapshot once. Per-request completion and
-rejection state remains independent even when several requests share a replay.
-A query, listener registration, or horizon advancement ends the current apply
-cycle and observes all preceding work before later applies are consumed.
+The target starts at zero. `Advance` raises it monotonically; replay callbacks
+never process buckets beyond that target. Retained future inputs do not
+prevent idle. Snapshot and event queries use the same message queue and run
+before further computation. Snapshot reconstruction is read-only and neither
+advances checkpoints nor changes scheduled work.
 
-Worker-local time advancement is monotonic. The worker derives its horizon
-from `current_time.saturating_sub(history_retention)`, forces replay only for a
-scheduled history whose dirty time is strictly before that horizon, advances
-an existing checkpoint store, and then prunes events. Histories first seen
-afterward are initialized with the active horizon. Equal and older requests
-are successful no-ops, and sender closure signals completion.
+Optional `Coordination` reports the earliest pending time after a `Fence` from
+every distinct router for a round. Reports happen between operations and
+callbacks, without waiting for idle. Duplicate and older fences are ignored.
+Only explicit `Prune` messages move the retained horizon: the caller must prove
+it safe, and the worker asserts that no pending timestamp precedes it. Events
+strictly before the horizon are folded into checkpoint anchors and pruned.
+New histories inherit that admission horizon. `Advance` never infers pruning;
+the retained `history_retention` argument is ignored.
+
+The non-message `work` API remains a whole-history apply loop: it coalesces
+ready batches and updates each changed snapshot once per cycle. Input and
+checkpoint ownership, memory accounting, and admission policy remain supplied
+by the orchestrator.
 
 ## Worker configuration
 
@@ -73,15 +63,10 @@ finish. The working loop does no activity management. The worker crate owns no
 global idle state and does not depend on Core.
 
 
-`WorkerConfig` supplies the maximum dirty age, replay budget per received
-batch, deadline-compaction lower bound, and
-deadline-compaction multiplier. A replay budget of zero accumulates work until
-a deadline or disconnection. Larger budgets make more checkpoint progress per
-received batch.
-
-Deque compaction reduces logical length and reuses the existing allocation; it
-does not return high-water capacity to the allocator. Capacity shrinking is a
-separate policy that remains deferred.
+`WorkerConfig` retains legacy scheduling fields for source compatibility;
+message workers always yield after one timestamp bucket. Pending runnable
+computation counts as working even if no messages remain. Worker exit closes
+activity subscriptions so the orchestrator can detect a stopped component.
 
 ## Benchmark snapshot
 
@@ -191,7 +176,9 @@ us respectively; 1,024 is the best current starting point.
 - `checkpoints.rs`: checkpoint materialization and request completion.
 - `listen.rs`: listener registration, replay notification, and disconnected
   sender cleanup.
-- `work.rs`: the deadline-driven blocking receive loop.
+- `work.rs`: message-priority timestamp scheduling and the blocking receive loop.
+- `tests/incremental.rs`: real-history/checkpoint coverage for ordering, rewind,
+  query priority, target bounds, activity, fences, and explicit pruning.
 - `tests/worker_settings.rs`: public replay-budget and deadline behavior.
 - `benches/worker_settings.rs`: end-to-end worker configuration benchmarks.
 

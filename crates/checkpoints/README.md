@@ -8,6 +8,13 @@ The crate does not depend on `contime`, `contime-events`, `contime-worker`, or
 any other ConTime subcrate. The eventual orchestrator will adapt their
 independent traits.
 
+For incremental scheduling, `invalidate_from(time)` removes affected checkpoint
+state, `next_replay_time(events)` identifies the next bucket, and `replay_next`
+applies at most that complete bucket through a supplied target. The valid tip
+is the continuation cursor; partial tips move without a per-step snapshot clone.
+The caller owns history acknowledgement and must invalidate before querying or
+resuming after a history change. The existing full `replay` API remains available.
+
 ## Initial scope
 
 - Read canonical events from their earliest dirty timestamp.

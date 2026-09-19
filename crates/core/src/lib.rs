@@ -3,6 +3,8 @@
 mod advance;
 mod apply;
 mod checkpoint;
+mod coordinator;
+mod frontier;
 mod history;
 mod idle;
 mod input;
@@ -27,4 +29,5 @@ pub use contime_api::{ApiError, ApplyResponse, RejectionMessage};
 pub use contime_checkpoints as checkpoints;
 pub use contime_lanes as lanes;
 pub use contime_memory as memory_tracking;
+pub use contime_router::Placement;
 pub use idle::IdleError;

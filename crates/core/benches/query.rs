@@ -71,10 +71,10 @@ fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<u64> {
     ConTimeConfig {
         router_count,
         worker_count,
-        router_seed: 9,
+        placement: contime_router::Placement::default(),
         memory_limit: 256 * 1024 * 1024,
         memory_buffer: 1024 * 1024,
-        history_retention: 0,
+        history_retention: 2_000,
         worker: contime_worker::WorkerConfig {
             maximum_dirty_age: Duration::from_micros(100),
             replays_per_receive: 1,
@@ -92,6 +92,9 @@ fn prepared_runtime(router_count: usize, worker_count: usize) -> ConTime<BenchEv
             (0..SNAPSHOT_COUNT).map(|index| BenchEvent { id: 10_000 + index as u128, snapshot_id: u128::MAX, time: 20 + index as u64 }),
         ))
         .unwrap();
+    contime.advance_to(20 + SNAPSHOT_COUNT as u64).unwrap();
+    contime.wait_until_idle(Duration::from_secs(5)).unwrap();
+    assert!(contime.errors().is_empty());
     contime
 }
 

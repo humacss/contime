@@ -13,6 +13,10 @@ where
 {
     pub fn start(config: ConTimeConfig<I::Time>, wrapper: W) -> Result<Self, contime_runtime::StartError> {
         let budget = MemoryBudget::new(config.memory_limit, config.memory_buffer);
+        let (input, incoming) = crossbeam_channel::unbounded();
+        let incoming = std::sync::Arc::new(incoming);
+        let (error_sender, errors) = crossbeam_channel::unbounded();
+        let mut controls = Vec::new();
         let mut subscriptions = Vec::new();
         let mut activity = || {
             let (sender, registrations) = crossbeam_channel::unbounded();
@@ -21,13 +25,16 @@ where
         };
         let routers = (0..config.router_count)
             .map(|_| {
-                let mut router = RouterProcess::<I, S>::new(config.router_seed);
+                let mut router = RouterProcess::<I, S>::new(config.placement);
                 router.activity = activity();
+                let (sender, receiver) = crossbeam_channel::unbounded();
+                controls.push(sender);
+                router.controls = receiver;
                 router
             })
             .collect();
         let workers = (0..config.worker_count)
-            .map(|_| {
+            .map(|index| {
                 let mut worker = WorkerProcess::new(
                     config.worker,
                     config.checkpoints,
@@ -36,12 +43,32 @@ where
                     wrapper.clone(),
                 );
                 worker.activity = activity();
+                let reports = input.clone();
+                worker.coordination = Some(contime_worker::Coordination {
+                    router_count: config.router_count,
+                    report: Box::new(move |round, minimum| {
+                        let _ = reports.send(crate::RouterMessage::Report { round, worker: index, minimum });
+                    }),
+                });
                 worker
             })
             .collect();
         let runtime = contime_runtime::Runtime::start(routers, workers)?;
-        let queues = runtime.queue_checks().to_vec();
-        Ok(Self { runtime, budget, subscriptions, queues, types: PhantomData })
+        let mut queues = runtime.queue_checks().to_vec();
+        let weak = std::sync::Arc::downgrade(&incoming);
+        queues.push(std::sync::Arc::new(move || weak.upgrade().is_none_or(|queue| queue.is_empty())));
+        let registrations = activity();
+        let output = runtime.input().clone();
+        let coordinator = match std::thread::Builder::new().name("contime-admission".into()).spawn(move || {
+            crate::coordinator::run(incoming, output, controls, registrations, config.history_retention, config.worker_count);
+        }) {
+            Ok(coordinator) => coordinator,
+            Err(source) => {
+                runtime.shutdown();
+                return Err(contime_runtime::StartError::ThreadSpawn { stage: contime_runtime::RuntimeStage::Admission, source });
+            }
+        };
+        Ok(Self { runtime, input, coordinator, errors, error_sender, budget, subscriptions, queues, types: PhantomData })
     }
 }
 
@@ -107,7 +134,7 @@ mod tests {
         ConTimeConfig {
             router_count,
             worker_count,
-            router_seed: 9,
+            placement: contime_router::Placement::default(),
             memory_limit: 1_000_000,
             memory_buffer: 1_000,
             history_retention: 0,
@@ -126,6 +153,20 @@ mod tests {
         let result = ConTime::<TestInput, TestSnapshot, ()>::start(config(0, 1), ());
 
         assert!(matches!(result, Err(contime_runtime::StartError::NoRouters)));
+    }
+
+    #[test]
+    fn exposed_budget_is_the_admission_budget() {
+        use contime_memory::{SizeDelta, TrackedMemoryBudget};
+        let core = ConTime::<TestInput, TestSnapshot, ()>::start(config(1, 1), ()).unwrap();
+        let external = core.memory_budget();
+        let bytes = config(1, 1).memory_limit;
+        external.apply_delta(SizeDelta::Increase(bytes));
+        assert_eq!(core.memory_budget().used(), bytes);
+        assert!(!core.memory_budget().can_admit(1));
+        external.apply_delta(SizeDelta::Decrease(bytes));
+        assert_eq!(core.memory_budget().used(), 0);
+        let _ = core.shutdown();
     }
 
     #[test]

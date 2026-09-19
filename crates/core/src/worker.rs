@@ -20,7 +20,16 @@ where
         budget: MemoryBudget,
         wrapper: W,
     ) -> Self {
-        Self { worker, checkpoints, history_retention, budget, wrapper, activity: crossbeam_channel::never(), types: PhantomData }
+        Self {
+            worker,
+            checkpoints,
+            history_retention,
+            budget,
+            wrapper,
+            activity: crossbeam_channel::never(),
+            coordination: None,
+            types: PhantomData,
+        }
     }
 }
 
@@ -43,6 +52,7 @@ where
             checkpoint_config,
             self.wrapper,
             self.activity,
+            self.coordination,
         );
         Ok(())
     }
@@ -166,6 +176,7 @@ mod tests {
         let (sender, receiver) = unbounded();
         let (batch, rejections) = batch(&budget, 5);
         sender.send(WorkerMessage::Apply(batch)).unwrap();
+        sender.send(WorkerMessage::Advance(crate::Advance { time: 10, completion: unbounded().0 })).unwrap();
         drop(sender);
 
         RuntimeWorker::run(process(budget, Arc::clone(&observed)), receiver).unwrap();
@@ -185,10 +196,14 @@ mod tests {
                     let observed = Arc::new(AtomicUsize::new(0));
                     let (sender, receiver) = unbounded();
                     sender.send(WorkerMessage::Apply(batch(&budget, 1_000).0)).unwrap();
+                    sender.send(WorkerMessage::Advance(crate::Advance { time: 10, completion: unbounded().0 })).unwrap();
                     drop(sender);
                     (process(budget, observed), receiver)
                 },
-                |(worker, receiver)| black_box(RuntimeWorker::run(worker, receiver).unwrap()),
+                |(worker, receiver)| {
+                    RuntimeWorker::run(worker, receiver).unwrap();
+                    black_box(())
+                },
                 BatchSize::LargeInput,
             );
         });

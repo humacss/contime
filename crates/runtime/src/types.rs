@@ -25,6 +25,7 @@ pub trait Worker: Send + 'static {
 /// The thread whose startup failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStage {
+    Admission,
     Router { index: usize },
     Worker { index: usize },
 }

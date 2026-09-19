@@ -72,7 +72,7 @@ fn config_with_replays(router_count: usize, worker_count: usize, retention: u64,
     ConTimeConfig {
         router_count,
         worker_count,
-        router_seed: 9,
+        placement: contime_router::Placement::default(),
         memory_limit: 10_000_000,
         memory_buffer: 1_000,
         history_retention: retention,
@@ -97,21 +97,28 @@ fn event_for(snapshot_id: u128, id: u128, time: u64, value: u64) -> TestEvent {
 #[test]
 fn advance_preserves_state_releases_memory_and_rejects_late_old_events() {
     let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
-    assert!(contime.apply([event(1, 1, 1), event(2, 5, 1), event(3, 10, 1), event(4, 15, 1)]).unwrap().is_empty());
+    contime.apply([event(1, 1, 1), event(2, 5, 1), event(3, 10, 1), event(4, 15, 1)]).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    assert!(contime.errors().is_empty());
     let before = contime.used_memory();
 
     contime.advance_to(20).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
 
     let snapshot = contime.query_at(20, [7]).unwrap().pop().unwrap();
     assert_eq!(snapshot.snapshot_id, 7);
     assert_eq!(snapshot.value, 4);
     assert!(contime.used_memory() < before);
 
-    let rejected = contime.apply([event(99, 9, 1)]).unwrap();
+    contime.apply([event(99, 9, 1)]).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    let rejected = contime.errors().try_iter().collect::<Vec<_>>();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].event_id, 99);
     assert_eq!(rejected[0].reason, RejectionReason::BeforeHistoryHorizon);
-    assert!(contime.apply([event(100, 10, 1)]).unwrap().is_empty());
+    contime.apply([event(100, 10, 1)]).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    assert!(contime.errors().is_empty());
     contime.shutdown();
 }
 
@@ -120,19 +127,23 @@ fn repeated_and_backward_advances_are_no_ops_and_pruned_ids_can_be_reused() {
     let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
     contime.apply([event(1, 1, 1), event(2, 10, 1)]).unwrap();
     contime.advance_to(20).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
     let after_first = contime.used_memory();
 
     contime.advance_to(20).unwrap();
     contime.advance_to(15).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
 
     assert_eq!(contime.used_memory(), after_first);
-    assert!(contime.apply([event(1, 10, 3)]).unwrap().is_empty());
+    contime.apply([event(1, 10, 3)]).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    assert!(contime.errors().is_empty());
     assert_eq!(contime.query_at(20, [7]).unwrap().pop().unwrap().value, 5);
     contime.shutdown();
 }
 
 #[test]
-fn asynchronous_advance_closes_after_every_worker_and_old_queries_use_the_anchor() {
+fn advance_admission_closes_and_idle_wait_makes_old_queries_use_the_anchor() {
     let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 4, 10), ()).unwrap();
     contime.apply([event(1, 1, 1), event(2, 5, 1), event(3, 10, 1)]).unwrap();
     let (completion, done) = unbounded();
@@ -140,6 +151,7 @@ fn asynchronous_advance_closes_after_every_worker_and_old_queries_use_the_anchor
     contime.send_advance_to(20, completion).unwrap();
 
     assert_eq!(done.into_iter().collect::<Vec<_>>(), Vec::<()>::new());
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
     let old = contime.query_at(0, [7]).unwrap().pop().unwrap();
     assert_eq!(old.time, 5);
     assert_eq!(old.value, 2);
@@ -155,6 +167,7 @@ fn advance_forces_dirty_pre_horizon_replay_before_pruning() {
     contime.advance_to(20).unwrap();
 
     assert_eq!(applied.into_iter().collect::<Vec<_>>(), Vec::new());
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
     assert_eq!(contime.query_at(20, [7]).unwrap().pop().unwrap().value, 7);
     contime.shutdown();
 }
@@ -167,6 +180,7 @@ fn event_at_the_horizon_remains_available_after_immediate_replay() {
 
     contime.advance_to(20).unwrap();
 
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
     assert_eq!(applied.try_recv(), Err(TryRecvError::Disconnected));
     assert_eq!(contime.query_at(20, [7]).unwrap().pop().unwrap().value, 7);
     contime.shutdown();
@@ -177,10 +191,17 @@ fn event_at_the_horizon_remains_available_after_immediate_replay() {
 fn a_history_first_seen_after_advancement_starts_at_the_active_horizon() {
     let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
     contime.advance_to(20).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
 
-    let rejected = contime.apply([event_for(9, 1, 9, 1)]).unwrap();
+    contime.apply([event_for(9, 1, 9, 1)]).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    let rejected = contime.errors().try_iter().collect::<Vec<_>>();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].event_id, 1);
     assert_eq!(rejected[0].reason, RejectionReason::BeforeHistoryHorizon);
-    assert!(contime.apply([event_for(9, 2, 10, 3)]).unwrap().is_empty());
+    contime.apply([event_for(9, 2, 10, 3)]).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    assert!(contime.errors().is_empty());
     assert_eq!(contime.query_at(20, [9]).unwrap().pop().unwrap().value, 3);
     contime.shutdown();
 }

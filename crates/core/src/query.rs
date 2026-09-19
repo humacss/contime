@@ -12,11 +12,11 @@ where
         snapshot_ids: impl IntoIterator<Item = u128>,
         response: Sender<Vec<Box<S>>>,
     ) -> Result<(), ApiError> {
-        contime_api::send_query_at::<RouterMessage<I, S>, _, _, _>(self.runtime.input(), time, snapshot_ids, response)
+        contime_api::send_query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids, response)
     }
 
     pub fn query_at(&self, time: I::Time, snapshot_ids: impl IntoIterator<Item = u128>) -> Result<Vec<Box<S>>, ApiError> {
-        contime_api::query_at::<RouterMessage<I, S>, _, _, _>(self.runtime.input(), time, snapshot_ids)
+        contime_api::query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids)
     }
 
     pub fn send_query_events_between(
@@ -26,11 +26,11 @@ where
         to: I::Time,
         response: Sender<Vec<TrackedEvent<I>>>,
     ) -> Result<(), ApiError> {
-        contime_api::send_query_events_between::<RouterMessage<I, S>, _, _>(self.runtime.input(), snapshot_id, from, to, response)
+        contime_api::send_query_events_between::<RouterMessage<I, S>, _, _>(&self.input, snapshot_id, from, to, response)
     }
 
     pub fn query_events_between(&self, snapshot_id: u128, from: I::Time, to: I::Time) -> Result<Vec<TrackedEvent<I>>, ApiError> {
-        contime_api::query_events_between::<RouterMessage<I, S>, _, _>(self.runtime.input(), snapshot_id, from, to)
+        contime_api::query_events_between::<RouterMessage<I, S>, _, _>(&self.input, snapshot_id, from, to)
     }
 }
 
@@ -107,7 +107,7 @@ mod tests {
         ConTimeConfig {
             router_count: 2,
             worker_count: 4,
-            router_seed: 9,
+            placement: contime_router::Placement::default(),
             memory_limit: 1_000_000,
             memory_buffer: 1_000,
             history_retention: 0,

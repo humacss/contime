@@ -8,6 +8,11 @@ to their specialized crates.
 
 The crate does not depend on the root `contime` crate.
 
+`ConTimeConfig::placement` replaces `router_seed`. Use `Placement::default()`
+for snapshot-ID modulus routing, or `Placement::with_mapper` to provide a
+deterministic mapping. Core supplies the same policy to all routers and all
+operation kinds.
+
 ## Apply flow
 
 ```text
@@ -15,12 +20,13 @@ owned inputs
   -> conservative batch admission
   -> tracked shared events
   -> API batch
+  -> admission coordinator
   -> shared router queue
   -> snapshot routes
   -> worker histories
-  -> checkpoint replay
+  -> time-ordered checkpoint steps
   -> lane application
-  -> completion by sender closure
+  -> shared rejection stream
 ```
 
 Consumers implement `Input`, the snapshot contracts re-exported through
@@ -28,6 +34,12 @@ Consumers implement `Input`, the snapshot contracts re-exported through
 `contime_core::lanes`. Accepted event allocations are tracked once. Router
 fan-out clones only tracked pointers. Checkpoint snapshots are retained in
 independently mutable tracked ownership and report size changes after replay.
+
+`apply` enqueues external inputs and returns without waiting. Rejections are
+received through `errors()`; use `wait_until_idle` when a test needs processing
+to finish. The processing target starts at the time type's default value and
+is moved forward by `advance_to`. Future inputs remain available to queries
+but do not publish application effects until their time is reached.
 
 The memory safety buffer is excluded from normal input admission. A batch that
 does not fit is rejected as a whole with one `MemoryFull` result per event ID.
@@ -50,8 +62,9 @@ acknowledge event history, force replay, or change worker scheduling.
 `wait_until_idle(Duration)` waits until queued and active work has finished,
 returning `Ok(())`, `IdleError::Timeout`, or an immediate
 `IdleError::ComponentStopped` if a router/worker exits. For tests, stop submitting work, wait,
-then query and assert. Waiting does not advance time, prune history, or change
-ordinary query behavior; a timeout stops waiting without cancelling processing.
+then query and assert. Waiting does not advance time or request pruning; it
+also waits for already-requested safe pruning. Future-only history does not
+prevent idle. A timeout stops waiting without cancelling processing.
 
 ## Deferred scope
 
@@ -60,54 +73,23 @@ ordinary query behavior; a timeout stops waiting without cancelling processing.
 
 ## Horizon advancement
 
-`send_advance_to` broadcasts a timestamp and returns immediately;
-`advance_to` waits for completion by sender closure. Each worker advances
-monotonically and retains `history_retention` worth of time. Before pruning, a
-dirty pre-horizon history is replayed and a complete replay anchor is
-materialized. Events and cadence checkpoints strictly before the horizon are
-then dropped, releasing their tracked allocations. Events exactly at the
-horizon remain valid; later arrivals before it return
-`BeforeHistoryHorizon`. Queries older than the retained anchor return that
-anchor as a best-effort reconstruction.
+`advance_to` asynchronously raises the processing target and requests retention
+of `history_retention` worth of time. The admission coordinator rejects new
+external input before the requested horizon. Router fences and worker reports
+establish a conservative safe boundary before any retained data is removed.
+Accepted work and its causal outputs remain protected during that measurement.
+Pruning preserves a replay anchor and keeps events exactly at the boundary.
+Queries older than the anchor return that anchor as a best-effort result.
 
-### Remaining ordering-barrier limitation
+`apply_internal(source_time, inputs)` is reserved for causal outputs submitted
+before an active application returns. It enforces the proven safe boundary
+and rejects output earlier than its source time. Detached producers cannot
+use this contract. Queries do not establish submission or replay barriers.
 
-There is deliberately no global router barrier yet. The runtime has one shared
-input queue consumed by multiple routers. Although requests leave that queue
-one at a time, one router may still be dispatching an apply while another
-router dispatches a later horizon advance. Worker queues preserve the order in
-which they receive messages, but they cannot reconstruct the original order of
-messages dispatched concurrently by different routers.
+### Historical benchmark baseline
 
-This matters because horizon advancement is an irreversible retention action,
-not ordinary event-time ordering. If the advance reaches a worker first, that
-worker may establish the new horizon and prune history before an earlier apply
-arrives. The late apply is then correctly rejected as
-`BeforeHistoryHorizon`, even though the caller submitted it before the advance.
-Likewise, dirty history that has not reached its worker cannot participate in
-the advance's replay-before-prune pass. Canonical `(time, input ID)` ordering
-inside a history cannot repair either case after pruning has happened.
-
-Callers that require this ordering must currently establish completion before
-advancing:
-
-- use synchronous `apply` before `advance_to`; or
-- after `send`, drain the request's rejection receiver until it disconnects,
-  proving that every downstream completion-sender clone has been dropped.
-
-`advance_to` waits only for that advance to finish. It does not implicitly wait
-for unrelated earlier asynchronous sends. A read-only query can establish that
-specific benchmark or test fixtures have reached their workers, as the dirty
-advancement benchmark does, but it is not the public ordering contract. A
-single-router runtime naturally serializes router dispatch today, but callers
-should not rely on topology as a permanent correctness mechanism.
-
-A future solution needs an explicit cross-router fence or monotonically ordered
-request epoch. Every router would have to finish dispatching work before the
-fence, and every affected worker would have to finish that work, before any
-post-fence advance could execute. That design is intentionally deferred: it
-must preserve the current low-overhead asynchronous send path and avoid a
-global stop-the-world barrier for requests that do not need ordering.
+The figures below predate incremental scheduling and the admission coordinator;
+they are not measurements of the current implementation.
 
 Local optimized advancement-only results for 1,000 histories on 2026-09-01:
 

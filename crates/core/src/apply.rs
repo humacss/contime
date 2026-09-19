@@ -1,5 +1,4 @@
-use contime_api::{ApiError, ApplyResponse};
-use crossbeam_channel::unbounded;
+use contime_api::ApiError;
 
 use crate::{ConTime, Input, RejectionReason};
 
@@ -7,13 +6,16 @@ impl<I, S, W> ConTime<I, S, W>
 where
     I: Input,
 {
-    pub fn apply(&self, inputs: impl IntoIterator<Item = I>) -> Result<ApplyResponse<RejectionReason>, ApiError> {
-        let (rejection_sender, rejection_receiver) = unbounded();
-        self.send(inputs, rejection_sender)?;
-        let mut rejections = rejection_receiver.into_iter().collect::<Vec<_>>();
-        rejections.sort_unstable();
-        rejections.dedup();
-        Ok(rejections)
+    /// Enqueues external inputs without waiting for admission or replay.
+    /// Observe rejected inputs through [`Self::errors`] and use
+    /// [`Self::wait_until_idle`] when a processing barrier is needed.
+    pub fn apply(&self, inputs: impl IntoIterator<Item = I>) -> Result<(), ApiError> {
+        self.send(inputs, self.error_sender.clone())
+    }
+
+    /// Shared rejection stream. Receiving an error is not a completion signal.
+    pub fn errors(&self) -> &crossbeam_channel::Receiver<crate::RejectionMessage<RejectionReason>> {
+        &self.errors
     }
 
     pub fn used_memory(&self) -> usize {
@@ -128,7 +130,7 @@ mod tests {
         ConTimeConfig {
             router_count: 1,
             worker_count: 1,
-            router_seed: 9,
+            placement: contime_router::Placement::default(),
             memory_limit,
             memory_buffer,
             history_retention: 0,
@@ -147,9 +149,11 @@ mod tests {
         let contime = ConTime::<TestInput, TestSnapshot, ()>::start(config(100, 50), ()).unwrap();
         let observed = Arc::new(AtomicUsize::new(0));
 
-        let response = contime
+        contime
             .apply(vec![TestInput { id: 1, value: 1, observed: Arc::clone(&observed) }, TestInput { id: 2, value: 1, observed }])
             .unwrap();
+        contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+        let response = contime.errors().try_iter().collect::<Vec<_>>();
 
         assert_eq!(response.len(), 2);
         assert_eq!(response[0].reason, RejectionReason::MemoryFull);
@@ -158,14 +162,18 @@ mod tests {
     }
 
     #[test]
-    fn apply_completes_after_lane_application_and_duplicate_ids_are_no_ops() {
+    fn idle_wait_completes_lane_application_and_duplicate_ids_are_no_ops() {
         let contime = ConTime::<TestInput, TestSnapshot, ()>::start(config(100_000, 1_000), ()).unwrap();
         let observed = Arc::new(AtomicUsize::new(0));
 
-        assert!(contime.apply(vec![TestInput { id: 1, value: 5, observed: Arc::clone(&observed) }]).unwrap().is_empty());
+        contime.advance_to(10).unwrap();
+        contime.apply(vec![TestInput { id: 1, value: 5, observed: Arc::clone(&observed) }]).unwrap();
+        contime.wait_until_idle(Duration::from_secs(2)).unwrap();
         assert_eq!(observed.load(Ordering::Relaxed), 5);
 
-        assert!(contime.apply(vec![TestInput { id: 1, value: 9, observed }]).unwrap().is_empty());
+        contime.apply(vec![TestInput { id: 1, value: 9, observed }]).unwrap();
+        contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+        assert!(contime.errors().is_empty());
         assert!(contime.used_memory() > 0);
         contime.shutdown();
     }
@@ -179,7 +187,8 @@ mod tests {
         criterion.bench_function("core/apply/prepare_and_reject_1000", |bencher| {
             bencher.iter(|| {
                 let inputs = (0..1_000).map(|id| TestInput { id, value: 1, observed: Arc::clone(&observed) }).collect::<Vec<_>>();
-                black_box(contime.apply(inputs).unwrap())
+                contime.apply(inputs).unwrap();
+                black_box(())
             });
         });
         criterion.final_summary();
