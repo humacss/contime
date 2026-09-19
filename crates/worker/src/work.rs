@@ -1,13 +1,17 @@
-use ahash::AHashMap;
+use std::cmp::Reverse;
+
+use ahash::{AHashMap, AHashSet};
 use crossbeam_channel::{Receiver, TryRecvError};
+use priority_queue::PriorityQueue;
 
 use crate::checkpoints::update_snapshot;
 use crate::events::insert_batch;
 use crate::listen::NotificationCollections;
 use crate::query::{query_events, query_snapshots};
 use crate::types::{
-    AdvanceInput, ApplyInput, Checkpoints, Completion, EventQueryInput, EventQueryResponse, Events, QueryCheckpoints, QueryEvents,
-    RouteInput, SnapshotListenInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, WorkInput, WorkInputKind, WorkerConfig,
+    AdvanceInput, ApplyInput, Checkpoints, Completion, Coordination, EventQueryInput, EventQueryResponse, Events, IncrementalCheckpoints,
+    QueryCheckpoints, QueryEvents, ReplayUpdate, RouteInput, SnapshotListenInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot,
+    WorkInput, WorkInputKind, WorkerConfig,
 };
 
 /// Drains ready event batches into one apply cycle and updates each changed
@@ -64,24 +68,18 @@ type ApplyRoute<M> = <<M as WorkInput>::Apply as ApplyInput>::Route;
 type ApplyCompletion<M> = <<M as WorkInput>::Apply as ApplyInput>::Completion;
 type ApplyEvent<M> = <ApplyRoute<M> as RouteInput>::Input;
 type EventTime<M, S> = <S as Events<ApplyEvent<M>>>::Time;
-type MessageKind<M> = WorkInputKind<
-    <M as WorkInput>::Apply,
-    <M as WorkInput>::SnapshotQuery,
-    <M as WorkInput>::EventQuery,
-    <M as WorkInput>::SnapshotListen,
-    <M as WorkInput>::Advance,
->;
-
 /// Runs with activity subscriptions: false means idle, true means working.
 /// Registrations are serviced only in the idle phase; work receivers are ordinary channels.
+/// `history_retention` is retained for compatibility; only explicit Prune messages prune.
 pub fn work_messages<M, S, K>(
     input: Receiver<M>,
     _config: WorkerConfig,
     events_config: S::Config,
-    history_retention: <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
+    _history_retention: <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
     checkpoints_config: K::Config,
     checkpoints_context: <K as Checkpoints<S>>::Context,
     registrations: Receiver<crossbeam_channel::Sender<bool>>,
+    coordination: Option<Coordination<EventTime<M, S>>>,
 ) where
     M: WorkInput,
     M::Apply: ApplyInput,
@@ -90,7 +88,7 @@ pub fn work_messages<M, S, K>(
             <<M::Apply as ApplyInput>::Route as RouteInput>::Input,
             Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
         >,
-    K: Checkpoints<S, Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>
+    K: IncrementalCheckpoints<S, Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>
         + QueryCheckpoints<S, Context = <K as Checkpoints<S>>::Context>,
     <M::Apply as ApplyInput>::Completion: Completion<S::Rejection>,
     M::SnapshotQuery: SnapshotQueryInput<Time = <K as QueryCheckpoints<S>>::Time>,
@@ -102,7 +100,7 @@ pub fn work_messages<M, S, K>(
     <<M::Apply as ApplyInput>::Route as RouteInput>::Input: Clone,
 {
     let mut worker =
-        MessageWorker::<M, S, K>::new(&input, &registrations, events_config, history_retention, checkpoints_config, checkpoints_context);
+        MessageWorker::<M, S, K>::new(&input, &registrations, events_config, checkpoints_config, checkpoints_context, coordination);
     worker.activity_loop();
 }
 
@@ -123,10 +121,13 @@ where
     events_config: S::Config,
     checkpoints_config: K::Config,
     checkpoints_context: <K as Checkpoints<S>>::Context,
-    history_retention: EventTime<M, S>,
     current_time: EventTime<M, S>,
     horizon: EventTime<M, S>,
-    dirty_snapshot_ids: Vec<u128>,
+    schedule: PriorityQueue<u128, Reverse<(EventTime<M, S>, u128)>>,
+    coordination: Option<Coordination<EventTime<M, S>>>,
+    fence_round: Option<u64>,
+    fence_routers: AHashSet<usize>,
+    reported_round: Option<u64>,
 }
 
 impl<'a, M, S, K> MessageWorker<'a, M, S, K>
@@ -138,7 +139,7 @@ where
             <<M::Apply as ApplyInput>::Route as RouteInput>::Input,
             Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
         >,
-    K: Checkpoints<S, Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>
+    K: IncrementalCheckpoints<S, Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>
         + QueryCheckpoints<S, Context = <K as Checkpoints<S>>::Context>,
     <M::Apply as ApplyInput>::Completion: Completion<S::Rejection>,
     M::SnapshotQuery: SnapshotQueryInput<Time = <K as QueryCheckpoints<S>>::Time>,
@@ -153,9 +154,9 @@ where
         input: &'a Receiver<M>,
         registrations: &'a Receiver<crossbeam_channel::Sender<bool>>,
         events_config: S::Config,
-        history_retention: EventTime<M, S>,
         checkpoints_config: K::Config,
         checkpoints_context: <K as Checkpoints<S>>::Context,
+        coordination: Option<Coordination<EventTime<M, S>>>,
     ) -> Self {
         Self {
             input,
@@ -165,9 +166,12 @@ where
             activity_listeners: Vec::new(),
             current_time: EventTime::<M, S>::default(),
             horizon: EventTime::<M, S>::default(),
-            dirty_snapshot_ids: Vec::new(),
+            schedule: PriorityQueue::new(),
+            coordination,
+            fence_round: None,
+            fence_routers: AHashSet::new(),
+            reported_round: None,
             events_config,
-            history_retention,
             checkpoints_config,
             checkpoints_context,
         }
@@ -201,18 +205,19 @@ where
 
     /// Drains available work; returns why receiving stopped.
     fn work_loop(&mut self) -> TryRecvError {
-        let mut pending = None;
         loop {
-            let message = match pending.take() {
-                Some(message) => message,
-                None => match self.input.try_recv() {
-                    Ok(message) => message.into_kind(),
-                    Err(reason) => return reason,
-                },
+            let message = match self.input.try_recv() {
+                Ok(message) => message.into_kind(),
+                Err(reason) => {
+                    if self.step() {
+                        continue;
+                    }
+                    return reason;
+                }
             };
             match message {
                 WorkInputKind::Apply(batch) => {
-                    pending = self.apply_batch(batch);
+                    self.apply_batch(batch);
                 }
                 WorkInputKind::SnapshotQuery(query) => {
                     query_snapshots(query, &self.snapshots, &self.checkpoints_config, &mut self.checkpoints_context)
@@ -224,45 +229,95 @@ where
                 }
                 WorkInputKind::Advance(advance) => {
                     let (target_time, completion) = advance.into_parts();
-                    crate::advance::advance_worker::<ApplyEvent<M>, _, _, _, _, _>(
-                        &mut self.snapshots,
-                        &self.checkpoints_config,
-                        &mut self.checkpoints_context,
-                        &mut self.current_time,
-                        &mut self.horizon,
-                        &self.history_retention,
-                        target_time,
-                        completion,
-                        &mut |update, snapshots| self.listeners.record(update, snapshots),
-                    );
-                    self.listeners.flush();
+                    self.current_time = self.current_time.clone().max(target_time);
+                    drop(completion);
+                }
+                WorkInputKind::Fence { round, router } => self.fence(round, router),
+                WorkInputKind::Prune(prune) => {
+                    let (horizon, completion) = prune.into_parts();
+                    self.prune(horizon);
+                    drop(completion);
                 }
             }
         }
     }
 
-    /// Coalesces applies and replays changed snapshots, preserving the next non-apply.
-    fn apply_batch(&mut self, batch: M::Apply) -> Option<MessageKind<M>> {
-        self.dirty_snapshot_ids.clear();
-        insert_batch(batch, &mut self.snapshots, &mut self.dirty_snapshot_ids, &self.events_config, &self.horizon);
-        let mut pending = None;
-        while let Ok(message) = self.input.try_recv() {
-            match message.into_kind() {
-                WorkInputKind::Apply(batch) => {
-                    insert_batch(batch, &mut self.snapshots, &mut self.dirty_snapshot_ids, &self.events_config, &self.horizon);
-                }
-                message => {
-                    pending = Some(message);
-                    break;
+    fn apply_batch(&mut self, batch: M::Apply) {
+        let (routes, completion) = batch.into_parts();
+        let mut rejections = Vec::new();
+        for route in routes {
+            let (snapshot_id, input) = route.into_parts();
+            let slot = self.snapshots.entry(snapshot_id).or_insert_with(SnapshotSlot::metadata_only);
+            let events = slot.events.get_or_insert_with(|| S::create(snapshot_id, &self.events_config, &self.horizon));
+            let result = events.insert(input);
+            rejections.extend(result.rejections);
+            if result.changed {
+                let checkpoints = slot.checkpoints.get_or_insert_with(|| K::create(snapshot_id, &self.checkpoints_config));
+                checkpoints.invalidate(events);
+                if let Some(time) = checkpoints.next_time(events) {
+                    self.schedule.push(snapshot_id, Reverse((time, snapshot_id)));
+                } else {
+                    self.schedule.remove(&snapshot_id);
                 }
             }
         }
-        for snapshot_id in self.dirty_snapshot_ids.drain(..) {
-            let update = update_snapshot(snapshot_id, &mut self.snapshots, &self.checkpoints_config, &mut self.checkpoints_context);
-            self.listeners.record(update, &mut self.snapshots);
+        if !rejections.is_empty() {
+            completion.reject(rejections);
         }
+    }
+
+    /// Runs one entire timestamp for the earliest snapshot, then yields to input.
+    fn step(&mut self) -> bool {
+        if !self.schedule.peek().is_some_and(|(_, Reverse((time, _)))| time <= &self.current_time) {
+            return false;
+        }
+        let (snapshot_id, Reverse((time, _))) = self.schedule.pop().expect("runnable snapshot exists");
+        let slot = self.snapshots.get_mut(&snapshot_id).expect("scheduled history exists");
+        let events = slot.events.as_ref().expect("scheduled events exist");
+        let checkpoints = slot.checkpoints.as_mut().expect("scheduled checkpoints exist");
+        checkpoints.step(events, &mut self.checkpoints_context, &time);
+        if let Some(next) = checkpoints.next_time(events) {
+            self.schedule.push(snapshot_id, Reverse((next, snapshot_id)));
+        }
+        self.listeners.record(ReplayUpdate { snapshot_id, affected_from: time }, &mut self.snapshots);
         self.listeners.flush();
-        pending
+        true
+    }
+
+    fn fence(&mut self, round: u64, router: usize) {
+        let Some(coordination) = self.coordination.as_mut() else { return };
+        if self.reported_round.is_some_and(|reported| round <= reported)
+            || self.fence_round.is_some_and(|current| round < current)
+            || router >= coordination.router_count
+        {
+            return;
+        }
+        if self.fence_round != Some(round) {
+            self.fence_round = Some(round);
+            self.fence_routers.clear();
+        }
+        self.fence_routers.insert(router);
+        if self.fence_routers.len() == coordination.router_count {
+            self.reported_round = Some(round);
+            let earliest = self.schedule.peek().map(|(_, Reverse((time, _)))| time.clone());
+            (coordination.report)(round, earliest);
+        }
+    }
+
+    fn prune(&mut self, horizon: EventTime<M, S>) {
+        if horizon <= self.horizon {
+            return;
+        }
+        assert!(self.schedule.peek().is_none_or(|(_, Reverse((time, _)))| time >= &horizon), "prune would discard pending replay");
+        for slot in self.snapshots.values_mut() {
+            let Some(events) = slot.events.as_mut() else { continue };
+            if let Some(checkpoints) = slot.checkpoints.as_mut() {
+                assert!(checkpoints.next_time(events).is_none_or(|time| time >= horizon), "prune would discard pending replay");
+                checkpoints.advance_before(events, &mut self.checkpoints_context, &horizon);
+            }
+            events.prune_before(&horizon);
+        }
+        self.horizon = horizon;
     }
 }
 #[cfg(test)]

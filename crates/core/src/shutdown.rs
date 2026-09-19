@@ -6,7 +6,12 @@ impl<I, S, W> ConTime<I, S, W>
 where
     I: Input,
 {
+    /// Closes admission and joins the topology. When callbacks submit causal
+    /// work through a borrowed/shared owner, wait for idle before releasing
+    /// that owner and calling this consuming method.
     pub fn shutdown(self) -> contime_runtime::ShutdownReport<contime_router::RouterError, Infallible> {
+        let _ = self.input.send(crate::RouterMessage::Shutdown);
+        let _ = self.coordinator.join();
         self.runtime.shutdown()
     }
 }
@@ -74,7 +79,7 @@ mod tests {
             ConTimeConfig {
                 router_count: 1,
                 worker_count: 1,
-                router_seed: 9,
+                placement: contime_router::Placement::default(),
                 memory_limit: 1_000_000,
                 memory_buffer: 1_000,
                 history_retention: 0,

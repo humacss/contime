@@ -12,7 +12,7 @@ where
         snapshot_ids: impl IntoIterator<Item = u128>,
         notifications: Sender<SnapshotListenerMessage<I::Time>>,
     ) -> Result<(), ApiError> {
-        contime_api::send_listen_snapshots(self.runtime.input(), time, snapshot_ids, notifications)
+        contime_api::send_listen_snapshots(&self.input, time, snapshot_ids, notifications)
     }
 }
 

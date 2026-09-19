@@ -107,14 +107,15 @@ mod tests {
         count: usize,
     }
 
-    struct TestCheckpoints;
+    #[derive(Default)]
+    struct TestCheckpoints(Option<u64>);
 
     impl Checkpoints<TestEvents> for TestCheckpoints {
         type Config = ();
         type Context = ();
         type Time = u64;
         fn create(_snapshot_id: u128, _config: &Self::Config) -> Self {
-            Self
+            Self::default()
         }
 
         fn update(&mut self, _events: &mut TestEvents, _context: &mut Self::Context) -> Self::Time {
@@ -131,6 +132,20 @@ mod tests {
 
         fn query_at(&self, events: &TestEvents, _context: &mut Self::Context, _time: Self::Time) -> Option<Box<Self::Snapshot>> {
             Some(Box::new(TestSnapshot { snapshot_id: 7, count: events.0.len() }))
+        }
+    }
+
+    impl crate::IncrementalCheckpoints<TestEvents> for TestCheckpoints {
+        fn invalidate(&mut self, _events: &mut TestEvents) {
+            self.0 = None;
+        }
+
+        fn next_time(&self, events: &TestEvents) -> Option<u64> {
+            events.0.iter().map(|event| event.0).filter(|time| self.0.is_none_or(|tip| *time > tip)).min()
+        }
+
+        fn step(&mut self, events: &TestEvents, _context: &mut (), target: &u64) {
+            self.0 = self.next_time(events).filter(|time| time <= target).or(self.0);
         }
     }
 
@@ -246,6 +261,21 @@ mod tests {
     }
 
     #[test]
+    fn future_only_history_does_not_replay_before_explicit_advance() {
+        let (input, receiver) = unbounded();
+        let (notifications, observed) = unbounded();
+        input.send(Message::Listen(Listen { time: 10, snapshot_ids: vec![7], listener: TestListener(notifications) })).unwrap();
+        let (completion, done) = unbounded();
+        input.send(Message::Apply(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }], completion })).unwrap();
+        drop(input);
+
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
+
+        assert_eq!(observed.try_iter().collect::<Vec<_>>(), vec![ListenerMessage::Registered { time: 10, snapshot_ids: vec![7] }]);
+        assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+    }
+
+    #[test]
     fn one_worker_queue_serves_snapshot_and_event_queries_without_forced_replay() {
         let (input, receiver) = unbounded();
         let (completion, _rejections) = unbounded();
@@ -265,7 +295,7 @@ mod tests {
         input.send(Message::Events(EventQuery { response: event_response })).unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never());
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(*snapshots.recv().unwrap()[0], TestSnapshot { snapshot_id: 7, count: 3 });
         assert_eq!(events.recv().unwrap().into_iter().map(|event| event.0).collect::<Vec<_>>(), vec![1, 2]);
@@ -278,7 +308,7 @@ mod tests {
         input.send(Message::Advance(Advance { time: 20, completion })).unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 10, (), (), crossbeam_channel::never());
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 10, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
     }
@@ -287,28 +317,32 @@ mod tests {
     fn one_worker_queue_registers_before_snapshot_creation_and_notifies_after_replay() {
         let (input, receiver) = unbounded();
         let (notifications, observed) = unbounded();
-        input.send(Message::Listen(Listen { time: 0, snapshot_ids: vec![7], listener: TestListener(notifications) })).unwrap();
+        input.send(Message::Listen(Listen { time: 10, snapshot_ids: vec![7], listener: TestListener(notifications) })).unwrap();
+        input.send(Message::Advance(Advance { time: 10, completion: unbounded().0 })).unwrap();
         let (completion, _rejections) = unbounded();
         input.send(Message::Apply(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }], completion })).unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never());
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(
             observed.try_iter().collect::<Vec<_>>(),
             vec![
-                ListenerMessage::Registered { time: 0, snapshot_ids: vec![7] },
-                ListenerMessage::Replayed { time: 0, snapshot_ids: vec![7] },
+                ListenerMessage::Registered { time: 10, snapshot_ids: vec![7] },
+                ListenerMessage::Replayed { time: 10, snapshot_ids: vec![7] },
             ]
         );
     }
 
     #[test]
-    fn one_worker_replay_batch_sends_one_notification_for_one_hundred_snapshots() {
+    fn worker_flushes_notifications_between_snapshot_steps() {
         let (input, receiver) = unbounded();
         let (notifications, observed) = unbounded();
         let snapshot_ids = (0..100_u128).collect::<Vec<_>>();
-        input.send(Message::Listen(Listen { time: 0, snapshot_ids: snapshot_ids.clone(), listener: TestListener(notifications) })).unwrap();
+        input
+            .send(Message::Listen(Listen { time: 10, snapshot_ids: snapshot_ids.clone(), listener: TestListener(notifications) }))
+            .unwrap();
+        input.send(Message::Advance(Advance { time: 10, completion: unbounded().0 })).unwrap();
         let (completion, _rejections) = unbounded();
         input
             .send(Message::Apply(ApplyBatch {
@@ -318,23 +352,21 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never());
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
 
-        assert_eq!(observed.recv().unwrap(), ListenerMessage::Registered { time: 0, snapshot_ids: snapshot_ids.clone() });
-        let ListenerMessage::Replayed { time, snapshot_ids: mut replayed } = observed.recv().unwrap() else {
-            panic!("expected replay notification")
-        };
-        replayed.sort_unstable();
-        assert_eq!(time, 0);
-        assert_eq!(replayed, snapshot_ids);
+        assert_eq!(observed.recv().unwrap(), ListenerMessage::Registered { time: 10, snapshot_ids: snapshot_ids.clone() });
+        for snapshot_id in snapshot_ids {
+            assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 10, snapshot_ids: vec![snapshot_id] });
+        }
         assert!(observed.try_recv().is_err());
     }
 
     #[test]
-    fn one_apply_batch_sends_one_notification_regardless_of_the_old_replay_budget() {
+    fn snapshot_steps_ignore_the_old_replay_budget() {
         let (input, receiver) = unbounded();
         let (notifications, observed) = unbounded();
-        input.send(Message::Listen(Listen { time: 0, snapshot_ids: vec![1, 2, 3], listener: TestListener(notifications) })).unwrap();
+        input.send(Message::Listen(Listen { time: 10, snapshot_ids: vec![1, 2, 3], listener: TestListener(notifications) })).unwrap();
+        input.send(Message::Advance(Advance { time: 10, completion: unbounded().0 })).unwrap();
         let (completion, _rejections) = unbounded();
         input
             .send(Message::Apply(ApplyBatch {
@@ -346,20 +378,21 @@ mod tests {
         let mut worker_config = config();
         worker_config.replays_per_receive = 1;
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, worker_config, (), 0, (), (), crossbeam_channel::never());
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, worker_config, (), 0, (), (), crossbeam_channel::never(), None);
 
         assert!(matches!(observed.recv().unwrap(), ListenerMessage::Registered { .. }));
-        let ListenerMessage::Replayed { snapshot_ids: mut replayed, .. } = observed.recv().unwrap() else { panic!("expected replay") };
-        replayed.sort_unstable();
-        assert_eq!(replayed, vec![1, 2, 3]);
+        for snapshot_id in [1, 2, 3] {
+            assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 10, snapshot_ids: vec![snapshot_id] });
+        }
         assert!(observed.try_recv().is_err());
     }
 
     #[test]
-    fn adjacent_apply_messages_share_one_replay_cycle() {
+    fn adjacent_applies_replay_each_timestamp_and_complete_independently() {
         let (input, receiver) = unbounded();
         let (notifications, observed) = unbounded();
-        input.send(Message::Listen(Listen { time: 0, snapshot_ids: vec![7], listener: TestListener(notifications) })).unwrap();
+        input.send(Message::Listen(Listen { time: 10, snapshot_ids: vec![7], listener: TestListener(notifications) })).unwrap();
+        input.send(Message::Advance(Advance { time: 10, completion: unbounded().0 })).unwrap();
 
         let (first_completion, first_done) = unbounded();
         input
@@ -377,10 +410,11 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never());
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
 
         assert!(matches!(observed.recv().unwrap(), ListenerMessage::Registered { .. }));
-        assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 0, snapshot_ids: vec![7] });
+        assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 10, snapshot_ids: vec![7] });
+        assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 10, snapshot_ids: vec![7] });
         assert!(observed.try_recv().is_err());
         assert_eq!(first_done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
         assert_eq!(second_done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
@@ -407,7 +441,7 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never());
+        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(*snapshots.recv().unwrap()[0], TestSnapshot { snapshot_id: 7, count: 1 });
     }
@@ -454,7 +488,7 @@ mod tests {
             7,
             crate::types::SnapshotSlot::<TestEvents, TestCheckpoints, Completion, ()> {
                 events: Some(TestEvents((0..1_000).map(TestEvent).collect())),
-                checkpoints: Some(TestCheckpoints),
+                checkpoints: Some(TestCheckpoints::default()),
                 dirty: false,
                 waiters: Vec::new(),
                 notification_ids: Vec::new(),

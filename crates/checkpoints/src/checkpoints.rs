@@ -40,6 +40,50 @@ where
         self.checkpoints.iter()
     }
 
+    /// Discards materialized state affected by a newly admitted event.
+    /// Call before querying or resuming replay after canonical history changes.
+    /// The timestamp's entire bucket must be reapplied, including earlier IDs.
+    pub fn invalidate_from(&mut self, time: &S::Time) {
+        let retained = self.checkpoints.partition_point(|checkpoint| checkpoint.key.time < *time);
+        self.checkpoints.truncate(retained);
+    }
+
+    /// Earliest canonical bucket not represented by the current valid tip.
+    pub fn next_replay_time<H: crate::Events<Time = S::Time>>(&self, events: &H) -> Option<S::Time> {
+        events.iter_after(self.replay_boundary()).next().map(|event| event.time.clone())
+    }
+
+    pub(crate) fn replay_boundary(&self) -> Option<&CheckpointKey<S::Time>> {
+        self.current().map(|checkpoint| &checkpoint.key).or_else(|| self.anchor.as_ref().and_then(|anchor| anchor.boundary.as_ref()))
+    }
+
+    /// Moves an incomplete tip into the next step instead of cloning it on
+    /// every yield. Only fixed cadence checkpoints need a working-state clone.
+    pub(crate) fn resume_replay(&mut self) -> ReplaySession<'_, S> {
+        let movable_tip = self.checkpoints.len().checked_sub(1).filter(|index| !self.tip_interval_is_full(*index));
+        let events_since_checkpoint = movable_tip.map_or(0, |index| self.events_in_checkpoint(index));
+        let (working_snapshot, start_key, history_event_count) = if movable_tip.is_some() {
+            let tip = self.checkpoints.pop_back().expect("movable tip exists");
+            (Some(tip.snapshot), Some(tip.key), tip.history_event_count)
+        } else if let Some(tip) = self.current() {
+            (Some(tip.snapshot.clone()), Some(tip.key.clone()), tip.history_event_count)
+        } else {
+            self.anchor
+                .as_ref()
+                .map_or((None, None, 0), |anchor| (Some(anchor.snapshot.clone()), anchor.boundary.clone(), anchor.history_event_count))
+        };
+        let next_checkpoint_index = self.checkpoints.len();
+        ReplaySession {
+            store: self,
+            working_snapshot,
+            start_key,
+            history_event_count,
+            applied_events: 0,
+            events_since_checkpoint,
+            next_checkpoint_index,
+        }
+    }
+
     pub(crate) fn latest_before_index(&self, boundary: &CheckpointKey<S::Time>) -> Option<usize> {
         let index = self.checkpoints.partition_point(|checkpoint| checkpoint.key < *boundary);
         index.checked_sub(1)

@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// Worker-local replay scheduling policy.
+/// Legacy worker configuration, retained for API compatibility.
+/// Message workers always drain ready messages before one timestamp step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkerConfig {
     /// Maximum time changed events may wait before their snapshot is replayed.
@@ -159,6 +160,24 @@ pub trait Checkpoints<S>: Sized {
     fn advance_before(&mut self, events: &S, context: &mut Self::Context, horizon: &Self::Time);
 }
 
+/// Checkpoint continuation for timestamp-at-a-time message workers.
+pub trait IncrementalCheckpoints<S>: Checkpoints<S> {
+    /// Invalidates affected state and transfers history dirtiness to scheduling.
+    fn invalidate(&mut self, events: &mut S);
+
+    /// The earliest complete timestamp not represented by valid checkpoints.
+    fn next_time(&self, events: &S) -> Option<Self::Time>;
+
+    /// Applies at most one complete timestamp bucket through the target.
+    fn step(&mut self, events: &S, context: &mut Self::Context, target: &Self::Time);
+}
+
+/// Reports a worker's earliest pending timestamp after every router fence.
+pub struct Coordination<T> {
+    pub router_count: usize,
+    pub report: Box<dyn FnMut(u64, Option<T>) + Send>,
+}
+
 /// Read-only checkpoint reconstruction required by worker queries.
 pub trait QueryCheckpoints<E> {
     type Context;
@@ -227,6 +246,8 @@ pub enum WorkInputKind<A, SQ, EQ, SL, AD> {
     EventQuery(EQ),
     SnapshotListen(SL),
     Advance(AD),
+    Fence { round: u64, router: usize },
+    Prune(AD),
 }
 
 pub trait WorkInput {

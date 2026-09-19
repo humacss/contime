@@ -10,7 +10,6 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 const EVENT_COUNT: usize = 1_000;
 const BATCH_SIZES: [usize; 4] = [1, 10, 100, 1_000];
 const SNAPSHOT_ID: u128 = 7;
-const ROUTER_SEED: u64 = 9;
 const TOPOLOGY_BATCH_COUNT: usize = 10;
 const TOPOLOGIES: [(usize, usize); 6] = [(1, 1), (1, 2), (1, 4), (1, 8), (1, 10), (2, 10)];
 
@@ -82,10 +81,10 @@ fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<i64> {
     ConTimeConfig {
         router_count,
         worker_count,
-        router_seed: ROUTER_SEED,
+        placement: contime_router::Placement::default(),
         memory_limit: 256 * 1024 * 1024,
         memory_buffer: 1024 * 1024,
-        history_retention: 0,
+        history_retention: EVENT_COUNT as i64,
         worker: contime_worker::WorkerConfig {
             maximum_dirty_age: Duration::from_micros(100),
             replays_per_receive: 1,
@@ -124,7 +123,9 @@ fn send_and_wait(contime: &ConTime<BenchInput, BenchSnapshot, ()>, workload: Pre
     for (batch, sender) in workload.batches {
         contime.send(batch, sender).unwrap();
     }
-    workload.rejections.into_iter().count()
+    let rejected = workload.rejections.into_iter().count();
+    contime.wait_until_idle(Duration::from_secs(5)).unwrap();
+    rejected
 }
 
 fn measure(iterations: u64, batch_size: usize) -> Duration {
@@ -132,6 +133,7 @@ fn measure(iterations: u64, batch_size: usize) -> Duration {
 
     for _ in 0..iterations {
         let contime = ConTime::<BenchInput, BenchSnapshot, ()>::start(config(1, 1), ()).unwrap();
+        contime.advance_to(EVENT_COUNT as i64).unwrap();
         assert_eq!(send_and_wait(&contime, prepare_workload(vec![vec![input(0)]])), 0);
         let workload = prepare_workload(batches(batch_size));
 
@@ -174,7 +176,7 @@ fn snapshot_ids_for_workers(worker_count: usize, ids_per_worker: usize) -> Vec<V
         worker_receivers.push(receiver);
     }
 
-    contime_router::route(ROUTER_SEED, input_receiver, &worker_senders).unwrap();
+    contime_router::route(contime_core::Placement::default(), input_receiver, &worker_senders).unwrap();
     worker_receivers
         .into_iter()
         .map(|receiver| {
@@ -213,6 +215,7 @@ fn measure_topology(iterations: u64, router_count: usize, worker_count: usize, s
 
     for _ in 0..iterations {
         let contime = ConTime::<BenchInput, BenchSnapshot, ()>::start(config(router_count, worker_count), ()).unwrap();
+        contime.advance_to(EVENT_COUNT as i64).unwrap();
         assert_eq!(send_and_wait(&contime, prepare_workload(vec![topology_warmup(snapshot_ids)])), 0);
         let workload = prepare_workload(topology_batches(snapshot_ids));
 

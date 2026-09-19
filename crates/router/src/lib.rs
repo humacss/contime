@@ -1,14 +1,15 @@
 //! Deterministic input-batch routing independent of ConTime orchestration.
 
 mod advance;
-mod hash;
 mod listen;
+mod placement;
 mod query;
 mod route;
 mod types;
 
 pub use advance::route_advance;
 pub use listen::route_snapshot_listeners;
+pub use placement::Placement;
 pub use query::{route_event_query, route_snapshot_query};
 pub use route::{route, route_messages};
 pub use types::{
@@ -16,3 +17,4 @@ pub use types::{
     RouteInputKind, RouteOutput, RoutedInput, RouterError, SnapshotListenInput, SnapshotListenWorkerOutput, SnapshotQueryInput,
     SnapshotQueryWorkerOutput, WorkerBatch, WorkerOutput,
 };
+pub use types::{CoordinationOutput, Flush};

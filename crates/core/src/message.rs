@@ -182,6 +182,9 @@ where
             Self::EventQuery(query) => RouteInputKind::EventQuery(query),
             Self::SnapshotListen(registration) => RouteInputKind::SnapshotListen(registration),
             Self::Advance(advance) => RouteInputKind::Advance(advance),
+            Self::Prune(prune) => RouteInputKind::Prune(prune),
+            Self::Fence { round, observed } => RouteInputKind::Fence { round, observed },
+            Self::Internal { .. } | Self::Report { .. } | Self::Shutdown => unreachable!("coordinator-only message reached router"),
         }
     }
 }
@@ -276,6 +279,15 @@ where
     }
 }
 
+impl<I: Input, S> contime_router::CoordinationOutput<I::Time, Sender<()>> for WorkerMessage<I, S> {
+    fn fence(round: u64, router: usize) -> Self {
+        Self::Fence { round, router }
+    }
+    fn prune(time: I::Time, completion: Sender<()>) -> Self {
+        Self::Prune(Advance { time, completion })
+    }
+}
+
 impl<I> ApplyInput for WorkerBatch<I>
 where
     I: Input,
@@ -340,6 +352,8 @@ where
             Self::EventQuery(query) => WorkInputKind::EventQuery(query),
             Self::SnapshotListen(registration) => WorkInputKind::SnapshotListen(registration),
             Self::Advance(advance) => WorkInputKind::Advance(advance),
+            Self::Prune(prune) => WorkInputKind::Prune(prune),
+            Self::Fence { round, router } => WorkInputKind::Fence { round, router },
         }
     }
 }
@@ -389,7 +403,7 @@ mod tests {
         let mut events = prepare_inputs(&budget, vec![TestInput(9)]).unwrap();
         let expected = events[0].as_ref() as *const TestInput;
         let (rejections, _receiver) = unbounded::<RejectionMessage<RejectionReason>>();
-        let batch = <RouterBatch<TestInput> as ApplyOutput<_, _>>::create(events.drain(..).collect(), rejections);
+        let batch = <RouterBatch<TestInput> as ApplyOutput<_, _>>::create(std::mem::take(&mut events), rejections);
         let (events, completion) = batch.into_parts();
         let route = <Route<TestInput> as RouteOutput<_>>::create(7, events.into_iter().next().unwrap());
         let worker = <WorkerBatch<TestInput> as WorkerOutput<_, _>>::create(vec![route], completion);

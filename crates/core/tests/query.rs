@@ -66,7 +66,7 @@ fn config() -> ConTimeConfig<u64> {
     ConTimeConfig {
         router_count: 2,
         worker_count: 4,
-        router_seed: 9,
+        placement: contime_router::Placement::default(),
         memory_limit: 1_000_000,
         memory_buffer: 1_000,
         history_retention: 0,
@@ -84,6 +84,8 @@ fn config() -> ConTimeConfig<u64> {
 fn public_queries_return_historical_snapshots_and_owned_event_handles() {
     let contime = ConTime::<Event, State, ()>::start(config(), ()).unwrap();
     contime.apply([Event { id: 1, time: 10, value: 1 }, Event { id: 2, time: 20, value: 2 }, Event { id: 3, time: 30, value: 4 }]).unwrap();
+    contime.wait_until_idle(Duration::from_secs(2)).unwrap();
+    assert!(contime.errors().is_empty());
 
     let snapshots = contime.query_at(20, [7]).unwrap();
     let events = contime.query_events_between(7, 10, 30).unwrap();

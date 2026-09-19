@@ -38,6 +38,8 @@ where
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum RejectionReason {
     BeforeHistoryHorizon,
+    BeforeSafeTime,
+    BeforeSourceTime,
     MemoryFull,
 }
 
@@ -106,6 +108,11 @@ where
     EventQuery(EventQuery<I::Time, I>),
     SnapshotListen(SnapshotListen<I::Time>),
     Advance(Advance<I::Time>),
+    Prune(Advance<I::Time>),
+    Fence { round: u64, observed: Sender<u64> },
+    Internal { source: I::Time, batch: RouterBatch<I> },
+    Report { round: u64, worker: usize, minimum: Option<I::Time> },
+    Shutdown,
 }
 
 /// One snapshot-specific route emitted by a router.
@@ -135,6 +142,8 @@ where
     EventQuery(EventQuery<I::Time, I>),
     SnapshotListen(SnapshotListen<I::Time>),
     Advance(Advance<I::Time>),
+    Prune(Advance<I::Time>),
+    Fence { round: u64, router: usize },
 }
 
 pub(crate) struct History<I>
@@ -178,8 +187,9 @@ pub struct RouterProcess<I, S>
 where
     I: Input,
 {
-    pub(crate) seed: u64,
+    pub(crate) placement: contime_router::Placement,
     pub(crate) activity: Receiver<Sender<bool>>,
+    pub(crate) controls: Receiver<contime_router::Flush>,
     pub(crate) input: PhantomData<fn() -> (I, S)>,
 }
 
@@ -195,15 +205,16 @@ where
     pub(crate) budget: MemoryBudget,
     pub(crate) wrapper: W,
     pub(crate) activity: Receiver<Sender<bool>>,
+    pub(crate) coordination: Option<contime_worker::Coordination<I::Time>>,
     pub(crate) types: PhantomData<fn() -> (I, S)>,
 }
 
 /// Complete apply-and-query process configuration.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ConTimeConfig<T> {
     pub router_count: usize,
     pub worker_count: usize,
-    pub router_seed: u64,
+    pub placement: contime_router::Placement,
     pub memory_limit: usize,
     pub memory_buffer: usize,
     pub history_retention: T,
@@ -217,6 +228,10 @@ where
     I: Input,
 {
     pub(crate) runtime: contime_runtime::Runtime<RouterMessage<I, S>, contime_router::RouterError, std::convert::Infallible>,
+    pub(crate) input: Sender<RouterMessage<I, S>>,
+    pub(crate) coordinator: std::thread::JoinHandle<()>,
+    pub(crate) errors: Receiver<contime_api::RejectionMessage<RejectionReason>>,
+    pub(crate) error_sender: Sender<contime_api::RejectionMessage<RejectionReason>>,
     pub(crate) budget: MemoryBudget,
     pub(crate) subscriptions: Vec<Sender<Sender<bool>>>,
     pub(crate) queues: Vec<Arc<dyn Fn() -> bool + Send + Sync>>,

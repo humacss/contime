@@ -70,6 +70,29 @@ where
     }
 }
 
+impl<I, S, W> contime_worker::IncrementalCheckpoints<History<I>> for CheckpointStorage<S, W>
+where
+    I: Input,
+    S: Snapshot<Time = I::Time> + ApplyEvents<I> + ConservativeTrackedSize,
+    W: ApplyWrapper<S, I>,
+{
+    fn invalidate(&mut self, events: &mut History<I>) {
+        self.state.update(|state| state.checkpoints.invalidate_from(contime_checkpoints::Events::dirty_time(events)));
+        // Insertion changes now belong to the worker's pending-time schedule.
+        contime_checkpoints::Events::acknowledge_replay(events);
+    }
+
+    fn next_time(&self, events: &History<I>) -> Option<I::Time> {
+        self.state.checkpoints.next_replay_time(events)
+    }
+
+    fn step(&mut self, events: &History<I>, context: &mut W, target: &I::Time) {
+        self.state.update(|state| {
+            contime_checkpoints::replay_next(&mut state.checkpoints, events, context, target);
+        });
+    }
+}
+
 impl<I, S, W> contime_worker::QueryCheckpoints<History<I>> for CheckpointStorage<S, W>
 where
     I: Input,
@@ -190,6 +213,56 @@ mod tests {
         };
         drop(history);
         assert!(events_only > 0);
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn incremental_checkpoint_invalidation_tracks_growth_and_keeps_pending_suffix() {
+        use contime_worker::IncrementalCheckpoints;
+        let budget = MemoryBudget::new(100_000, 1_000);
+        let mut history = history(&budget, 3);
+        let mut checkpoints =
+            <CheckpointStorage<TestSnapshot, ()> as WorkerCheckpoints<History<TestInput>>>::create(7, &config(budget.clone()));
+        let before = budget.used();
+        checkpoints.invalidate(&mut history);
+        assert_eq!(contime_checkpoints::Events::dirty_time(&history), &2);
+        assert_eq!(checkpoints.next_time(&history), Some(0));
+        checkpoints.step(&history, &mut (), &0);
+        assert_eq!(checkpoints.state.checkpoints.current().unwrap().snapshot.value, 1);
+        assert_eq!(checkpoints.next_time(&history), Some(1));
+        assert!(budget.used() > before);
+        checkpoints.step(&history, &mut (), &1);
+        checkpoints.step(&history, &mut (), &2);
+        assert_eq!(checkpoints.next_time(&history), None);
+        drop((checkpoints, history));
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn incremental_late_invalidation_releases_stale_checkpoint_memory_before_query() {
+        use contime_worker::{IncrementalCheckpoints, QueryCheckpoints};
+        let budget = MemoryBudget::new(100_000, 1_000);
+        let mut history = History::with_horizon(0);
+        for event in prepare_inputs(&budget, [0, 2, 4].map(|id| TestInput { id, value: 1 }).into()).unwrap() {
+            history.insert(event);
+        }
+        let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 1 }, budget: budget.clone() };
+        let mut checkpoints = <CheckpointStorage<TestSnapshot, ()> as WorkerCheckpoints<History<TestInput>>>::create(7, &config);
+        checkpoints.invalidate(&mut history);
+        for time in [0, 2, 4] {
+            checkpoints.step(&history, &mut (), &time);
+        }
+        for event in prepare_inputs(&budget, vec![TestInput { id: 1, value: 10 }]).unwrap() {
+            history.insert(event);
+        }
+        let before = budget.used();
+        checkpoints.invalidate(&mut history);
+        assert!(budget.used() < before);
+        assert_eq!(checkpoints.state.checkpoints.current().unwrap().key.time, 0);
+        assert_eq!(checkpoints.next_time(&history), Some(1));
+        assert_eq!(checkpoints.query_at(&history, &mut (), 4).unwrap().value, 13);
+        assert_eq!(checkpoints.next_time(&history), Some(1));
+        drop((checkpoints, history));
         assert_eq!(budget.used(), 0);
     }
 

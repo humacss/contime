@@ -125,7 +125,7 @@ mod tests {
             crate::ConTimeConfig {
                 router_count: 1,
                 worker_count: 1,
-                router_seed: 0,
+                placement: contime_router::Placement::default(),
                 memory_limit: 1_000_000,
                 memory_buffer: 0,
                 history_retention: 0,

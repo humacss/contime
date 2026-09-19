@@ -119,6 +119,17 @@ pub trait AdvanceWorkerOutput<T, C>: Sized {
     fn advance(time: T, completion: C) -> Self;
 }
 
+/// Requests an ordered fence after this router's current dispatch.
+pub struct Flush {
+    pub round: u64,
+    pub router: usize,
+}
+
+pub trait CoordinationOutput<T, C>: Sized {
+    fn fence(round: u64, router: usize) -> Self;
+    fn prune(time: T, completion: C) -> Self;
+}
+
 /// One of the operations accepted by a unified router queue.
 pub enum RouteInputKind<A, SQ, EQ, SL, AD> {
     Apply(A),
@@ -126,6 +137,8 @@ pub enum RouteInputKind<A, SQ, EQ, SL, AD> {
     EventQuery(EQ),
     SnapshotListen(SL),
     Advance(AD),
+    Prune(AD),
+    Fence { round: u64, observed: crossbeam_channel::Sender<u64> },
 }
 
 /// Converts a caller-selected router message into its static operation kind.

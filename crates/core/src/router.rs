@@ -6,8 +6,8 @@ impl<I, S> RouterProcess<I, S>
 where
     I: Input,
 {
-    pub fn new(seed: u64) -> Self {
-        Self { seed, activity: crossbeam_channel::never(), input: std::marker::PhantomData }
+    pub fn new(placement: contime_router::Placement) -> Self {
+        Self { placement, activity: crossbeam_channel::never(), controls: crossbeam_channel::never(), input: std::marker::PhantomData }
     }
 }
 
@@ -21,7 +21,7 @@ where
     type Error = contime_router::RouterError;
 
     fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
-        contime_router::route_messages(self.seed, input, &workers, self.activity)
+        contime_router::route_messages(self.placement, input, &workers, self.activity, self.controls)
     }
 }
 
@@ -77,7 +77,7 @@ mod tests {
         input.send(batch(4)).unwrap();
         drop(input);
 
-        RuntimeRouter::run(RouterProcess::new(9), receiver, vec![worker]).unwrap();
+        RuntimeRouter::run(RouterProcess::new(contime_router::Placement::default()), receiver, vec![worker]).unwrap();
 
         let WorkerMessage::Apply(routed) = output.recv().unwrap() else { panic!("expected apply") };
         assert_eq!(routed.into_parts().0.len(), 4);
@@ -97,7 +97,7 @@ mod tests {
                     (receiver, worker, output)
                 },
                 |(receiver, worker, output)| {
-                    RuntimeRouter::run(RouterProcess::new(9), receiver, vec![worker]).unwrap();
+                    RuntimeRouter::run(RouterProcess::new(contime_router::Placement::default()), receiver, vec![worker]).unwrap();
                     black_box(output.recv().unwrap())
                 },
                 BatchSize::LargeInput,

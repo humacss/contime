@@ -3,7 +3,6 @@ use std::time::{Duration, Instant};
 use contime_core::{checkpoints, ConTime, ConTimeConfig, Input};
 use contime_memory::ConservativeTrackedSize;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use crossbeam_channel::unbounded;
 
 struct BenchEvent {
     id: u128,
@@ -84,7 +83,7 @@ fn config(router_count: usize, worker_count: usize, dirty: bool) -> ConTimeConfi
     ConTimeConfig {
         router_count,
         worker_count,
-        router_seed: 9,
+        placement: contime_router::Placement::default(),
         memory_limit: 1_000_000_000,
         memory_buffer: 1_000_000,
         history_retention: 10,
@@ -117,34 +116,24 @@ fn events(workload: Workload) -> Vec<BenchEvent> {
 fn measure_once(router_count: usize, worker_count: usize, workload: Workload) -> Duration {
     let dirty = matches!(workload, Workload::Dirty);
     let contime = ConTime::<BenchEvent, BenchSnapshot, ()>::start(config(router_count, worker_count, dirty), ()).unwrap();
-    let mut pending = None;
-    if dirty {
-        let (completion, done) = unbounded();
-        contime.send(events(workload), completion).unwrap();
-        let mut ready = false;
-        for _ in 0..10_000 {
-            if contime.query_at(20, 0..1_000).unwrap().len() == 1_000 {
-                ready = true;
-                break;
-            }
-            std::thread::yield_now();
-        }
-        assert!(ready, "dirty benchmark histories did not reach every worker");
-        pending = Some(done);
-    } else {
-        contime.apply(events(workload)).unwrap();
+    contime.apply(events(workload)).unwrap();
+    if !dirty {
+        // Materialize clean fixtures without moving the retained horizon.
+        contime.advance_to(if matches!(workload, Workload::Anchor) { 10 } else { 1 }).unwrap();
     }
+    // With the target at zero, the dirty fixture is admitted but unprocessed.
+    contime.wait_until_idle(Duration::from_secs(5)).unwrap();
+    assert!(contime.errors().is_empty());
     let before = contime.used_memory();
     let target = if matches!(workload, Workload::Anchor) { 18 } else { 20 };
 
     let started = Instant::now();
     contime.advance_to(target).unwrap();
+    contime.wait_until_idle(Duration::from_secs(5)).unwrap();
     let elapsed = started.elapsed();
 
     assert!(contime.used_memory() < before);
-    if let Some(done) = pending {
-        assert_eq!(done.into_iter().count(), 0);
-    }
+    assert!(contime.errors().is_empty());
     contime.shutdown();
     elapsed
 }
