@@ -1,217 +1,160 @@
-use crate::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, EventBatch, Snapshot};
+//! Applies the supplied ordered slice in complete timestamp batches.
+use crate::{Apply, Checkpoint, Snapshot};
 
-impl<'a, S> ApplyInner<'a, S>
-where
-    S: Snapshot,
-{
-    pub(crate) fn new(snapshot: &'a mut S, history_event_count: u64) -> Self {
-        Self { snapshot, history_event_count, apply_count: 0 }
+pub(crate) fn apply<S: Snapshot, E: Apply<Checkpoint<S>, C, Time = S::Time>, C>(checkpoint: &mut Checkpoint<S>, events: &[E], context: &C) {
+    for batch in events.chunk_by(|left, right| left.time() == right.time()) {
+        E::apply(checkpoint, batch, context);
+        checkpoint.history_event_count = checkpoint.history_event_count.saturating_add(batch.len() as u64);
+        checkpoint.snapshot.set_time(batch[0].time());
     }
-
-    /// Returns the cumulative raw event count represented by this canonical
-    /// timestamp bucket.
-    pub const fn history_event_count(&self) -> u64 {
-        self.history_event_count
-    }
-
-    /// Applies one effective batch selected by the wrapper.
-    ///
-    /// Every effective partition receives the same cumulative raw history
-    /// count. An empty effective batch records wrapper participation without
-    /// mutating the snapshot.
-    pub fn apply_event_batch<E>(&mut self, batch: EventBatch<'_, S::Time, E>) -> u64
-    where
-        S: ApplyEvents<E>,
-    {
-        self.apply_event_batch_with(batch, S::apply_events)
-    }
-
-    /// Applies a batch with a caller-supplied function, which may borrow external
-    /// execution context. The function must preserve deterministic snapshot
-    /// results across live and reconstruction replay. Empty batches do not invoke
-    /// it. Timestamp assignment and participation accounting remain owned here.
-    pub fn apply_event_batch_with<E>(
-        &mut self,
-        batch: EventBatch<'_, S::Time, E>,
-        apply: impl FnOnce(&mut S, ApplyBatch<'_, S::Time, E>),
-    ) -> u64 {
-        if !batch.events.is_empty() {
-            let time = batch.time.clone();
-            apply(
-                self.snapshot,
-                ApplyBatch {
-                    snapshot_id: batch.snapshot_id,
-                    time: batch.time,
-                    history_event_count: self.history_event_count,
-                    events: batch.events,
-                },
-            );
-            self.snapshot.set_time(time);
-        }
-
-        self.apply_count += 1;
-        self.history_event_count
-    }
-
-    /// Returns the snapshot after all effective applications completed so far.
-    pub fn snapshot(&self) -> &S {
-        self.snapshot
-    }
-
-    pub(crate) const fn has_applied(&self) -> bool {
-        self.apply_count != 0
-    }
-}
-
-/// Applies one canonical same-timestamp bucket through an injected wrapper.
-pub fn apply<S, E, W>(snapshot: &mut S, batch: EventBatch<'_, S::Time, E>, history_event_count: u64, wrapper: &mut W)
-where
-    S: ApplyEvents<E>,
-    W: ApplyWrapper<S, E>,
-{
-    let mut apply_inner = ApplyInner::new(snapshot, history_event_count);
-    wrapper.apply_event_batch(batch, &mut apply_inner);
-    assert!(apply_inner.has_applied(), "an apply wrapper must call the inner apply at least once per event batch");
 }
 
 #[cfg(test)]
 mod tests {
-    use std::hint::black_box;
+    use super::*;
+    use crate::Event;
 
-    use criterion::Criterion;
+    type Time = i64;
 
-    use super::apply;
-
-    #[test]
-    fn callback_borrows_context_and_preserves_apply_bookkeeping() {
-        let mut snapshot = TestSnapshot::default();
-        let context = 3;
-        let event = TestEvent(2);
-        let events = [&event];
-        let mut inner = crate::ApplyInner::new(&mut snapshot, 7);
-        let count = inner.apply_event_batch_with(EventBatch { snapshot_id: 1, time: 10, events: &events }, |snapshot, batch| {
-            assert_eq!(snapshot.time, 0);
-            assert_eq!(batch.history_event_count, 7);
-            snapshot.sum += batch.events[0].0 * context;
-        });
-        assert_eq!(count, 7);
-        assert!(inner.has_applied());
-        assert_eq!(inner.snapshot().sum, 6);
-        assert_eq!(inner.snapshot().time, 10);
-        let mut empty_snapshot = TestSnapshot::default();
-        let mut empty = crate::ApplyInner::new(&mut empty_snapshot, 7);
-        assert!(!empty.has_applied());
-        empty.apply_event_batch_with::<TestEvent>(EventBatch { snapshot_id: 1, time: 20, events: &[] }, |_, _| {
-            panic!("empty batch must not call apply")
-        });
-        assert!(empty.has_applied());
-        assert_eq!(empty.history_event_count(), 7);
-        assert_eq!(empty.snapshot().time, 0);
-    }
-    use crate::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, EventBatch, Snapshot};
+    const CONTEXT: i32 = 10;
 
     #[derive(Clone)]
-    struct TestEvent(i64);
+    struct State(i32, Time);
 
-    #[derive(Clone, Default)]
-    struct TestSnapshot {
-        time: i64,
-        sum: i64,
-        batch_sizes: Vec<usize>,
-        history_counts: Vec<u64>,
-    }
+    struct Input(Time, i32);
+    struct PanickingInput(Time);
 
-    impl Snapshot for TestSnapshot {
-        type Time = i64;
-
-        fn set_time(&mut self, time: Self::Time) {
-            self.time = time;
+    impl Snapshot for State {
+        type Time = Time;
+        fn time(&self) -> &Time {
+            &self.1
+        }
+        fn set_time(&mut self, time: Time) {
+            self.1 = time;
         }
     }
 
-    impl ApplyEvents<TestEvent> for TestSnapshot {
-        fn create(_snapshot_id: u128, _first_event: &TestEvent) -> Self {
-            Self::default()
-        }
-
-        fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Time, TestEvent>) {
-            self.sum += batch.events.iter().map(|event| event.0).sum::<i64>();
-            self.batch_sizes.push(batch.events.len());
-            self.history_counts.push(batch.history_event_count);
+    impl Event for Input {
+        type Time = Time;
+        fn time(&self) -> Time {
+            self.0
         }
     }
 
-    struct FilterEven;
-
-    impl ApplyWrapper<TestSnapshot, TestEvent> for FilterEven {
-        fn apply_event_batch(&mut self, batch: EventBatch<'_, i64, TestEvent>, apply_inner: &mut ApplyInner<'_, TestSnapshot>) {
-            let filtered = batch.events.iter().copied().filter(|event| event.0 % 2 == 0).collect::<Vec<_>>();
-            apply_inner.apply_event_batch(EventBatch { snapshot_id: batch.snapshot_id, time: batch.time, events: &filtered });
+    impl Apply<Checkpoint<State>, i32> for Input {
+        fn apply(state: &mut Checkpoint<State>, events: &[Self], context: &i32) {
+            state.snapshot.0 += events.iter().map(|event| event.1).sum::<i32>() + context;
         }
     }
 
-    struct SkipInner;
-
-    impl ApplyWrapper<TestSnapshot, TestEvent> for SkipInner {
-        fn apply_event_batch(&mut self, _batch: EventBatch<'_, i64, TestEvent>, _apply_inner: &mut ApplyInner<'_, TestSnapshot>) {}
+    impl Event for PanickingInput {
+        type Time = Time;
+        fn time(&self) -> Time {
+            self.0
+        }
     }
 
-    fn events(count: usize) -> Vec<TestEvent> {
-        (0..count).map(|value| TestEvent(value as i64)).collect()
+    impl Apply<Checkpoint<State>, i32> for PanickingInput {
+        fn apply(state: &mut Checkpoint<State>, events: &[Self], _: &i32) {
+            state.snapshot.0 += events[0].0 as i32;
+            panic!("injected application failure");
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::multiple_batches(5, 7, &[Input(10, 3), Input(10, 4), Input(20, 5)], 32, 10, 20)]
+    #[case::first_event_at_zero(0, 0, &[Input(0, 3)], 13, 1, 0)]
+    #[case::count_overflow(5, u64::MAX - 1, &[Input(10, 3), Input(10, 4), Input(20, 5)], 32, u64::MAX, 20)]
+    #[case::count_already_saturated(5, u64::MAX, &[Input(10, 3), Input(10, 4), Input(20, 5)], 32, u64::MAX, 20)]
+    fn happy(
+        #[case] initial_time: Time,
+        #[case] initial_count: u64,
+        #[case] events: &[Input],
+        #[case] expected_sum: i32,
+        #[case] expected_count: u64,
+        #[case] expected_time: Time,
+    ) {
+        // Expected values are supplied by each case.
+
+        let initial_sum = 0;
+        let mut state = Checkpoint { snapshot: State(initial_sum, initial_time), history_event_count: initial_count };
+
+        apply(&mut state, events, &CONTEXT);
+        let actual_sum = state.snapshot.0;
+        let actual_count = state.history_event_count;
+        let actual_time = *state.snapshot.time();
+
+        assert_eq!(actual_sum, expected_sum);
+        assert_eq!(actual_count, expected_count);
+        assert_eq!(actual_time, expected_time);
+    }
+
+    #[rstest::rstest]
+    #[case::initial_checkpoint(0)]
+    #[case::existing_checkpoint(7)]
+    fn empty_slice_does_not_call_apply(#[case] initial_count: u64) {
+        let expected_sum = 100;
+        let expected_time: Time = 10;
+        let expected_count = initial_count;
+
+        let initial_sum = expected_sum;
+        let initial_time = expected_time;
+        let mut state = Checkpoint { snapshot: State(initial_sum, initial_time), history_event_count: initial_count };
+
+        apply::<_, Input, _>(&mut state, &[], &CONTEXT);
+        let actual_sum = state.snapshot.0;
+        let actual_time = *state.snapshot.time();
+        let actual_count = state.history_event_count;
+
+        assert_eq!(actual_sum, expected_sum);
+        assert_eq!(actual_time, expected_time);
+        assert_eq!(actual_count, expected_count);
     }
 
     #[test]
-    fn the_default_wrapper_applies_the_complete_canonical_batch_once() {
-        let events = events(3);
-        let references = events.iter().collect::<Vec<_>>();
-        let mut snapshot = TestSnapshot::default();
+    fn application_panic_leaves_timestamp_unchanged_and_skips_later_batches() {
+        let expected_panic = true;
+        let expected_sum = 10;
+        let expected_time: Time = 5;
+        let expected_count = 7;
 
-        apply(&mut snapshot, EventBatch { snapshot_id: 7, time: 10, events: &references }, 13, &mut ());
+        let initial_sum = 0;
+        let initial_time = expected_time;
+        let initial_count = expected_count;
+        let first_event_time: Time = 10;
+        let later_event_time: Time = 20;
+        let mut state = Checkpoint { snapshot: State(initial_sum, initial_time), history_event_count: initial_count };
+        let events = [PanickingInput(first_event_time), PanickingInput(later_event_time)];
 
-        assert_eq!(snapshot.sum, 3);
-        assert_eq!(snapshot.time, 10);
-        assert_eq!(snapshot.batch_sizes, vec![3]);
-        assert_eq!(snapshot.history_counts, vec![13]);
-    }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            apply(&mut state, &events, &CONTEXT);
+        }));
+        let actual_panic = result.is_err();
+        let actual_sum = state.snapshot.0;
+        let actual_time = *state.snapshot.time();
+        let actual_count = state.history_event_count;
 
-    #[test]
-    fn a_wrapper_can_filter_the_effective_batch_without_changing_the_raw_count() {
-        let events = events(5);
-        let references = events.iter().collect::<Vec<_>>();
-        let mut snapshot = TestSnapshot::default();
-
-        apply(&mut snapshot, EventBatch { snapshot_id: 7, time: 10, events: &references }, 25, &mut FilterEven);
-
-        assert_eq!(snapshot.sum, 6);
-        assert_eq!(snapshot.batch_sizes, vec![3]);
-        assert_eq!(snapshot.history_counts, vec![25]);
-    }
-
-    #[test]
-    #[should_panic(expected = "an apply wrapper must call the inner apply")]
-    fn a_wrapper_must_invoke_the_inner_apply() {
-        let events = events(1);
-        let references = events.iter().collect::<Vec<_>>();
-        let mut snapshot = TestSnapshot::default();
-
-        apply(&mut snapshot, EventBatch { snapshot_id: 7, time: 10, events: &references }, 1, &mut SkipInner);
+        assert_eq!(actual_panic, expected_panic);
+        assert_eq!(actual_sum, expected_sum);
+        assert_eq!(actual_time, expected_time);
+        assert_eq!(actual_count, expected_count);
     }
 
     #[test]
     #[ignore = "inline Criterion benchmark"]
-    fn benchmark_apply() {
-        let events = events(1_000);
-        let references = events.iter().collect::<Vec<_>>();
-        let mut criterion = Criterion::default();
-
-        criterion.bench_function("checkpoints/apply/1000_events/one_batch", |bencher| {
-            bencher.iter(|| {
-                let mut snapshot = TestSnapshot::default();
-                apply(&mut snapshot, EventBatch { snapshot_id: 7, time: 10, events: black_box(&references) }, 1_000, &mut ());
-                black_box(snapshot)
+    fn benchmark_apply_unit() {
+        let events = (1..=1000).map(|time| Input(time, 1)).collect::<Vec<_>>();
+        let mut criterion = criterion::Criterion::default()
+            .warm_up_time(std::time::Duration::from_millis(200))
+            .measurement_time(std::time::Duration::from_secs(1))
+            .sample_size(30);
+        criterion.bench_function("checkpoints/unit/apply_1000_timestamps/running_sum", |b| {
+            b.iter(|| {
+                let mut checkpoint = Checkpoint { snapshot: State(0, 0), history_event_count: 0 };
+                apply(&mut checkpoint, std::hint::black_box(&events), std::hint::black_box(&CONTEXT));
+                std::hint::black_box(checkpoint);
             });
         });
-
         criterion.final_summary();
     }
 }
