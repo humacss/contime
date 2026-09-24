@@ -18,6 +18,10 @@ mod start;
 mod types;
 mod worker;
 
+#[cfg(test)]
+#[path = "../tests/controlled/replay_frontier.rs"]
+mod replay_frontier_tests;
+
 pub use types::{
     Advance, CompletionHandle, ConTime, ConTimeConfig, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage,
     RouterProcess, SharedEvent, SnapshotListen, SnapshotListener, SnapshotListenerMessage, SnapshotQuery, WorkerBatch, WorkerMessage,

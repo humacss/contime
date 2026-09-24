@@ -97,7 +97,8 @@ pub fn work_messages<M, S>(
     worker.activity_loop();
 }
 
-struct MessageWorker<'a, M, S>
+/// Worker state that can be driven synchronously or by `work_messages`.
+pub struct MessageWorker<'a, M, S>
 where
     M: WorkInput,
     M::Apply: ApplyInput,
@@ -123,6 +124,8 @@ where
     fence_round: Option<u64>,
     fence_routers: AHashSet<usize>,
     reported_round: Option<u64>,
+    awaiting_resolution: Option<u64>,
+    process_before_report: bool,
 }
 
 impl<'a, M, S> MessageWorker<'a, M, S>
@@ -139,7 +142,7 @@ where
     M::Advance: AdvanceInput<Time = S::Time>,
     ApplyEvent<M>: Clone,
 {
-    fn new(
+    pub fn new(
         input: &'a Receiver<M>,
         registrations: &'a Receiver<crossbeam_channel::Sender<bool>>,
         store_config: S::Config,
@@ -162,6 +165,8 @@ where
             fence_round: None,
             fence_routers: AHashSet::new(),
             reported_round: None,
+            awaiting_resolution: None,
+            process_before_report: false,
             store_config,
             store_context,
         }
@@ -197,7 +202,7 @@ where
     fn work_loop(&mut self) -> TryRecvError {
         loop {
             let message = match self.input.try_recv() {
-                Ok(message) => message.into_kind(),
+                Ok(message) => message,
                 Err(reason) => {
                     if self.prune_step() || self.step() {
                         continue;
@@ -205,36 +210,52 @@ where
                     return reason;
                 }
             };
-            match message {
-                WorkInputKind::Apply(batch) => {
-                    self.apply_batch(batch);
-                }
-                WorkInputKind::SnapshotQuery(query) => {
-                    query_snapshots::<_, ApplyEvent<M>, _>(query, &mut self.snapshots, &mut self.store_context)
-                }
-                WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _>(query, &self.snapshots),
-                WorkInputKind::SnapshotListen(registration) => {
-                    let (time, snapshot_ids, listener) = registration.into_parts();
-                    self.listeners.register(time, snapshot_ids, listener, &mut self.snapshots);
-                }
-                WorkInputKind::Advance(advance) => {
-                    let (target_time, completion) = advance.into_parts();
-                    self.current_time = self.current_time.clone().max(target_time);
-                    drop(completion);
-                }
-                WorkInputKind::Fence { round, router } => self.fence(round, router),
-                WorkInputKind::Prune(prune) => {
-                    let (horizon, completion) = prune.into_parts();
-                    if horizon > self.horizon {
-                        assert!(self.schedule.first().is_none_or(|(time, _, _)| time >= &horizon), "prune would discard pending replay");
-                        let snapshots = self.snapshots.keys().copied().collect::<Vec<_>>().into_iter();
-                        self.horizon = horizon.clone();
-                        self.pending_prunes.push_back((horizon, snapshots, completion));
-                    } else if !self.pending_prunes.is_empty() {
-                        self.pending_prunes.push_back((horizon, Vec::new().into_iter(), completion));
-                    }
+            self.handle(message);
+        }
+    }
+
+    /// Handles one delivered message without running scheduled replay or pruning.
+    pub fn handle(&mut self, message: M) {
+        match message.into_kind() {
+            WorkInputKind::Apply(batch) => {
+                self.apply_batch(batch);
+            }
+            WorkInputKind::SnapshotQuery(query) => {
+                query_snapshots::<_, ApplyEvent<M>, _>(query, &mut self.snapshots, &mut self.store_context)
+            }
+            WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _>(query, &self.snapshots),
+            WorkInputKind::SnapshotListen(registration) => {
+                let (time, snapshot_ids, listener) = registration.into_parts();
+                self.listeners.register(time, snapshot_ids, listener, &mut self.snapshots);
+            }
+            WorkInputKind::Advance(advance) => {
+                let (target_time, completion) = advance.into_parts();
+                self.current_time = self.current_time.clone().max(target_time);
+                drop(completion);
+            }
+            WorkInputKind::Fence { round, router } => self.fence(round, router),
+            WorkInputKind::Resolve { round, prune } => {
+                if self.awaiting_resolution == Some(round) {
+                    self.awaiting_resolution = None;
+                    self.queue_prune(prune);
+                    self.process_before_report = !self.schedule.is_empty();
                 }
             }
+            WorkInputKind::Prune(prune) => {
+                self.queue_prune(prune);
+            }
+        }
+    }
+
+    fn queue_prune(&mut self, prune: M::Advance) {
+        let (horizon, completion) = prune.into_parts();
+        if horizon > self.horizon {
+            assert!(self.schedule.iter().all(|(time, complete, _)| *complete || time >= &horizon), "prune would discard pending replay");
+            let snapshots = self.snapshots.keys().copied().collect::<Vec<_>>().into_iter();
+            self.horizon = horizon.clone();
+            self.pending_prunes.push_back((horizon, snapshots, completion));
+        } else if !self.pending_prunes.is_empty() {
+            self.pending_prunes.push_back((horizon, Vec::new().into_iter(), completion));
         }
     }
 
@@ -267,7 +288,19 @@ where
     }
 
     /// Processes one snapshot to the next distinct bucket or target, then yields.
-    fn step(&mut self) -> bool {
+    pub fn step(&mut self) -> bool {
+        if self.awaiting_resolution.is_some() || !self.pending_prunes.is_empty() {
+            return false;
+        }
+        let worked = self.process_step();
+        // A zero-interval coordinator must not pause us repeatedly without
+        // allowing progress. One step (including a future-only no-op) suffices.
+        self.process_before_report = false;
+        self.report_if_ready();
+        worked
+    }
+
+    fn process_step(&mut self) -> bool {
         let Some((time, complete, snapshot_id)) = self.schedule.first().cloned() else { return false };
         if time > self.current_time || (complete && time == self.current_time) {
             return false;
@@ -303,21 +336,34 @@ where
             self.fence_routers.clear();
         }
         self.fence_routers.insert(router);
+        self.report_if_ready();
+    }
+
+    fn report_if_ready(&mut self) {
+        let Some(round) = self.fence_round else { return };
+        if self.process_before_report || self.reported_round.is_some_and(|reported| round <= reported) {
+            return;
+        }
+        let Some(coordination) = self.coordination.as_mut() else { return };
         if self.fence_routers.len() == coordination.router_count {
             self.reported_round = Some(round);
-            let earliest = self.schedule.first().map(|(time, _, _)| time.clone());
+            self.awaiting_resolution = Some(round);
+            let earliest = self.pending.keys().filter_map(|id| self.snapshots[id].store.as_ref()?.earliest_replay_time()).min();
             (coordination.report)(round, earliest);
         }
     }
 
     /// Prunes one history, then returns to message handling. Completion stays
     /// owned by the job until every captured history has been processed.
-    fn prune_step(&mut self) -> bool {
+    pub fn prune_step(&mut self) -> bool {
         let Some((horizon, snapshots, _)) = self.pending_prunes.front_mut() else { return false };
         if let Some(snapshot_id) = snapshots.next() {
             let slot = self.snapshots.get_mut(&snapshot_id).expect("pruning history exists");
             if let Some(store) = slot.store.as_mut() {
-                assert!(self.pending.get(&snapshot_id).is_none_or(|(time, _)| time >= horizon), "prune would discard pending replay");
+                assert!(
+                    self.pending.get(&snapshot_id).is_none_or(|(time, complete)| *complete || time >= horizon),
+                    "prune would discard pending replay"
+                );
                 store.forward(horizon, &mut self.store_context);
                 store.prune();
             }

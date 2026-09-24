@@ -226,6 +226,9 @@ mod tests {
     }
 
     impl crate::CoordinationOutput<u64, Response> for WorkerMessage {
+        fn resolve(_: u64, time: u64, completion: Response) -> Self {
+            Self::Advance { time, completion }
+        }
         fn fence(round: u64, router: usize) -> Self {
             Self::Fence { round, router }
         }

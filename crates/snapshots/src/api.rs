@@ -1,5 +1,5 @@
 //! Worker-facing access to one snapshot's checkpoint history.
-use crate::{Apply, Checkpoint, EventStore, ForwardError, Insert, InsertEventStore, NoCheckpoint, Snapshot, Store, Timestamp};
+use crate::{Apply, Checkpoint, Event, EventStore, ForwardError, Insert, InsertEventStore, NoCheckpoint, Snapshot, Store, Timestamp};
 
 /// Owns event history and checkpoints without exposing playback or commit policies.
 pub struct SnapshotStore<S: Snapshot, H> {
@@ -19,6 +19,19 @@ impl<S: Snapshot, H> SnapshotStore<S, H> {
 }
 
 impl<S: Snapshot, H: EventStore<Time = S::Time>> SnapshotStore<S, H> {
+    /// Earliest possible application when resuming dirty history. Includes any
+    /// unchanged prefix reconstructed from the selected checkpoint. Does not clone
+    /// or apply the snapshot; None means no remaining event application.
+    pub fn earliest_replay_time(&self) -> Option<S::Time> {
+        let start = self.store.dirty.clone().max(self.store.horizon.clone());
+        // A completed horizon bucket is valid when measuring remaining work.
+        // Insertion at that bucket already invalidates it through Store::insert.
+        let index = self.store.starting_index(&start, true).expect("store retains a valid starting checkpoint");
+        let checkpoint = &self.store.checkpoints[index];
+        let boundary = (checkpoint.history_event_count != 0).then(|| checkpoint.snapshot.time());
+        self.store.events.iter_after(boundary).next().map(Event::time)
+    }
+
     /// Admits an event without processing it. Changed history invalidates
     /// retained state at the event's timestamp and afterward.
     pub fn insert(&mut self, event: H::Event) -> Insert

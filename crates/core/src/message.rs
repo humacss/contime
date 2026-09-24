@@ -183,6 +183,7 @@ where
             Self::SnapshotListen(registration) => RouteInputKind::SnapshotListen(registration),
             Self::Advance(advance) => RouteInputKind::Advance(advance),
             Self::Prune(prune) => RouteInputKind::Prune(prune),
+            Self::Resolve { round, prune } => RouteInputKind::Resolve { round, prune },
             Self::Fence { round, observed } => RouteInputKind::Fence { round, observed },
             Self::Internal { .. } | Self::Report { .. } | Self::Pruned { .. } | Self::SubscribePrunedHorizon(_) | Self::Shutdown => {
                 unreachable!("coordinator-only message reached router")
@@ -282,6 +283,9 @@ where
 }
 
 impl<I: Input, S> contime_router::CoordinationOutput<I::Time, Sender<()>> for WorkerMessage<I, S> {
+    fn resolve(round: u64, time: I::Time, completion: Sender<()>) -> Self {
+        Self::Resolve { round, prune: Advance { time, completion } }
+    }
     fn fence(round: u64, router: usize) -> Self {
         Self::Fence { round, router }
     }
@@ -355,6 +359,7 @@ where
             Self::SnapshotListen(registration) => WorkInputKind::SnapshotListen(registration),
             Self::Advance(advance) => WorkInputKind::Advance(advance),
             Self::Prune(prune) => WorkInputKind::Prune(prune),
+            Self::Resolve { round, prune } => WorkInputKind::Resolve { round, prune },
             Self::Fence { round, router } => WorkInputKind::Fence { round, router },
         }
     }

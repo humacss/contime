@@ -118,6 +118,15 @@ prevent idle. A timeout stops waiting without cancelling processing.
 
 ## Deferred scope
 
+The component-integration regression in `tests/controlled/replay_frontier.rs`
+is included in the library test binary to access Core's private storage adapter,
+frontier and admission function. Run it with
+`cargo test --manifest-path crates/core/Cargo.toml --lib replay_frontier_tests`.
+It drives real workers synchronously, including a ten-worker case, and controls
+delivery of round resolution and forwarding. It covers reconstructed prefixes,
+arrivals during and after measurement, silent forwarding, and eventual progress.
+The separate `tests/replay_frontier.rs` retains threaded end-to-end coverage.
+
 - Cross-worker transactional admission
 - Lane macros
 
@@ -128,6 +137,13 @@ of `history_retention` worth of time. The admission coordinator rejects new
 external input before the requested horizon. Router fences and worker reports
 establish a conservative safe boundary before any retained data is removed.
 Accepted work and its causal outputs remain protected during that measurement.
+Worker reports include possible reconstructed-prefix publications, not merely
+incoming event timestamps. Workers pause live replay after reporting until their
+round is resolved and authorized forwarding completes; queries and insertion
+remain responsive. Any admission during measurement conservatively prevents
+that round from advancing, since only storage can determine its replay prefix.
+Every round is resolved, even without advancement, and resolution completion
+precedes the next round. Continuous admission can therefore delay pruning.
 Forwarding establishes a checkpoint at the horizon's predecessor; pruning
 preserves it and keeps events exactly at the horizon. Snapshot queries before
 the completed store horizon return no snapshot, never a stale anchor. The public

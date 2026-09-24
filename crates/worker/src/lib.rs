@@ -15,4 +15,4 @@ pub use types::{
     EventQueryResponse, Events, IncrementalCheckpoints, QueryCheckpoints, QueryEvents, RouteInput, RoutedInput, SnapshotListenInput,
     SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput, WorkInputKind, WorkerConfig,
 };
-pub use work::{work, work_messages};
+pub use work::{work, work_messages, MessageWorker};

@@ -25,6 +25,10 @@ where
         input.inner.time()
     }
 
+    fn earliest_replay_time(&self) -> Option<I::Time> {
+        self.store.as_ref().and_then(|store| store.earliest_replay_time())
+    }
+
     fn insert(&mut self, input: SharedEvent<I>, admission_horizon: &I::Time) -> EventInsert<Self::Rejection> {
         let event_id = input.event_id();
         if input.inner.time() < *admission_horizon {

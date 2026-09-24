@@ -248,7 +248,15 @@ pub enum WorkInputKind<A, SQ, EQ, SL, AD> {
     EventQuery(EQ),
     SnapshotListen(SL),
     Advance(AD),
-    Fence { round: u64, router: usize },
+    Fence {
+        round: u64,
+        router: usize,
+    },
+    /// Releases a reported round, forwarding to its authorized horizon before replay.
+    Resolve {
+        round: u64,
+        prune: AD,
+    },
     Prune(AD),
 }
 
@@ -360,6 +368,8 @@ pub trait SnapshotStore<I>: Sized {
     fn insert(&mut self, input: I, admission_horizon: &Self::Time) -> EventInsert<Self::Rejection>;
     /// Timestamp of an input, used by the worker to schedule changed histories.
     fn event_time(input: &I) -> Self::Time;
+    /// Earliest possible replay publication, including reconstructed prefixes.
+    fn earliest_replay_time(&self) -> Option<Self::Time>;
     /// Process complete timestamp batches through time, inclusively.
     fn process_until(&mut self, time: &Self::Time, context: &mut Self::Context);
     /// Reconstruct fresh state without publishing effects or changing replay progress.

@@ -87,6 +87,9 @@ mod tests {
         fn event_time(input: &TestEvent) -> u64 {
             input.0
         }
+        fn earliest_replay_time(&self) -> Option<u64> {
+            self.events.iter().filter(|event| self.tip.is_none_or(|time| event.0 > time)).map(|event| event.0).min()
+        }
         fn process_until(&mut self, target: &u64, _: &mut ()) {
             self.tip = Some(*target);
         }
@@ -239,6 +242,9 @@ mod tests {
         }
         fn event_time(input: &TestEvent) -> u64 {
             input.0
+        }
+        fn earliest_replay_time(&self) -> Option<u64> {
+            self.0.earliest_replay_time()
         }
         fn process_until(&mut self, time: &u64, _: &mut PruningContext) {
             self.0.process_until(time, &mut ());

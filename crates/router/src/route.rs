@@ -167,6 +167,14 @@ where
                             .map_err(|_| RouterError::WorkerUnavailable { worker_index })?;
                     }
                 }
+                RouteInputKind::Resolve { round, prune } => {
+                    let (time, completion) = prune.into_parts();
+                    for (worker_index, worker) in self.worker_outputs.iter().enumerate() {
+                        worker
+                            .send(W::resolve(round, time.clone(), completion.clone()))
+                            .map_err(|_| RouterError::WorkerUnavailable { worker_index })?;
+                    }
+                }
             }
         }
     }

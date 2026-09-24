@@ -128,6 +128,8 @@ pub struct Flush {
 pub trait CoordinationOutput<T, C>: Sized {
     fn fence(round: u64, router: usize) -> Self;
     fn prune(time: T, completion: C) -> Self;
+    /// Carries the round decision even when the authorized horizon is unchanged.
+    fn resolve(round: u64, time: T, completion: C) -> Self;
 }
 
 /// One of the operations accepted by a unified router queue.
@@ -138,6 +140,7 @@ pub enum RouteInputKind<A, SQ, EQ, SL, AD> {
     SnapshotListen(SL),
     Advance(AD),
     Prune(AD),
+    Resolve { round: u64, prune: AD },
     Fence { round: u64, observed: crossbeam_channel::Sender<u64> },
 }
 

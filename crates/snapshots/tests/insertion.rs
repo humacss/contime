@@ -118,6 +118,51 @@ fn duplicate_does_not_invalidate_completed_work() {
 }
 
 #[rstest::rstest]
+#[case::sparse(100, 90, 10)]
+#[case::unbounded(0, 90, 10)]
+#[case::dense(1, 90, 90)]
+#[case::same_time(100, 100, 10)]
+#[case::initial_timestamp(100, 0, 0)]
+fn replay_minimum_includes_reconstructed_prefix(#[case] interval: u64, #[case] inserted: u64, #[case] expected: u64) {
+    let target = Time(100);
+    let expected_replay = Some(Time(expected));
+
+    let mut store = SnapshotStore::new(TestEventStore::default(), TestSnapshot::default(), interval);
+    let calls = Cell::new(0);
+    store.insert(TestEvent { id: 1, time: Time(10), value: 1 });
+    store.insert(TestEvent { id: 2, time: target, value: 1 });
+    store.process_until(target, &calls).unwrap();
+    let clean = store.earliest_replay_time();
+    store.insert(TestEvent { id: 3, time: Time(inserted), value: 1 });
+    let before = calls.get();
+
+    let actual = store.earliest_replay_time();
+    let after = calls.get();
+    store.process_until(target, &calls).unwrap();
+    let completed = store.earliest_replay_time();
+
+    assert_eq!(clean, None);
+    assert_eq!(actual, expected_replay);
+    assert_eq!(after, before);
+    assert_eq!(completed, None);
+}
+
+#[test]
+fn completed_horizon_bucket_does_not_pin_future_replay() {
+    let expected_replay = Some(Time(100));
+
+    let mut store = SnapshotStore::new(TestEventStore::default(), TestSnapshot::default(), 100);
+    let calls = Cell::new(0);
+    store.insert(TestEvent { id: 1, time: Time(0), value: 1 });
+    store.process_until(Time(0), &calls).unwrap();
+    store.insert(TestEvent { id: 2, time: Time(100), value: 1 });
+
+    let actual = store.earliest_replay_time();
+
+    assert_eq!(actual, expected_replay);
+}
+
+#[rstest::rstest]
 #[case::earliest_first([10, 15])]
 #[case::earliest_last([15, 10])]
 fn multiple_insertions_preserve_the_earliest_pending_work(#[case] times: [u64; 2]) {
