@@ -57,8 +57,8 @@ where
     }
 
     /// Applies a batch while replaying changes to retained event history.
-    /// Override to publish effects after application. Pruning also calls this
-    /// hook as it moves the anchor; queries call only `apply_event_batch`.
+    /// Override to publish effects after application. Queries and forwarding
+    /// call only `apply_event_batch`, without republishing historical effects.
     fn replay_event_batch(&mut self, batch: EventBatch<'_, '_, S::Time, E>, apply_inner: &mut ApplyInner<'_, S>) {
         self.apply_event_batch(batch, apply_inner);
     }
