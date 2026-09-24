@@ -1,6 +1,8 @@
-//! Apply-time snapshot replay and checkpoint storage independent of ConTime
-//! orchestration.
+//! Snapshot history accessed through [`SnapshotStore`].
+//! Consumers implement [`Snapshot`], [`Event`], [`EventStore`], and [`Apply`].
+//! Forwarding additionally requires [`Timestamp`].
 
+mod api;
 mod apply;
 mod commit;
 mod forward;
@@ -10,10 +12,10 @@ mod replay;
 mod store;
 mod types;
 
-pub use commit::Commit;
-pub use forward::{forward, ForwardError};
-pub use playback::Playback;
-pub use query::query_at;
-pub use replay::{replay, replay_next};
-pub use store::Store;
+pub use api::SnapshotStore;
+pub use forward::ForwardError;
 pub use types::{Apply, Checkpoint, Event, EventStore, NoCheckpoint, Snapshot, Timestamp};
+
+pub(crate) use commit::Commit;
+pub(crate) use playback::Playback;
+pub(crate) use store::Store;

@@ -1,6 +1,6 @@
 //! Storage ownership and playback initialization.
 use super::{Checkpoint, Playback};
-use crate::{NoCheckpoint, Snapshot};
+use crate::{EventStore, NoCheckpoint, Snapshot};
 use std::collections::VecDeque;
 
 /// Storage for one snapshot. Dirty is the inclusive valid-through boundary.
@@ -51,6 +51,16 @@ impl<S: Snapshot, H> Store<S, H> {
             None => return Err(NoCheckpoint),
         };
         Ok(Playback::new(self, index))
+    }
+}
+
+impl<S: Snapshot, H: EventStore<Time = S::Time>> Store<S, H> {
+    /// Removes obsolete storage, preserving the forwarded checkpoint and all
+    /// events at or after the horizon. Does not apply events or change boundaries.
+    pub fn prune(&mut self) {
+        self.events.prune_before(&self.horizon);
+        let before = self.checkpoints.partition_point(|checkpoint| checkpoint.snapshot.time() < &self.horizon);
+        self.checkpoints.drain(..before.saturating_sub(1));
     }
 }
 
@@ -194,6 +204,113 @@ mod tests {
                 black_box(black_box(&mut populated).play(black_box(&target)).unwrap());
             });
         });
+        criterion.final_summary();
+    }
+
+    #[rstest::rstest]
+    #[case::once(1)]
+    #[case::repeated(2)]
+    fn prune_preserves_the_predecessor_and_horizon_events(#[case] calls: usize) {
+        let expected_times = [19, 30];
+        let expected_events = vec![TestEvent(20, 3), TestEvent(20, 4), TestEvent(30, 5)];
+        let expected_dirty = 10;
+        let expected_horizon = 20;
+        let expected_count = 7;
+
+        let events = TestEventStore(vec![TestEvent(5, 1), TestEvent(19, 2), TestEvent(20, 3), TestEvent(20, 4), TestEvent(30, 5)]);
+        let mut store = Store::new(events, TestSnapshot { time: 0, sum: 0 }, 100);
+        store.checkpoints.extend(
+            [9, 19, 19, 30].map(|time| Checkpoint { snapshot: TestSnapshot { time, sum: 3 }, history_event_count: expected_count }),
+        );
+        store.horizon = expected_horizon;
+        store.dirty = expected_dirty;
+
+        for _ in 0..calls {
+            store.prune();
+        }
+        let actual_times = store.checkpoints.iter().map(|checkpoint| checkpoint.snapshot.time).collect::<Vec<_>>();
+        let actual_count = store.checkpoints[0].history_event_count;
+
+        assert_eq!(actual_times, expected_times);
+        assert_eq!(store.events.0, expected_events);
+        assert_eq!(actual_count, expected_count);
+        assert_eq!(store.horizon, expected_horizon);
+        assert_eq!(store.dirty, expected_dirty);
+    }
+
+    #[test]
+    fn prune_before_forwarding_preserves_initial_state() {
+        let expected_snapshot = TestSnapshot { time: 0, sum: 0 };
+        let expected_events = vec![TestEvent(0, 1), TestEvent(10, 2)];
+        let expected_len = 1;
+
+        let mut store = Store::new(TestEventStore(expected_events.clone()), expected_snapshot.clone(), 100);
+
+        store.prune();
+
+        assert_eq!(store.checkpoints.len(), expected_len);
+        assert_eq!(store.checkpoints[0].snapshot, expected_snapshot);
+        assert_eq!(store.events.0, expected_events);
+    }
+
+    #[test]
+    fn prune_keeps_the_predecessor_when_all_events_are_expired() {
+        let expected_snapshot = TestSnapshot { time: 29, sum: 7 };
+        let expected_count = 3;
+        let expected_len = 1;
+        let expected_horizon = 30;
+        let expected_dirty = 20;
+
+        let events = TestEventStore(vec![TestEvent(10, 1), TestEvent(20, 2), TestEvent(20, 4)]);
+        let mut store = Store::new(events, TestSnapshot { time: 0, sum: 0 }, 100);
+        store.checkpoints.push_back(Checkpoint { snapshot: expected_snapshot.clone(), history_event_count: expected_count });
+        store.horizon = expected_horizon;
+        store.dirty = expected_dirty;
+
+        store.prune();
+        let actual_events_empty = store.events.0.is_empty();
+        let actual = &store.checkpoints[0];
+
+        assert!(actual_events_empty);
+        assert_eq!(actual.snapshot, expected_snapshot);
+        assert_eq!(actual.history_event_count, expected_count);
+        assert_eq!(store.checkpoints.len(), expected_len);
+        assert_eq!(store.horizon, expected_horizon);
+        assert_eq!(store.dirty, expected_dirty);
+    }
+
+    #[test]
+    #[ignore = "inline Criterion benchmark"]
+    fn benchmark_store_prune_unit() {
+        let interval = 100;
+        let mut criterion = criterion::Criterion::default()
+            .warm_up_time(std::time::Duration::from_millis(200))
+            .measurement_time(std::time::Duration::from_secs(1))
+            .sample_size(30);
+        for event_count in [1000, 10_000] {
+            let horizon = event_count / 2 + 1;
+            let name = format!("checkpoints/unit/store/prune_half_of_{event_count}_events");
+            criterion.bench_function(&name, |b| {
+                b.iter_batched_ref(
+                    || {
+                        let events = TestEventStore((1..=event_count).map(|time| TestEvent(time, 1)).collect());
+                        let mut store = Store::new(events, TestSnapshot { time: 0, sum: 0 }, interval);
+                        store.checkpoints.extend((1..=event_count / interval).map(|index| {
+                            let time = index * interval;
+                            Checkpoint { snapshot: TestSnapshot { time, sum: time }, history_event_count: time }
+                        }));
+                        store.horizon = horizon;
+                        store.dirty = event_count;
+                        store
+                    },
+                    |store| {
+                        black_box(&mut *store).prune();
+                        black_box((&store.events.0, &store.checkpoints, store.horizon, store.dirty));
+                    },
+                    criterion::BatchSize::SmallInput,
+                );
+            });
+        }
         criterion.final_summary();
     }
 }

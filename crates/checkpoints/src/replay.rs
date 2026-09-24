@@ -22,26 +22,6 @@ where
     Ok(())
 }
 
-/// Rebuilds at most one complete timestamp through the inclusive target.
-pub fn replay_next<S, H, C>(store: &mut Store<S, H>, context: &C, time: S::Time) -> Result<(), NoCheckpoint>
-where
-    S: Snapshot,
-    H: EventStore<Time = S::Time>,
-    H::Event: Apply<Checkpoint<S>, C>,
-{
-    let mut playback = store.play(&time)?;
-    {
-        let (checkpoint, events) = playback.begin();
-        let mut events = events.peekable();
-        let Some(next) = events.peek().map(|event| event.time()).filter(|next| next <= &time) else {
-            return Ok(());
-        };
-        crate::apply::apply(checkpoint, events.take_while(|event| event.time() == next), context);
-    }
-    retain(&mut playback);
-    Ok(())
-}
-
 // Replay chooses placement; Commit only performs the requested writes.
 fn retain<S: Snapshot, H: EventStore<Time = S::Time>>(playback: &mut Playback<'_, S, H>) {
     let index = playback.checkpoint_index;
@@ -115,15 +95,15 @@ mod tests {
     }
 
     #[test]
-    fn next_stops_after_one_complete_timestamp() {
+    fn replay_stops_at_the_inclusive_target() {
         let expected_time: Time = 10;
         let expected_sum = 3;
 
         let events = TestEventStore(vec![TestEvent(10, 1), TestEvent(10, 2), TestEvent(20, 4)]);
         let mut store = Store::new(events, TestSnapshot { time: 0, sum: 0 }, 1);
-        let target: Time = 20;
+        let target = expected_time;
 
-        replay_next(&mut store, &(), target).unwrap();
+        replay(&mut store, &(), target).unwrap();
         let actual = &store.checkpoints.back().unwrap().snapshot;
 
         assert_eq!(actual.time, expected_time);

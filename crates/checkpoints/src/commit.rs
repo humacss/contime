@@ -36,7 +36,7 @@ impl<S: Snapshot, H> Commit<'_, S, H> {
         {
             *self.checkpoint_index += 1;
         }
-        self.replace_checkpoint(*self.checkpoint_index);
+        self.replace_checkpoint(self.checkpoint_index());
     }
 
     /// Records the inclusive valid-through boundary after contiguous replay.
