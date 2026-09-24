@@ -1,255 +1,145 @@
-use crate::{ApplyEvents, ApplyWrapper, CheckpointStore, EventBatch, Events, Snapshot};
+use crate::{Apply, Checkpoint, Event, EventStore, NoCheckpoint, Snapshot, Store};
 
-/// Reconstructs one query-local snapshot through `time` without modifying
-/// retained checkpoints or acknowledging the event history.
-pub fn query_at<H, S, W, E, T>(checkpoints: &CheckpointStore<S>, events: &H, wrapper: &mut W, time: T) -> Option<Box<S>>
+/// Reconstructs fresh state without retaining it. Supply an effect-free context.
+/// Includes events at the requested time. The returned timestamp remains the
+/// last applied timestamp (or the starting snapshot's time if nothing applied).
+pub fn query_at<S, H, C>(store: &mut Store<S, H>, context: &C, time: S::Time) -> Result<Box<S>, NoCheckpoint>
 where
-    H: Events<Time = T, Event = E>,
-    S: ApplyEvents<E> + Snapshot<Time = T>,
-    W: ApplyWrapper<S, E>,
-    T: Clone + Default + Ord,
+    S: Snapshot,
+    H: EventStore<Time = S::Time>,
+    H::Event: Apply<Checkpoint<S>, C>,
 {
-    let base_index = checkpoints.checkpoints.partition_point(|checkpoint| checkpoint.key.time <= time).checked_sub(1);
-    let (mut working_snapshot, start_key, mut history_event_count) = base_index.map_or_else(
-        || {
-            checkpoints
-                .anchor
-                .as_ref()
-                .map_or((None, None, 0), |anchor| (Some(anchor.snapshot.clone()), anchor.boundary.clone(), anchor.history_event_count))
-        },
-        |index| {
-            let checkpoint = &checkpoints.checkpoints[index];
-            (Some(checkpoint.snapshot.clone()), Some(checkpoint.key.clone()), checkpoint.history_event_count)
-        },
-    );
-    let mut event_iter = events.iter_after(start_key.as_ref()).peekable();
-    let mut bucket = Vec::new();
-
-    while let Some(first_event) = event_iter.next() {
-        if first_event.time > &time {
-            break;
+    let mut playback = store.play(&time)?;
+    loop {
+        {
+            let (checkpoint, events) = playback.begin();
+            let mut events = events.take_while(|event| event.time() <= time).peekable();
+            if events.peek().is_none() {
+                break;
+            }
+            crate::apply::apply(checkpoint, events, context);
         }
-
-        if working_snapshot.is_none() {
-            working_snapshot = Some(S::create(checkpoints.snapshot_id, first_event.event));
-        }
-
-        let bucket_time = first_event.time.clone();
-        bucket.clear();
-        bucket.push(first_event.event);
-        while event_iter.peek().is_some_and(|candidate| candidate.time == &bucket_time) {
-            bucket.push(event_iter.next().expect("peeked event must exist").event);
-        }
-
-        history_event_count = history_event_count
-            .checked_add(u64::try_from(bucket.len()).expect("event bucket length exceeded u64"))
-            .expect("history event count overflow");
-        crate::apply(
-            working_snapshot.as_mut().expect("query snapshot must be initialized"),
-            EventBatch { snapshot_id: checkpoints.snapshot_id, time: bucket_time, events: &bucket },
-            history_event_count,
-            wrapper,
-        );
+        playback.commit(|_| {});
     }
-
-    working_snapshot.map(Box::new)
+    Ok(Box::new(playback.checkpoint.snapshot))
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::hint::black_box;
 
-    use criterion::Criterion;
-
-    use crate::{query_at, ApplyBatch, ApplyEvents, CheckpointConfig, CheckpointKey, CheckpointStore, EventRef, Events, Snapshot};
-
-    #[derive(Clone)]
-    struct TestEvent {
-        id: u128,
-        time: i64,
-        value: i64,
+    type Time = u64;
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct State {
+        time: Time,
+        sum: u64,
     }
+    struct Input(Time, u64);
+    struct Events(Vec<Input>);
 
-    struct TestEvents {
-        dirty_time: i64,
-        events: Vec<TestEvent>,
-        replay_acknowledgements: usize,
-    }
-
-    struct TestEventIter<'a> {
-        events: std::slice::Iter<'a, TestEvent>,
-    }
-
-    impl<'a> Iterator for TestEventIter<'a> {
-        type Item = EventRef<'a, i64, TestEvent>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            self.events.next().map(|event| EventRef { time: &event.time, event_id: event.id, event })
+    impl Snapshot for State {
+        type Time = Time;
+        fn time(&self) -> &Time {
+            &self.time
         }
-    }
-
-    impl TestEvents {
-        fn new(mut events: Vec<TestEvent>) -> Self {
-            events.sort_unstable_by_key(|event| (event.time, event.id));
-            Self { dirty_time: 0, events, replay_acknowledgements: 0 }
-        }
-    }
-
-    impl Events for TestEvents {
-        type Time = i64;
-        type Event = TestEvent;
-        type Iter<'a> = TestEventIter<'a>;
-
-        fn dirty_time(&self) -> &Self::Time {
-            &self.dirty_time
-        }
-
-        fn iter_after(&self, boundary: Option<&CheckpointKey<Self::Time>>) -> Self::Iter<'_> {
-            let start = boundary
-                .map_or(0, |boundary| self.events.partition_point(|event| (event.time, event.id) <= (boundary.time, boundary.event_id)));
-            TestEventIter { events: self.events[start..].iter() }
-        }
-
-        fn acknowledge_replay(&mut self) {
-            self.replay_acknowledgements += 1;
-        }
-    }
-
-    #[derive(Clone, Debug, Default, Eq, PartialEq)]
-    struct TestSnapshot {
-        time: i64,
-        sum: i64,
-        batch_sizes: Vec<usize>,
-    }
-
-    impl Snapshot for TestSnapshot {
-        type Time = i64;
-
-        fn set_time(&mut self, time: Self::Time) {
+        fn set_time(&mut self, time: Time) {
             self.time = time;
         }
     }
-
-    impl ApplyEvents<TestEvent> for TestSnapshot {
-        fn create(_snapshot_id: u128, _first_event: &TestEvent) -> Self {
-            Self::default()
-        }
-
-        fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Time, TestEvent>) {
-            self.sum += batch.events.iter().map(|event| event.value).sum::<i64>();
-            self.batch_sizes.push(batch.events.len());
+    impl Event for Input {
+        type Time = Time;
+        fn time(&self) -> Time {
+            self.0
         }
     }
-
-    fn event(id: u128, time: i64, value: i64) -> TestEvent {
-        TestEvent { id, time, value }
-    }
-
-    fn replay_fixture(events: &mut TestEvents, interval: u64) -> CheckpointStore<TestSnapshot> {
-        let mut store = CheckpointStore::new(7, CheckpointConfig { interval });
-        crate::replay(&mut store, events, &mut ());
-        store
-    }
-
-    #[test]
-    fn queries_and_retention_apply_without_replay_effects() {
-        #[derive(Default)]
-        struct Trace {
-            applied: Vec<i64>,
-            replayed: Vec<i64>,
+    impl EventStore for Events {
+        type Time = Time;
+        type Event = Input;
+        type Iter<'a> = std::slice::Iter<'a, Input>;
+        fn iter_after(&self, boundary: Option<&Time>) -> Self::Iter<'_> {
+            let start = boundary.map_or(0, |time| self.0.partition_point(|event| event.0 <= *time));
+            self.0[start..].iter()
         }
-        impl crate::ApplyWrapper<TestSnapshot, TestEvent> for Trace {
-            fn apply_event_batch(&mut self, batch: crate::EventBatch<'_, i64, TestEvent>, inner: &mut crate::ApplyInner<'_, TestSnapshot>) {
-                self.applied.push(batch.time);
-                inner.apply_event_batch(batch);
-            }
-            fn replay_event_batch(
-                &mut self,
-                batch: crate::EventBatch<'_, i64, TestEvent>,
-                inner: &mut crate::ApplyInner<'_, TestSnapshot>,
-            ) {
-                self.replayed.push(batch.time);
-                self.apply_event_batch(batch, inner);
-            }
+    }
+    impl Apply<Checkpoint<State>> for Input {
+        fn apply<'a>(checkpoint: &mut Checkpoint<State>, events: impl Iterator<Item = &'a Self>, _: &()) {
+            checkpoint.snapshot.sum += events.map(|event| event.1).sum::<u64>();
         }
-        let mut events = TestEvents::new(vec![event(1, 10, 7), event(2, 20, 11)]);
-        let mut store = CheckpointStore::new(7, CheckpointConfig { interval: 100 });
-        let mut trace = Trace::default();
-        crate::replay(&mut store, &mut events, &mut trace);
-        assert_eq!(trace.replayed, vec![10, 20]);
-        let before = store.iter().map(|c| (c.key.clone(), c.snapshot.clone())).collect::<Vec<_>>();
-        trace.applied.clear();
-        trace.replayed.clear();
-        assert_eq!(query_at(&store, &events, &mut trace, 10).unwrap().sum, 7);
-        assert_eq!(trace.applied, vec![10]);
-        assert!(trace.replayed.is_empty());
-        assert_eq!(store.iter().map(|c| (c.key.clone(), c.snapshot.clone())).collect::<Vec<_>>(), before);
-        assert_eq!(events.replay_acknowledgements, 1);
-        trace.applied.clear();
-        crate::advance_before(&mut store, &events, &mut trace, &15);
-        assert_eq!(trace.applied, vec![10]);
-        assert!(trace.replayed.is_empty());
+    }
+
+    #[rstest::rstest]
+    #[case::before_events(5, 0, 0)]
+    #[case::inclusive_target(20, 20, 6)]
+    #[case::between_events(25, 20, 6)]
+    #[case::past_events(100, 30, 10)]
+    fn happy(#[case] target: Time, #[case] expected_time: Time, #[case] expected_sum: u64) {
+        let expected = State { time: expected_time, sum: expected_sum };
+        let expected_stored = State { time: 0, sum: 0 };
+        let expected_checkpoint_count = 1;
+        let expected_event_count = 0;
+        let expected_boundary: Time = 0;
+
+        let events = Events(vec![Input(10, 1), Input(20, 2), Input(20, 3), Input(30, 4)]);
+        let interval = 1;
+        let mut store = Store::new(events, expected_stored.clone(), interval);
+
+        let actual = query_at(&mut store, &(), target).unwrap();
+        let actual_stored = &store.checkpoints[0];
+
+        assert_eq!(*actual, expected);
+        assert_eq!(actual_stored.snapshot, expected_stored);
+        assert_eq!(actual_stored.history_event_count, expected_event_count);
+        assert_eq!(store.checkpoints.len(), expected_checkpoint_count);
+        assert_eq!(store.dirty, expected_boundary);
+        assert_eq!(store.horizon, expected_boundary);
     }
 
     #[test]
-    fn query_clones_an_exact_checkpoint_without_mutating_retained_state() {
-        let mut events = TestEvents::new(vec![event(1, 10, 1), event(2, 20, 2)]);
-        let store = replay_fixture(&mut events, 1);
-        let before = store.iter().map(|checkpoint| (checkpoint.key.clone(), checkpoint.snapshot.clone())).collect::<Vec<_>>();
+    fn empty_history_returns_the_initial_state() {
+        let expected = State { time: 10, sum: 7 };
 
-        let result = query_at(&store, &events, &mut (), 20).unwrap();
+        let target: Time = 20;
+        let mut store = Store::new(Events(Vec::new()), expected.clone(), 1);
 
-        assert_eq!(*result, TestSnapshot { time: 20, sum: 3, batch_sizes: vec![1, 1] });
-        assert_eq!(store.iter().map(|checkpoint| (checkpoint.key.clone(), checkpoint.snapshot.clone())).collect::<Vec<_>>(), before);
-        assert_eq!(events.replay_acknowledgements, 1);
+        let actual = query_at(&mut store, &(), target).unwrap();
+
+        assert_eq!(*actual, expected);
     }
 
     #[test]
-    fn query_replays_complete_buckets_after_the_nearest_checkpoint() {
-        let mut retained_events = TestEvents::new(vec![event(1, 10, 1), event(2, 20, 2)]);
-        let store = replay_fixture(&mut retained_events, 1);
-        let query_events = TestEvents::new(vec![event(1, 10, 1), event(2, 20, 2), event(3, 30, 3), event(4, 30, 4), event(5, 40, 5)]);
+    fn rejected_playback_propagates_the_error() {
+        let expected_error = NoCheckpoint;
 
-        let result = query_at(&store, &query_events, &mut (), 30).unwrap();
+        let horizon: Time = 10;
+        let target = horizon - 1;
+        let mut store = Store::new(Events(Vec::new()), State { time: horizon, sum: 0 }, 1);
 
-        assert_eq!(result.time, 30);
-        assert_eq!(result.sum, 10);
-        assert_eq!(result.batch_sizes, vec![1, 1, 2]);
-    }
+        let actual = query_at(&mut store, &(), target);
 
-    #[test]
-    fn query_initializes_without_a_checkpoint_and_returns_none_without_events() {
-        let store = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval: 100 });
-        let events = TestEvents::new(vec![event(1, 10, 1), event(2, 10, 2), event(3, 20, 4)]);
-
-        let result = query_at(&store, &events, &mut (), 10).unwrap();
-
-        assert_eq!(*result, TestSnapshot { time: 10, sum: 3, batch_sizes: vec![2] });
-        assert!(query_at(&store, &events, &mut (), 9).is_none());
-    }
-
-    #[test]
-    fn a_query_older_than_the_retained_anchor_returns_the_anchor() {
-        let mut events = TestEvents::new(vec![event(1, 10, 1), event(2, 20, 2)]);
-        let mut store = replay_fixture(&mut events, 100);
-        crate::advance_before(&mut store, &events, &mut (), &20);
-
-        let result = query_at(&store, &events, &mut (), 5).unwrap();
-
-        assert_eq!(result.time, 10);
-        assert_eq!(result.sum, 1);
+        assert_eq!(actual, Err(expected_error));
     }
 
     #[test]
     #[ignore = "inline Criterion benchmark"]
-    fn benchmark_query() {
-        let events = TestEvents::new((0..1_000).map(|index| event(index as u128, index as i64, 1)).collect());
-        let store = CheckpointStore::<TestSnapshot>::new(7, CheckpointConfig { interval: 100 });
-        let mut criterion = Criterion::default();
-
-        criterion.bench_function("checkpoints/query/replay_1000_events", |bencher| {
-            bencher.iter(|| black_box(query_at(black_box(&store), black_box(&events), &mut (), black_box(999))));
-        });
+    fn benchmark_query_unit() {
+        let mut criterion = criterion::Criterion::default()
+            .warm_up_time(std::time::Duration::from_millis(200))
+            .measurement_time(std::time::Duration::from_secs(1))
+            .sample_size(30);
+        for event_count in [1000, 10_000] {
+            for interval in [10, 100] {
+                let events = Events((1..=event_count).map(|time| Input(time, 1)).collect());
+                let mut store = Store::new(events, State { time: 0, sum: 0 }, interval);
+                let name = format!("checkpoints/query/{event_count}_events_{}_intervals", event_count / interval);
+                criterion.bench_function(&name, |b| {
+                    b.iter(|| {
+                        let result = query_at(black_box(&mut store), black_box(&()), black_box(event_count)).unwrap();
+                        black_box(result);
+                    });
+                });
+            }
+        }
         criterion.final_summary();
     }
 }
