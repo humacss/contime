@@ -150,11 +150,8 @@ mod tests {
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_store_unit() {
         let start: Time = 10;
-        let before_horizon: Time = 9;
         let interval = 100;
         let mut populated = Store::new(Events::default(), State(start), interval);
-        let mut empty = Store::new(Events::default(), State(start), interval);
-        empty.checkpoints.clear();
         let mut criterion = criterion::Criterion::default()
             .warm_up_time(std::time::Duration::from_millis(200))
             .measurement_time(std::time::Duration::from_secs(1))
@@ -167,26 +164,6 @@ mod tests {
         criterion.bench_function("checkpoints/unit/store/play_stub", |b| {
             b.iter(|| {
                 black_box(play_with::<PlaybackStub, _, _>(black_box(&mut populated), black_box(&start)).unwrap());
-            });
-        });
-        criterion.bench_function("checkpoints/unit/store/reject_before_horizon", |b| {
-            b.iter(|| {
-                black_box(play_with::<PlaybackStub, _, _>(black_box(&mut populated), black_box(&before_horizon)).err());
-            });
-        });
-        criterion.bench_function("checkpoints/unit/store/reject_empty", |b| {
-            b.iter(|| {
-                black_box(play_with::<PlaybackStub, _, _>(black_box(&mut empty), black_box(&start)).err());
-            });
-        });
-        criterion.bench_function("checkpoints/unit/store/reject_before_horizon_1000", |b| {
-            b.iter(|| {
-                let mut rejected = 0usize;
-                for _ in 0..1000 {
-                    rejected +=
-                        black_box(play_with::<PlaybackStub, _, _>(black_box(&mut populated), black_box(&before_horizon)).is_err()) as usize;
-                }
-                black_box(rejected);
             });
         });
         criterion.final_summary();
