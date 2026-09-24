@@ -38,6 +38,9 @@ pub trait EventStore {
     /// Iterates canonically strictly after the complete timestamp `boundary`,
     /// or from the beginning when it is absent.
     fn iter_after(&self, boundary: Option<&Self::Time>) -> Self::Iter<'_>;
+
+    /// Removes events strictly before the horizon, retaining events at it.
+    fn prune_before(&mut self, horizon: &Self::Time);
 }
 
 /// Consumer-owned state retained in checkpoints.
@@ -114,6 +117,10 @@ pub(crate) mod testing {
         fn iter_after(&self, boundary: Option<&Time>) -> Self::Iter<'_> {
             let start = boundary.map_or(0, |time| self.0.partition_point(|event| event.0 <= *time));
             self.0[start..].iter()
+        }
+        fn prune_before(&mut self, horizon: &Time) {
+            let end = self.0.partition_point(|event| event.0 < *horizon);
+            self.0.drain(..end);
         }
     }
 
