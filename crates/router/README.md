@@ -9,9 +9,11 @@ four workers, and 2.275 us for sixteen workers.
 The broadcast does not establish a barrier with apply batches being processed
 by another router. With multiple routers, an earlier apply and a later advance
 can therefore reach the same worker in the opposite order. The router crate
-provides dispatch, not cross-router sequencing; the composed core currently
-requires callers to observe apply completion before advancing the horizon when
-that ordering matters.
+provides dispatch, not cross-router sequencing. Core coordinates safety through
+router fences and worker reports. `Resolve` broadcasts the round identifier,
+authorized horizon, and shared completion ownership to every worker. Completion
+closes only after all recipients release the round and finish required forwarding;
+Core serializes subsequent rounds against that completion.
 
 `contime-router` receives complete input batches, deterministically maps each
 snapshot route to a worker, and sends one final batch per affected worker.

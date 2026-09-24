@@ -30,6 +30,11 @@ impl<S: Snapshot, H> Store<S, H> {
     /// Rejects requests before the horizon, then starts from a valid checkpoint.
     /// At the horizon, start from its predecessor so events at the horizon remain eligible.
     pub fn play(&mut self, start: &S::Time) -> Result<Playback<'_, S, H>, NoCheckpoint> {
+        let index = self.starting_index(start, false)?;
+        Ok(Playback::new(self, index))
+    }
+
+    pub(super) fn starting_index(&self, start: &S::Time, include_horizon: bool) -> Result<usize, NoCheckpoint> {
         if self.checkpoints.is_empty() || start < &self.horizon {
             return Err(NoCheckpoint);
         }
@@ -38,11 +43,11 @@ impl<S: Snapshot, H> Store<S, H> {
         let retained = self.checkpoints.partition_point(|checkpoint| checkpoint.snapshot.time() < &self.horizon);
         if let Some(index) = retained.checked_sub(1) {
             if self.checkpoints[index].snapshot.time() > boundary {
-                return Ok(Playback::new(self, index));
+                return Ok(index);
             }
         }
         let end = self.checkpoints.partition_point(|checkpoint| {
-            checkpoint.snapshot.time() <= boundary && (start != &self.horizon || checkpoint.snapshot.time() < start)
+            checkpoint.snapshot.time() <= boundary && (include_horizon || start != &self.horizon || checkpoint.snapshot.time() < start)
         });
         let index = match end.checked_sub(1) {
             Some(index) => index,
@@ -50,7 +55,7 @@ impl<S: Snapshot, H> Store<S, H> {
             None if self.checkpoints[0].history_event_count == 0 && self.checkpoints[0].snapshot.time() <= boundary => 0,
             None => return Err(NoCheckpoint),
         };
-        Ok(Playback::new(self, index))
+        Ok(index)
     }
 }
 

@@ -25,6 +25,11 @@ Commit directly. These methods delegate to the internal operations below;
 Store to remove events before its current horizon and obsolete checkpoints,
 preserving the horizon's predecessor checkpoint. It does not apply events,
 invoke hooks, or change dirty or horizon, and repeated calls are harmless.
+`earliest_replay_time()` reads the first event after the valid replay checkpoint,
+including any unchanged prefix invalidated by a late insertion. It does not clone
+or apply snapshots. Coordinators can use this bound for publication safety; it is
+not interchangeable with the inserted event's timestamp. None means no pending
+event application. Completed events at the horizon do not pin future-only work.
 The initial snapshot represents state before the supplied history; a zero event
 count distinguishes it from a completed first timestamp. Interval zero means
 unbounded; other intervals are event counts, extended to finish a whole timestamp.

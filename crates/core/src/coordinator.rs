@@ -24,12 +24,13 @@ pub(crate) fn run<I: Input, S>(
     let mut working = false;
     let mut next_round = Instant::now();
     let mut awaiting_marker = None;
+    let mut resolving = None;
     let mut pruned = vec![I::Time::default(); workers];
     let mut completed_horizon = I::Time::default();
     let mut horizon_listeners: Vec<Sender<I::Time>> = Vec::new();
     loop {
         let pruning = frontier.requested() > frontier.safe();
-        if pruning && !frontier.measuring() && Instant::now() >= next_round {
+        if pruning && !frontier.measuring() && resolving.is_none() && Instant::now() >= next_round {
             if !working {
                 working = true;
                 listeners.retain(|listener| listener.send(true).is_ok());
@@ -42,17 +43,19 @@ pub(crate) fn run<I: Input, S>(
                 next_round = Instant::now() + pruning_interval;
             }
         }
-        let busy = pruning || !input.is_empty() || !observations.is_empty();
+        let busy = pruning || resolving.is_some() || !input.is_empty() || !observations.is_empty();
         if working != busy {
             working = busy;
             listeners.retain(|listener| listener.send(working).is_ok());
         }
-        let timer = if pruning && !frontier.measuring() {
+        let timer = if pruning && !frontier.measuring() && resolving.is_none() {
             crossbeam_channel::after(next_round.saturating_duration_since(Instant::now()))
         } else {
             crossbeam_channel::never()
         };
         let mut ready = crossbeam_channel::Select::new();
+        let unresolved = crossbeam_channel::never();
+        let resolution_index = ready.recv(resolving.as_ref().unwrap_or(&unresolved));
         let message_index = ready.recv(&input);
         let observed_index = ready.recv(&observations);
         let registration_index = ready.recv(&registrations);
@@ -60,6 +63,12 @@ pub(crate) fn run<I: Input, S>(
         // Publish working before removing a queued message, so idle observers
         // cannot mistake a handoff for an empty pipeline.
         let selected = ready.ready();
+        if selected == resolution_index {
+            // Every routed completion owner has finished forwarding (or released
+            // an unchanged horizon). Do not overlap measurement rounds.
+            resolving = None;
+            continue;
+        }
         if selected == registration_index {
             match registrations.try_recv() {
                 Ok(listener) => {
@@ -123,10 +132,17 @@ pub(crate) fn run<I: Input, S>(
                 advance.time = target.clone();
                 Some(RouterMessage::Advance(advance))
             }
-            RouterMessage::Report { round, worker, minimum } => frontier.report(round, worker, minimum).map(|time| {
-                let (completion, _) = crossbeam_channel::unbounded();
-                RouterMessage::Prune(Advance { time, completion })
-            }),
+            RouterMessage::Report { round, worker, minimum } => {
+                let measuring = frontier.measuring();
+                frontier.report(round, worker, minimum);
+                if measuring && !frontier.measuring() {
+                    let (completion, completed) = crossbeam_channel::unbounded();
+                    resolving = Some(completed);
+                    Some(RouterMessage::Resolve { round, prune: Advance { time: frontier.safe().clone(), completion } })
+                } else {
+                    None
+                }
+            }
             RouterMessage::Shutdown => return,
             other => Some(other),
         };
@@ -138,7 +154,11 @@ pub(crate) fn run<I: Input, S>(
     }
 }
 
-fn admit<I: Input, S>(mut batch: RouterBatch<I>, source: Option<I::Time>, frontier: &mut Frontier<I::Time>) -> Option<RouterMessage<I, S>> {
+pub(crate) fn admit<I: Input, S>(
+    mut batch: RouterBatch<I>,
+    source: Option<I::Time>,
+    frontier: &mut Frontier<I::Time>,
+) -> Option<RouterMessage<I, S>> {
     batch.inputs.retain(|input| {
         let time = input.time();
         let reason = match &source {
@@ -222,31 +242,41 @@ mod tests {
             observed.send(round).unwrap();
             assert_eq!(controls.recv_timeout(Duration::from_secs(2)).unwrap().round, round);
             input.send(RouterMessage::Report { round, worker: 0, minimum: Some(Time(80)) }).unwrap();
-            let RouterMessage::Prune(advance) = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
+            let RouterMessage::Resolve { prune: advance, .. } = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
                 panic!("missing partial prune");
             };
             assert_eq!(advance.time, Time(80));
+            drop(advance);
 
-            // A FIFO query probes the next coordinator iteration, without sleeps
-            // or a tight wall-clock assertion. Zero must start another round
-            // before consuming it; a long interval must still forward the query.
+            // Query delivery and resolution completion are independent channels.
+            // Zero starts another round without a timer; either may be observed first.
             let (response, _) = crossbeam_channel::unbounded();
             input.send(RouterMessage::SnapshotQuery(crate::SnapshotQuery { time: Time(100), snapshot_ids: vec![1], response })).unwrap();
             if interval.is_zero() {
-                let RouterMessage::Fence { round: next, observed } = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
-                    panic!("zero interval did not immediately start the next round");
+                let first = routed.recv_timeout(Duration::from_secs(2)).unwrap();
+                let (next, observed) = match first {
+                    RouterMessage::Fence { round, observed } => {
+                        assert!(matches!(routed.recv_timeout(Duration::from_secs(2)).unwrap(), RouterMessage::SnapshotQuery(_)));
+                        (round, observed)
+                    }
+                    RouterMessage::SnapshotQuery(_) => {
+                        let RouterMessage::Fence { round, observed } = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
+                            panic!("zero interval must start another round");
+                        };
+                        (round, observed)
+                    }
+                    _ => panic!("expected query or next round"),
                 };
                 assert!(next > round);
                 observed.send(next).unwrap();
                 controls.recv_timeout(Duration::from_secs(2)).unwrap();
                 input.send(RouterMessage::Report { round: next, worker: 0, minimum: None }).unwrap();
-            }
-            assert!(matches!(routed.recv_timeout(Duration::from_secs(2)).unwrap(), RouterMessage::SnapshotQuery(_)));
-            if interval.is_zero() {
-                let RouterMessage::Prune(advance) = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
+                let RouterMessage::Resolve { prune: advance, .. } = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
                     panic!("missing completed prune");
                 };
                 assert_eq!(advance.time, Time(100));
+            } else {
+                assert!(matches!(routed.recv_timeout(Duration::from_secs(2)).unwrap(), RouterMessage::SnapshotQuery(_)));
             }
             input.send(RouterMessage::Shutdown).unwrap();
             handle.join().unwrap();
@@ -281,10 +311,10 @@ mod tests {
         input.send(RouterMessage::Internal { source: Time(80), batch: batch(Time(80), &errors) }).unwrap();
         input.send(RouterMessage::Report { round, worker: 1, minimum: None }).unwrap();
         assert!(matches!(routed.recv_timeout(Duration::from_secs(1)).unwrap(), RouterMessage::Apply(_)));
-        let RouterMessage::Prune(advance) = routed.recv_timeout(Duration::from_secs(1)).unwrap() else {
+        let RouterMessage::Resolve { prune: advance, .. } = routed.recv_timeout(Duration::from_secs(1)).unwrap() else {
             panic!("missing prune");
         };
-        assert_eq!(advance.time, Time(80));
+        assert_eq!(advance.time, Time(0));
         input.send(RouterMessage::Shutdown).unwrap();
         handle.join().unwrap();
     }

@@ -62,6 +62,9 @@ impl SnapshotStore<TestEvent> for TestStore {
     fn event_time(event: &TestEvent) -> Time {
         event.time
     }
+    fn earliest_replay_time(&self) -> Option<Time> {
+        self.pending.front().map(|event| event.time)
+    }
     fn process_until(&mut self, time: &Time, context: &mut Context) {
         while self.pending.front().is_some_and(|event| event.time <= *time) {
             let event = self.pending.pop_front().unwrap();

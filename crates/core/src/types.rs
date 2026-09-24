@@ -113,6 +113,7 @@ where
     SnapshotListen(SnapshotListen<I::Time>),
     Advance(Advance<I::Time>),
     Prune(Advance<I::Time>),
+    Resolve { round: u64, prune: Advance<I::Time> },
     Fence { round: u64, observed: Sender<u64> },
     Internal { source: I::Time, batch: RouterBatch<I> },
     Report { round: u64, worker: usize, minimum: Option<I::Time> },
@@ -149,6 +150,7 @@ where
     SnapshotListen(SnapshotListen<I::Time>),
     Advance(Advance<I::Time>),
     Prune(Advance<I::Time>),
+    Resolve { round: u64, prune: Advance<I::Time> },
     Fence { round: u64, router: usize },
 }
 

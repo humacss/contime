@@ -1,5 +1,5 @@
 /// Coordinator-owned conservative boundary. A round accounts for work admitted
-/// during measurement as well as each worker's earliest unfinished bucket.
+/// during measurement as well as each worker's earliest possible publication.
 pub(crate) struct Frontier<T> {
     safe: T,
     requested: T,
@@ -45,11 +45,11 @@ impl<T: Clone + Default + Ord> Frontier<T> {
         Some(self.sequence)
     }
 
-    pub(crate) fn admitted(&mut self, time: &T) {
+    pub(crate) fn admitted(&mut self, _time: &T) {
         if let Some(round) = &mut self.round {
-            if *time < round.minimum {
-                round.minimum = time.clone();
-            }
+            // An insertion can reconstruct a prefix earlier than its own time.
+            // Only a subsequent worker measurement can bound that replay.
+            round.minimum = self.safe.clone();
         }
     }
 
@@ -81,6 +81,21 @@ mod tests {
     use super::Frontier;
 
     #[test]
+    fn admission_after_a_report_prevents_advancement_in_that_round() {
+        let mut frontier = Frontier::new(2);
+        frontier.request(80_u64);
+        let round = frontier.begin().unwrap();
+        frontier.report(round, 0, None);
+        frontier.admitted(&90);
+
+        let permission = frontier.report(round, 1, None);
+
+        assert_eq!(permission, None);
+        assert_eq!(*frontier.safe(), 0);
+        assert!(!frontier.measuring());
+    }
+
+    #[test]
     fn a_missing_worker_report_never_authorizes_pruning() {
         let mut frontier = Frontier::new(2);
         frontier.request(100_u64);
@@ -98,7 +113,8 @@ mod tests {
         let round = frontier.begin().unwrap();
         frontier.report(round, 0, None);
         frontier.admitted(&80);
-        assert_eq!(frontier.report(round, 1, Some(110)), Some(80));
+        assert_eq!(frontier.report(round, 1, Some(110)), None);
+        assert_eq!(*frontier.safe(), 0);
         let round = frontier.begin().unwrap();
         frontier.report(round, 0, None);
         assert_eq!(frontier.report(round, 1, None), Some(100));

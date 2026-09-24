@@ -59,6 +59,9 @@ impl SnapshotStore<Event> for TestStore {
     fn event_time(event: &Event) -> u64 {
         event.time
     }
+    fn earliest_replay_time(&self) -> Option<u64> {
+        self.events.iter().find(|event| self.processed.is_none_or(|time| event.time > time)).map(|event| event.time)
+    }
     fn process_until(&mut self, time: &u64, context: &mut Context) {
         let snapshot = self.query(*time, context).unwrap();
         self.processed = Some(*time);
@@ -134,6 +137,7 @@ enum Message {
     Advance(Advance),
     Prune(Advance),
     Fence(u64, usize),
+    Resolve(u64, Advance),
 }
 impl WorkInput for Message {
     type Apply = ApplyBatch<Event, Sender<Vec<u128>>>;
@@ -149,6 +153,7 @@ impl WorkInput for Message {
             Self::Advance(advance) => WorkInputKind::Advance(advance),
             Self::Prune(advance) => WorkInputKind::Prune(advance),
             Self::Fence(round, router) => WorkInputKind::Fence { round, router },
+            Self::Resolve(round, prune) => WorkInputKind::Resolve { round, prune },
         }
     }
 }
@@ -289,7 +294,8 @@ fn fences_report_between_callbacks_without_waiting_for_idle() {
     input.send(Message::Fence(1, 0)).unwrap();
     assert!(minima.is_empty());
     release.send(()).unwrap();
-    assert_eq!(receive(&minima), (1, Some(10)));
+    assert_eq!(receive(&minima), (1, Some(20)));
+    input.send(Message::Resolve(1, Advance(0, unbounded().0))).unwrap();
     advance(&input, 20);
     assert_eq!(receive(&observed).time, 20);
     input.send(Message::Fence(2, 0)).unwrap();
@@ -297,6 +303,44 @@ fn fences_report_between_callbacks_without_waiting_for_idle() {
     assert_eq!(receive(&minima), (2, None));
     drop(input);
     worker.join().unwrap();
+}
+
+#[test]
+fn consecutive_rounds_allow_processing_between_reports() {
+    let expected_first = (1, Some(10));
+    let expected_second = (2, None);
+
+    let (input, messages) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let (steps, observed) = unbounded();
+    let (reports, minima) = unbounded();
+    let mut worker = contime_worker::MessageWorker::<Message, TestStore>::new(
+        &messages,
+        &registrations,
+        (),
+        Context { steps, gate: None },
+        Some(Coordination {
+            router_count: 1,
+            report: Box::new(move |round, minimum| reports.send((round, minimum)).unwrap()),
+            pruned: Box::new(|_| {}),
+        }),
+    );
+    apply(&input, &[(7, 1, 10)]);
+    worker.handle(messages.try_recv().unwrap());
+    worker.handle(Message::Advance(Advance(10, unbounded().0)));
+    worker.handle(Message::Fence(1, 0));
+    let first = minima.try_recv().unwrap();
+
+    worker.handle(Message::Resolve(1, Advance(0, unbounded().0)));
+    worker.handle(Message::Fence(2, 0));
+    assert!(minima.is_empty(), "the next round must allow a processing step first");
+    let processed = worker.step();
+    let second = minima.try_recv().unwrap();
+
+    assert_eq!(first, expected_first);
+    assert!(processed);
+    assert_eq!(observed.try_recv().unwrap().time, 10);
+    assert_eq!(second, expected_second);
 }
 
 #[test]

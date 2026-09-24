@@ -19,6 +19,13 @@ for adapting independently defined message types and choosing where
 
 ## Incremental message workers
 
+`MessageWorker` also supports synchronous driving: `new` constructs the same
+state used by `work_messages`, `handle` delivers one message, `step` processes
+one scheduled snapshot, and `prune_step` forwards/prunes one history. Neither
+construction nor these calls spawn threads. A driver must preserve the normal
+priority: delivered messages, then pending pruning, then replay. This allows
+component tests to control message delivery without replacing worker logic.
+
 `work_messages` drains available messages, inserting complete incoming batches,
 then processes one snapshot to the next distinct pending timestamp or the
 advancement target, whichever is earlier. An ordered set groups pending work
@@ -32,7 +39,9 @@ Each message-worker snapshot owns one implementation of the worker's
 on the concrete snapshot or event store crates. The adapter owns insertion and
 invalidation and processes through the worker-selected timestamp with
 `process_until`. The adapter exposes the incoming event's timestamp through
-`event_time`; it does not supply a storage-derived next replay timestamp.
+`event_time`. Its read-only `earliest_replay_time` separately bounds possible
+replay publications, including unchanged prefixes reconstructed from checkpoints.
+That bound is used for safety measurement, not for changing scheduling policy.
 The worker tracks the earliest pending boundary and latest accepted timestamp
 per snapshot. Unfinished work moves into the destination bucket; work complete
 through the advancement target waits for a later advance. Work is removed once
@@ -48,11 +57,18 @@ prevent idle. Snapshot and event queries use the same message queue and run
 before further computation. Snapshot reconstruction is read-only and neither
 advances checkpoints nor changes scheduled work.
 
-Optional `Coordination` reports the earliest pending time after a `Fence` from
+Optional `Coordination` reports the earliest possible replay publication after a `Fence` from
 every distinct router for a round. Reports happen between operations and
 callbacks, without waiting for idle. Duplicate and older fences are ignored.
-Only explicit `Prune` messages move the retained horizon: the caller must prove
-it safe, and the worker asserts that no pending timestamp precedes it. Events
+After reporting, live replay waits for the matching `Resolve` message. Messages
+and queries remain serviceable. Resolution supplies a proven horizon (possibly
+unchanged); queued forwarding finishes before replay resumes. Between consecutive
+reports, pending work gets one processing opportunity, preventing zero-interval
+measurement rounds from starving processing. The orchestrator must resolve every
+round and wait for all completion owners before starting the next round.
+Only explicit `Prune` or `Resolve` messages move the retained horizon: the caller
+must prove it safe. The worker rejects discarding pending unapplied event timestamps;
+an already-completed scheduling cursor is not itself unapplied work. Events
 strictly before the horizon are folded into checkpoint anchors and pruned.
 Pruning is queued work: one snapshot history is pruned at a time, with incoming
 messages handled between histories. Completion and idle wait for queued pruning
