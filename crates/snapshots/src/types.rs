@@ -43,6 +43,21 @@ pub trait EventStore {
     fn prune_before(&mut self, horizon: &Self::Time);
 }
 
+/// Outcome of canonical event admission. Only `Inserted` changes history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Insert {
+    Inserted,
+    Duplicate,
+    BeforeHorizon,
+}
+
+/// Optional insertion support for consumer-owned canonical event storage.
+pub trait InsertEventStore: EventStore {
+    /// Preserve canonical order and existing events. Duplicate or rejected
+    /// admissions must leave history unchanged; identity is consumer-defined.
+    fn insert(&mut self, event: Self::Event) -> Insert;
+}
+
 /// Consumer-owned state retained in checkpoints.
 pub trait Snapshot: Clone {
     type Time: Clone + Default + Ord;

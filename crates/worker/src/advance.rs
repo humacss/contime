@@ -3,6 +3,8 @@ use ahash::AHashMap;
 use crate::checkpoints::update_snapshot;
 use crate::types::{AdvanceTime, Checkpoints, Completion, Events, ReplayUpdate, SnapshotSlot};
 
+// Test-only legacy orchestration; retain its explicit dependency parameters.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn advance_worker<I, S, K, C, R, F>(
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
     checkpoints_config: &K::Config,
@@ -114,11 +116,10 @@ mod tests {
         }
     }
 
-    fn fixture(
-        dirty_time: i64,
-        dirty: bool,
-    ) -> (AHashMap<u128, SnapshotSlot<TestEvents, TestCheckpoints, crossbeam_channel::Sender<Vec<()>>, ()>>, Arc<Mutex<Vec<&'static str>>>)
-    {
+    type TestSnapshots = AHashMap<u128, SnapshotSlot<TestEvents, TestCheckpoints, crossbeam_channel::Sender<Vec<()>>, ()>>;
+    type TestLog = Arc<Mutex<Vec<&'static str>>>;
+
+    fn fixture(dirty_time: i64, dirty: bool) -> (TestSnapshots, TestLog) {
         let log = Arc::new(Mutex::new(Vec::new()));
         let mut snapshots = AHashMap::new();
         snapshots.insert(
@@ -127,7 +128,6 @@ mod tests {
                 events: Some(TestEvents { dirty_time, log: Arc::clone(&log) }),
                 checkpoints: Some(TestCheckpoints { log: Arc::clone(&log) }),
                 waiters: Vec::new(),
-                notification_ids: Vec::new(),
                 dirty,
             },
         );
@@ -263,7 +263,6 @@ mod tests {
                     events: Some(BenchEvents { dirty_time: if dirty { 1 } else { 100 } }),
                     checkpoints: with_checkpoints.then_some(BenchCheckpoints),
                     waiters: Vec::new(),
-                    notification_ids: Vec::new(),
                     dirty,
                 },
             );

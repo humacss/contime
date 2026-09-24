@@ -15,8 +15,8 @@ use contime_worker::{
 use crossbeam_channel::Sender;
 
 use crate::{
-    Advance, CompletionHandle, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage, SnapshotListen, SnapshotListener,
-    SnapshotListenerMessage, SnapshotQuery, TrackedEvent, WorkerBatch, WorkerMessage,
+    Advance, CompletionHandle, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage, SharedEvent, SnapshotListen,
+    SnapshotListener, SnapshotListenerMessage, SnapshotQuery, WorkerBatch, WorkerMessage,
 };
 
 impl<T> SnapshotListener<T> {
@@ -73,20 +73,20 @@ where
     }
 }
 
-impl<I> ApplyOutput<TrackedEvent<I>, RejectionReason> for RouterBatch<I>
+impl<I> ApplyOutput<SharedEvent<I>, RejectionReason> for RouterBatch<I>
 where
     I: Input,
 {
-    fn create(inputs: Vec<TrackedEvent<I>>, rejection_sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
+    fn create(inputs: Vec<SharedEvent<I>>, rejection_sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
         Self { inputs, completion: CompletionHandle::new(rejection_sender) }
     }
 }
 
-impl<I, S> ApplyOutput<TrackedEvent<I>, RejectionReason> for RouterMessage<I, S>
+impl<I, S> ApplyOutput<SharedEvent<I>, RejectionReason> for RouterMessage<I, S>
 where
     I: Input,
 {
-    fn create(inputs: Vec<TrackedEvent<I>>, rejection_sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
+    fn create(inputs: Vec<SharedEvent<I>>, rejection_sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
         Self::Apply(RouterBatch { inputs, completion: CompletionHandle::new(rejection_sender) })
     }
 }
@@ -100,11 +100,11 @@ where
     }
 }
 
-impl<I, S> EventQueryOutput<I::Time, TrackedEvent<I>> for RouterMessage<I, S>
+impl<I, S> EventQueryOutput<I::Time, SharedEvent<I>> for RouterMessage<I, S>
 where
     I: Input,
 {
-    fn event_query(snapshot_id: u128, from: I::Time, to: I::Time, response: Sender<Vec<TrackedEvent<I>>>) -> Self {
+    fn event_query(snapshot_id: u128, from: I::Time, to: I::Time, response: Sender<Vec<SharedEvent<I>>>) -> Self {
         Self::EventQuery(EventQuery { snapshot_id, from, to, response })
     }
 }
@@ -122,7 +122,7 @@ impl<I> RouteInputBatch for RouterBatch<I>
 where
     I: Input,
 {
-    type Input = TrackedEvent<I>;
+    type Input = SharedEvent<I>;
     type Completion = CompletionHandle;
 
     fn into_parts(self) -> (Vec<Self::Input>, Self::Completion) {
@@ -144,7 +144,7 @@ where
     I: Input,
 {
     type Time = T;
-    type Response = Sender<Vec<TrackedEvent<I>>>;
+    type Response = Sender<Vec<SharedEvent<I>>>;
 
     fn into_parts(self) -> (u128, Self::Time, Self::Time, Self::Response) {
         (self.snapshot_id, self.from, self.to, self.response)
@@ -184,16 +184,18 @@ where
             Self::Advance(advance) => RouteInputKind::Advance(advance),
             Self::Prune(prune) => RouteInputKind::Prune(prune),
             Self::Fence { round, observed } => RouteInputKind::Fence { round, observed },
-            Self::Internal { .. } | Self::Report { .. } | Self::Shutdown => unreachable!("coordinator-only message reached router"),
+            Self::Internal { .. } | Self::Report { .. } | Self::Pruned { .. } | Self::SubscribePrunedHorizon(_) | Self::Shutdown => {
+                unreachable!("coordinator-only message reached router")
+            }
         }
     }
 }
 
-impl<I> RouteOutput<TrackedEvent<I>> for Route<I>
+impl<I> RouteOutput<SharedEvent<I>> for Route<I>
 where
     I: Input,
 {
-    fn create(snapshot_id: u128, input: TrackedEvent<I>) -> Self {
+    fn create(snapshot_id: u128, input: SharedEvent<I>) -> Self {
         Self { snapshot_id, input }
     }
 }
@@ -202,14 +204,14 @@ impl<I> RouteInput for Route<I>
 where
     I: Input,
 {
-    type Input = TrackedEvent<I>;
+    type Input = SharedEvent<I>;
 
     fn into_parts(self) -> (u128, Self::Input) {
         (self.snapshot_id, self.input)
     }
 }
 
-impl<I> WorkerOutput<TrackedEvent<I>, CompletionHandle> for WorkerBatch<I>
+impl<I> WorkerOutput<SharedEvent<I>, CompletionHandle> for WorkerBatch<I>
 where
     I: Input,
 {
@@ -220,7 +222,7 @@ where
     }
 }
 
-impl<I, S> WorkerOutput<TrackedEvent<I>, CompletionHandle> for WorkerMessage<I, S>
+impl<I, S> WorkerOutput<SharedEvent<I>, CompletionHandle> for WorkerMessage<I, S>
 where
     I: Input,
 {
@@ -240,11 +242,11 @@ where
     }
 }
 
-impl<I, S> EventQueryWorkerOutput<I::Time, Sender<Vec<TrackedEvent<I>>>> for WorkerMessage<I, S>
+impl<I, S> EventQueryWorkerOutput<I::Time, Sender<Vec<SharedEvent<I>>>> for WorkerMessage<I, S>
 where
     I: Input,
 {
-    fn event_query(snapshot_id: u128, from: I::Time, to: I::Time, response: Sender<Vec<TrackedEvent<I>>>) -> Self {
+    fn event_query(snapshot_id: u128, from: I::Time, to: I::Time, response: Sender<Vec<SharedEvent<I>>>) -> Self {
         Self::EventQuery(EventQuery { snapshot_id, from, to, response })
     }
 }
@@ -314,7 +316,7 @@ where
     I: Input,
 {
     type Time = T;
-    type Response = Sender<Vec<TrackedEvent<I>>>;
+    type Response = Sender<Vec<SharedEvent<I>>>;
 
     fn into_parts(self) -> (u128, Self::Time, Self::Time, Self::Response) {
         (self.snapshot_id, self.from, self.to, self.response)
@@ -360,47 +362,41 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::types::testing::Time;
     use std::hint::black_box;
 
     use contime_api::{AdvanceOutput, ApplyOutput, RejectionMessage};
-    use contime_memory::ConservativeTrackedSize;
+
     use contime_router::{AdvanceInput as RouterAdvanceInput, AdvanceWorkerOutput, RouteInputBatch, RouteOutput, WorkerOutput};
     use contime_worker::{AdvanceInput as WorkerAdvanceInput, ApplyInput, Completion, RouteInput};
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use crate::input::prepare_inputs;
-    use crate::{CompletionHandle, Input, MemoryBudget, RejectionReason, Route, RouterBatch, RouterMessage, WorkerBatch, WorkerMessage};
+    use crate::{CompletionHandle, Input, RejectionReason, Route, RouterBatch, RouterMessage, WorkerBatch, WorkerMessage};
 
     #[derive(Debug)]
     struct TestInput(u128);
 
-    impl ConservativeTrackedSize for TestInput {
-        fn conservative_tracked_size(&self) -> usize {
-            32
+    impl contime_checkpoints::Event for TestInput {
+        type Time = Time;
+
+        fn time(&self) -> Self::Time {
+            Time(0)
         }
     }
-
     impl Input for TestInput {
-        type Time = i64;
-
         fn event_id(&self) -> u128 {
             self.0
         }
-
-        fn time(&self) -> Self::Time {
-            0
-        }
-
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
             emit(7);
         }
     }
 
     #[test]
-    fn adjacent_adapters_preserve_the_tracked_event_allocation() {
-        let budget = MemoryBudget::new(10_000, 100);
-        let mut events = prepare_inputs(&budget, vec![TestInput(9)]).unwrap();
+    fn adjacent_adapters_share_the_event_allocation() {
+        let mut events = prepare_inputs(vec![TestInput(9)]);
         let expected = events[0].as_ref() as *const TestInput;
         let (rejections, _receiver) = unbounded::<RejectionMessage<RejectionReason>>();
         let batch = <RouterBatch<TestInput> as ApplyOutput<_, _>>::create(std::mem::take(&mut events), rejections);
@@ -427,14 +423,14 @@ mod tests {
     #[test]
     fn advance_adapters_preserve_the_timestamp_and_completion_channel() {
         let (completion, done) = unbounded();
-        let router = <RouterMessage<TestInput, ()> as AdvanceOutput<i64>>::advance(50, completion);
+        let router = <RouterMessage<TestInput, ()> as AdvanceOutput<Time>>::advance(Time(50), completion);
         let RouterMessage::Advance(advance) = router else { panic!("expected router advance") };
         let (time, completion) = RouterAdvanceInput::into_parts(advance);
         let worker = <WorkerMessage<TestInput, ()> as AdvanceWorkerOutput<_, _>>::advance(time, completion);
         let WorkerMessage::Advance(advance) = worker else { panic!("expected worker advance") };
         let (time, completion) = WorkerAdvanceInput::into_parts(advance);
 
-        assert_eq!(time, 50);
+        assert_eq!(time, Time(50));
         drop(completion);
         assert_eq!(done.try_recv(), Err(TryRecvError::Disconnected));
     }
@@ -446,8 +442,7 @@ mod tests {
         criterion.bench_function("core/message/1000_routes", |bencher| {
             bencher.iter_batched(
                 || {
-                    let budget = MemoryBudget::new(usize::MAX, 0);
-                    let events = prepare_inputs(&budget, (0..1_000).map(TestInput).collect()).unwrap();
+                    let events = prepare_inputs((0..1_000).map(TestInput).collect());
                     let (sender, _receiver) = unbounded();
                     (events, CompletionHandle::new(sender))
                 },

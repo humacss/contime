@@ -1,49 +1,37 @@
 use ahash::AHashMap;
 
-use crate::types::SnapshotSlot;
-use crate::{Checkpoints, EventQueryInput, EventQueryResponse, QueryCheckpoints, QueryEvents, SnapshotQueryInput, SnapshotQueryResponse};
+use crate::types::StoreSlot;
+use crate::{EventQueryInput, EventQueryResponse, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore};
 
-pub(crate) fn query_snapshots<Q, S, K, C, R>(
-    query: Q,
-    snapshots: &AHashMap<u128, SnapshotSlot<S, K, C, R>>,
-    checkpoints_config: &K::Config,
-    checkpoints_context: &mut <K as Checkpoints<S>>::Context,
-) where
-    Q: SnapshotQueryInput<Time = <K as QueryCheckpoints<S>>::Time>,
-    Q::Response: SnapshotQueryResponse<<K as QueryCheckpoints<S>>::Snapshot>,
-    K: Checkpoints<S> + QueryCheckpoints<S, Context = <K as Checkpoints<S>>::Context>,
+pub(crate) fn query_snapshots<Q, I, S>(query: Q, snapshots: &mut AHashMap<u128, StoreSlot<S>>, context: &mut S::Context)
+where
+    Q: SnapshotQueryInput<Time = S::Time>,
+    Q::Response: SnapshotQueryResponse<S::Snapshot>,
+    S: SnapshotStore<I>,
 {
     let (time, snapshot_ids, response) = query.into_parts();
     let mut results = Vec::new();
     for snapshot_id in snapshot_ids {
-        let Some(slot) = snapshots.get(&snapshot_id) else { continue };
-        let Some(events) = slot.events.as_ref() else { continue };
-        let result = if let Some(checkpoints) = slot.checkpoints.as_ref() {
-            checkpoints.query_at(events, checkpoints_context, time.clone())
-        } else {
-            K::create(snapshot_id, checkpoints_config).query_at(events, checkpoints_context, time.clone())
-        };
-        if let Some(snapshot) = result {
+        let Some(store) = snapshots.get_mut(&snapshot_id).and_then(|slot| slot.store.as_mut()) else { continue };
+        if let Some(snapshot) = store.query(time.clone(), context) {
             results.push(snapshot);
         }
     }
-
     if !results.is_empty() {
         response.send(results);
     }
 }
 
-pub(crate) fn query_events<Q, I, S, K, C, R>(query: Q, snapshots: &AHashMap<u128, SnapshotSlot<S, K, C, R>>)
+pub(crate) fn query_events<Q, I, S>(query: Q, snapshots: &AHashMap<u128, StoreSlot<S>>)
 where
-    Q: EventQueryInput<Time = <S as QueryEvents<I>>::Time>,
+    Q: EventQueryInput<Time = S::Time>,
     Q::Response: EventQueryResponse<I>,
     I: Clone,
-    S: QueryEvents<I>,
+    S: SnapshotStore<I>,
 {
     let (snapshot_id, from, to, response) = query.into_parts();
-    let Some(slot) = snapshots.get(&snapshot_id) else { return };
-    let Some(history) = slot.events.as_ref() else { return };
-    let events = history.clone_between(&from, &to);
+    let Some(store) = snapshots.get(&snapshot_id).and_then(|slot| slot.store.as_ref()) else { return };
+    let events = store.query_events(&from, &to);
     if !events.is_empty() {
         response.send(events);
     }
@@ -59,46 +47,17 @@ mod tests {
     use crossbeam_channel::{unbounded, Sender};
 
     use crate::{
-        work_messages, AdvanceInput, ApplyBatch, Checkpoints, EventInsert, EventQueryInput, Events, QueryCheckpoints, QueryEvents,
-        RoutedInput, SnapshotListenInput, SnapshotListener, SnapshotQueryInput, WorkInput, WorkInputKind, WorkerConfig,
+        work_messages, AdvanceInput, ApplyBatch, EventInsert, EventQueryInput, RoutedInput, SnapshotListenInput, SnapshotListener,
+        SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind, WorkerConfig,
     };
 
     #[derive(Clone)]
     struct TestEvent(u64);
 
     #[derive(Default)]
-    struct TestEvents(Vec<TestEvent>);
-
-    impl Events<TestEvent> for TestEvents {
-        type Config = ();
-        type Rejection = ();
-        type Time = u64;
-
-        fn create(_snapshot_id: u128, _config: &Self::Config, _horizon: &u64) -> Self {
-            Self::default()
-        }
-
-        fn insert(&mut self, input: TestEvent) -> EventInsert<Self::Rejection> {
-            self.0.push(input);
-            EventInsert { changed: true, rejections: Vec::new() }
-        }
-
-        fn dirty_time(&self) -> &u64 {
-            &0
-        }
-
-        fn prune_before(&mut self, _horizon: &u64) {}
-    }
-
-    impl QueryEvents<TestEvent> for TestEvents {
-        type Time = u64;
-
-        fn clone_between(&self, from: &Self::Time, to: &Self::Time) -> Vec<TestEvent>
-        where
-            TestEvent: Clone,
-        {
-            self.0.iter().filter(|event| from <= &event.0 && &event.0 < to).cloned().collect()
-        }
+    struct TestStore {
+        events: Vec<TestEvent>,
+        tip: Option<u64>,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,50 +66,44 @@ mod tests {
         count: usize,
     }
 
-    #[derive(Default)]
-    struct TestCheckpoints(Option<u64>);
-
-    impl Checkpoints<TestEvents> for TestCheckpoints {
+    impl SnapshotStore<TestEvent> for TestStore {
         type Config = ();
         type Context = ();
         type Time = u64;
-        fn create(_snapshot_id: u128, _config: &Self::Config) -> Self {
+        type Snapshot = TestSnapshot;
+        type Rejection = ();
+
+        fn create(_: u128, _: &(), _: &u64) -> Self {
             Self::default()
         }
-
-        fn update(&mut self, _events: &mut TestEvents, _context: &mut Self::Context) -> Self::Time {
-            0
+        fn insert(&mut self, input: TestEvent, horizon: &u64) -> EventInsert<()> {
+            if input.0 < *horizon {
+                return EventInsert { changed: false, rejections: vec![()] };
+            }
+            self.events.push(input);
+            self.tip = None;
+            EventInsert { changed: true, rejections: vec![] }
         }
-
-        fn advance_before(&mut self, _events: &TestEvents, _context: &mut Self::Context, _horizon: &u64) {}
-    }
-
-    impl QueryCheckpoints<TestEvents> for TestCheckpoints {
-        type Context = ();
-        type Time = u64;
-        type Snapshot = TestSnapshot;
-
-        fn query_at(&self, events: &TestEvents, _context: &mut Self::Context, _time: Self::Time) -> Option<Box<Self::Snapshot>> {
-            Some(Box::new(TestSnapshot { snapshot_id: 7, count: events.0.len() }))
+        fn event_time(input: &TestEvent) -> u64 {
+            input.0
         }
-    }
-
-    impl crate::IncrementalCheckpoints<TestEvents> for TestCheckpoints {
-        fn invalidate(&mut self, _events: &mut TestEvents) {
-            self.0 = None;
+        fn process_until(&mut self, target: &u64, _: &mut ()) {
+            self.tip = Some(*target);
         }
-
-        fn next_time(&self, events: &TestEvents) -> Option<u64> {
-            events.0.iter().map(|event| event.0).filter(|time| self.0.is_none_or(|tip| *time > tip)).min()
+        fn query(&mut self, _: u64, _: &mut ()) -> Option<Box<TestSnapshot>> {
+            Some(Box::new(TestSnapshot { snapshot_id: 7, count: self.events.len() }))
         }
-
-        fn step(&mut self, events: &TestEvents, _context: &mut (), target: &u64) {
-            self.0 = self.next_time(events).filter(|time| time <= target).or(self.0);
+        fn query_events(&self, from: &u64, to: &u64) -> Vec<TestEvent> {
+            self.events.iter().filter(|event| from <= &event.0 && &event.0 < to).cloned().collect()
         }
+        fn forward(&mut self, _: &u64, _: &mut ()) {}
+        fn prune(&mut self) {}
     }
 
     type Completion = Sender<Vec<()>>;
 
+    // Match the worker response contract, which transfers boxed snapshots.
+    #[allow(clippy::vec_box)]
     struct SnapshotQuery {
         response: Sender<Vec<Box<TestSnapshot>>>,
     }
@@ -183,6 +136,7 @@ mod tests {
         Events(EventQuery),
         Listen(Listen),
         Advance(Advance),
+        Prune(Advance),
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -247,6 +201,7 @@ mod tests {
                 Self::Events(query) => WorkInputKind::EventQuery(query),
                 Self::Listen(listen) => WorkInputKind::SnapshotListen(listen),
                 Self::Advance(advance) => WorkInputKind::Advance(advance),
+                Self::Prune(advance) => WorkInputKind::Prune(advance),
             }
         }
     }
@@ -260,6 +215,106 @@ mod tests {
         }
     }
 
+    struct PruningStore(TestStore);
+
+    struct PruningContext {
+        input: Option<Sender<Message>>,
+        observed: Sender<&'static str>,
+        completion: crossbeam_channel::Receiver<()>,
+        fail: bool,
+    }
+
+    impl SnapshotStore<TestEvent> for PruningStore {
+        type Config = ();
+        type Context = PruningContext;
+        type Time = u64;
+        type Snapshot = TestSnapshot;
+        type Rejection = ();
+
+        fn create(_: u128, _: &(), _: &u64) -> Self {
+            Self(TestStore::default())
+        }
+        fn insert(&mut self, event: TestEvent, horizon: &u64) -> EventInsert<()> {
+            self.0.insert(event, horizon)
+        }
+        fn event_time(input: &TestEvent) -> u64 {
+            input.0
+        }
+        fn process_until(&mut self, time: &u64, _: &mut PruningContext) {
+            self.0.process_until(time, &mut ());
+        }
+        fn forward(&mut self, _: &u64, context: &mut PruningContext) {
+            assert!(!context.fail, "retention hook failed");
+            context.observed.send("prune").unwrap();
+            if let Some(input) = context.input.take() {
+                let (response, _) = unbounded();
+                input.send(Message::Snapshots(SnapshotQuery { response })).unwrap();
+            }
+        }
+        fn prune(&mut self) {}
+        fn query(&mut self, time: u64, context: &mut PruningContext) -> Option<Box<TestSnapshot>> {
+            assert_eq!(context.completion.try_recv(), Err(crossbeam_channel::TryRecvError::Empty));
+            context.observed.send("query").unwrap();
+            self.0.query(time, &mut ())
+        }
+        fn query_events(&self, from: &u64, to: &u64) -> Vec<TestEvent> {
+            self.0.query_events(from, to)
+        }
+    }
+
+    #[test]
+    fn pruning_services_queries_between_snapshots_and_finishes_before_shutdown() {
+        let (input, receiver) = unbounded();
+        let (observed, observations) = unbounded();
+        let (prune_completion, done) = unbounded();
+        let reports = observed.clone();
+        let context = PruningContext { input: Some(input.clone()), observed, completion: done.clone(), fail: false };
+        let coordination = crate::Coordination {
+            router_count: 1,
+            report: Box::new(|_, _| {}),
+            pruned: Box::new(move |horizon| {
+                assert_eq!(horizon, 1);
+                reports.send("completed").unwrap();
+            }),
+        };
+        let (completion, _) = unbounded();
+        input
+            .send(Message::Apply(ApplyBatch {
+                inputs: [7, 8, 9].map(|snapshot_id| RoutedInput { snapshot_id, input: TestEvent(10) }).into(),
+                completion,
+            }))
+            .unwrap();
+        input.send(Message::Prune(Advance { time: 1, completion: prune_completion })).unwrap();
+        drop(input);
+        work_messages::<_, PruningStore>(receiver, config(), (), 0, context, crossbeam_channel::never(), Some(coordination));
+        assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+        let actual = observations.try_iter().collect::<Vec<_>>();
+        assert_eq!(actual, ["prune", "query", "prune", "prune", "completed"]);
+    }
+
+    #[test]
+    fn overlapping_prunes_finish_in_order_and_repeated_horizons_do_not_prune_again() {
+        let (input, receiver) = unbounded();
+        let (observed, observations) = unbounded();
+        let (completion, done) = unbounded();
+        let context = PruningContext { input: Some(input.clone()), observed, completion: done.clone(), fail: false };
+        let (applied, _) = unbounded();
+        input
+            .send(Message::Apply(ApplyBatch {
+                inputs: [7, 8, 9].map(|snapshot_id| RoutedInput { snapshot_id, input: TestEvent(10) }).into(),
+                completion: applied,
+            }))
+            .unwrap();
+        for time in [1, 2, 2] {
+            input.send(Message::Prune(Advance { time, completion: completion.clone() })).unwrap();
+        }
+        drop(completion);
+        drop(input);
+        work_messages::<_, PruningStore>(receiver, config(), (), 0, context, crossbeam_channel::never(), None);
+        assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+        assert_eq!(observations.try_iter().collect::<Vec<_>>(), ["prune", "query", "prune", "prune", "prune", "prune", "prune"]);
+    }
+
     #[test]
     fn future_only_history_does_not_replay_before_explicit_advance() {
         let (input, receiver) = unbounded();
@@ -269,10 +324,40 @@ mod tests {
         input.send(Message::Apply(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }], completion })).unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
 
         assert_eq!(observed.try_iter().collect::<Vec<_>>(), vec![ListenerMessage::Registered { time: 10, snapshot_ids: vec![7] }]);
         assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn failed_pruning_does_not_report_success_when_completion_sender_drops() {
+        let (input, receiver) = unbounded();
+        let (observed, _) = unbounded();
+        let (completion, done) = unbounded();
+        let (pruned, reports) = unbounded();
+        let context = PruningContext { input: None, observed, completion: done.clone(), fail: true };
+        let coordination = crate::Coordination {
+            router_count: 1,
+            report: Box::new(|_, _| {}),
+            pruned: Box::new(move |horizon| {
+                pruned.send(horizon).unwrap();
+            }),
+        };
+        input
+            .send(Message::Apply(ApplyBatch {
+                inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(10) }],
+                completion: unbounded().0,
+            }))
+            .unwrap();
+        input.send(Message::Prune(Advance { time: 1, completion })).unwrap();
+        drop(input);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            work_messages::<_, PruningStore>(receiver, config(), (), 0, context, crossbeam_channel::never(), Some(coordination));
+        }));
+        assert!(result.is_err());
+        assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+        assert_eq!(reports.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
     }
 
     #[test]
@@ -295,7 +380,7 @@ mod tests {
         input.send(Message::Events(EventQuery { response: event_response })).unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
 
         assert_eq!(*snapshots.recv().unwrap()[0], TestSnapshot { snapshot_id: 7, count: 3 });
         assert_eq!(events.recv().unwrap().into_iter().map(|event| event.0).collect::<Vec<_>>(), vec![1, 2]);
@@ -308,7 +393,7 @@ mod tests {
         input.send(Message::Advance(Advance { time: 20, completion })).unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 10, (), (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, config(), (), 10, (), crossbeam_channel::never(), None);
 
         assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
     }
@@ -323,7 +408,7 @@ mod tests {
         input.send(Message::Apply(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }], completion })).unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
 
         assert_eq!(
             observed.try_iter().collect::<Vec<_>>(),
@@ -352,7 +437,7 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
 
         assert_eq!(observed.recv().unwrap(), ListenerMessage::Registered { time: 10, snapshot_ids: snapshot_ids.clone() });
         for snapshot_id in snapshot_ids {
@@ -378,7 +463,7 @@ mod tests {
         let mut worker_config = config();
         worker_config.replays_per_receive = 1;
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, worker_config, (), 0, (), (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, worker_config, (), 0, (), crossbeam_channel::never(), None);
 
         assert!(matches!(observed.recv().unwrap(), ListenerMessage::Registered { .. }));
         for snapshot_id in [1, 2, 3] {
@@ -388,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_applies_replay_each_timestamp_and_complete_independently() {
+    fn adjacent_applies_share_processing_and_complete_independently() {
         let (input, receiver) = unbounded();
         let (notifications, observed) = unbounded();
         input.send(Message::Listen(Listen { time: 10, snapshot_ids: vec![7], listener: TestListener(notifications) })).unwrap();
@@ -410,10 +495,9 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
 
         assert!(matches!(observed.recv().unwrap(), ListenerMessage::Registered { .. }));
-        assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 10, snapshot_ids: vec![7] });
         assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 10, snapshot_ids: vec![7] });
         assert!(observed.try_recv().is_err());
         assert_eq!(first_done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
@@ -441,7 +525,7 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestEvents, TestCheckpoints>(receiver, config(), (), 0, (), (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
 
         assert_eq!(*snapshots.recv().unwrap()[0], TestSnapshot { snapshot_id: 7, count: 1 });
     }
@@ -486,21 +570,18 @@ mod tests {
         let mut snapshots = AHashMap::new();
         snapshots.insert(
             7,
-            crate::types::SnapshotSlot::<TestEvents, TestCheckpoints, Completion, ()> {
-                events: Some(TestEvents((0..1_000).map(TestEvent).collect())),
-                checkpoints: Some(TestCheckpoints::default()),
-                dirty: false,
-                waiters: Vec::new(),
+            crate::types::StoreSlot {
+                store: Some(TestStore { events: (0..1_000).map(TestEvent).collect(), tip: None }),
                 notification_ids: Vec::new(),
             },
         );
         let mut criterion = Criterion::default();
 
         criterion.bench_function("worker/query/snapshot/one_found", |bencher| {
-            bencher.iter(|| super::query_snapshots(BenchmarkSnapshotQuery, black_box(&snapshots), &(), &mut ()));
+            bencher.iter(|| super::query_snapshots::<_, TestEvent, _>(BenchmarkSnapshotQuery, black_box(&mut snapshots), &mut ()));
         });
         criterion.bench_function("worker/query/events/1000_found", |bencher| {
-            bencher.iter(|| super::query_events::<_, TestEvent, _, _, _, _>(BenchmarkEventQuery, black_box(&snapshots)));
+            bencher.iter(|| super::query_events::<_, TestEvent, _>(BenchmarkEventQuery, black_box(&snapshots)));
         });
         criterion.final_summary();
     }

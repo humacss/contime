@@ -5,7 +5,7 @@ and runtime effects. The crate has no production dependencies.
 
 | File | Responsibility |
 | --- | --- |
-| api.rs | Public worker-facing ownership and query, replay, and forward methods. |
+| api.rs | Public worker-facing ownership, insert, query, process-until, forward, and prune methods. |
 | apply.rs | Apply timestamp batches; update checkpoint time and event count. |
 | replay.rs | Replay through an inclusive target, retaining rebuilt checkpoints. |
 | query.rs | Reconstruct fresh state without retaining it. |
@@ -18,10 +18,10 @@ and runtime effects. The crate has no production dependencies.
 ## Contracts
 
 Construct `SnapshotStore::new(events, snapshot, checkpoint_interval)`. It owns a private
-Store and exposes `query(time, context)`, `replay(time, context)`, and
+Store and exposes `insert(event)`, `query(time, context)`, `process_until(time, context)`,
 `forward(horizon, context, hook)`, and `prune()`. Workers do not access Store, Playback, or
 Commit directly. These methods delegate to the internal operations below;
-event insertion is not exposed in this first API pass. `prune()` delegates to
+`insert()` delegates admission and invalidation to Store. `prune()` delegates to
 Store to remove events before its current horizon and obsolete checkpoints,
 preserving the horizon's predecessor checkpoint. It does not apply events,
 invoke hooks, or change dirty or horizon, and repeated calls are harmless.
@@ -33,13 +33,47 @@ Implement `EventStore` to supply canonically ordered borrowed iteration.
 Event identity and ordering within a timestamp belong to that implementation.
 Implement `EventStore::prune_before` to remove events strictly before its supplied
 horizon without changing the ordering or identity of retained events.
-Insertion is deferred. Insertion must reject events
-before the horizon and invalidate state affected by accepted late events.
+Implement the optional `InsertEventStore` trait to enable insertion. Its `insert`
+method returns `Insert::Inserted`, `Duplicate`, or `BeforeHorizon`; only `Inserted`
+may change history. Canonical ordering and event identity remain adapter-owned.
+Store rejects timestamps before its horizon before calling the adapter, even when
+physical pruning has been deferred. Successful insertion invalidates checkpoints
+at that timestamp and afterward, without applying any events. Duplicate/rejected
+insertion does not change checkpoint validity. An event at the horizon is accepted.
+
+Validity rolls back to an existing checkpoint strictly before the inserted event,
+without moving an already-earlier valid boundary forward. For insertion at the
+initial snapshot timestamp (including the minimum timestamp), Store keeps the
+original pre-event checkpoint and discards stale same-time/future checkpoint slots.
+This avoids requiring timestamp subtraction for insertion. The application and
+playback kernels do not need insertion-specific logic. Queries reconstruct fresh
+state after insertion; `process_until` retains that reconstructed progress.
 
 Implement `Apply<Checkpoint<S>, Context>` for events. Application receives an
 iterator and shared context. The kernel drains unread events and records the
 complete timestamp and count after successful application. Use an effect-free
 context for queries; application effects are consumer-owned.
+
+## Worker/core integration boundary
+
+The worker can insert multiple events before calling `process_until(target, context)`;
+insertion never executes application callbacks. `Inserted` schedules work, while
+`Duplicate` and `BeforeHorizon` leave any existing pending work unchanged. The target
+is inclusive. Core supplies the event-store adapter and maps its admission outcomes
+to this crate's independent `Insert` enum; snapshots does not depend on the events crate.
+
+Core also creates the initial snapshot and supplies application context and the
+forwarding hook. Query application must suppress external effects. Forwarding and
+physical pruning are separate calls, so pruning completion can be reported only
+after both finish for the relevant histories.
+
+`events()` provides read-only access to the consumer-owned event store for its
+event-query API; mutation still goes through `insert` and `prune`. Core uses this
+accessor for owned event-query results. Scheduling remains worker-owned: the worker
+tracks pending boundaries and accepted event timestamps, so no next-event-time
+accessor is needed here. `process_until` does not yield between timestamps or
+enforce a worker's global advancement limit. Workers choose the target and return
+to message handling between calls. Core now connects these APIs to its message worker.
 
 ## Internal playback
 
@@ -161,19 +195,28 @@ Local ARM64, Rust 1.95.0 release, 2026-09-24; 30 samples, 200 ms warm-up,
 | Operation | Approximate total time | Approximate throughput | Approximate time/event |
 | --- | ---: | ---: | ---: |
 | New | 11.6 ns | 86.2 M calls/s | — |
+| Insert, ordered into a full Vec | 0.552 µs | 1.81 M events inserted/s | 552 ns |
 | Query | 7.83 µs | 128 M events/s | 7.83 ns |
-| Replay | 8.07 µs | 124 M events/s | 8.07 ns |
+| Process until | 8.07 µs | 124 M events/s | 8.07 ns |
 | Forward | 8.10 µs | 123 M events/s | 8.10 ns |
 | Prune | 0.263 µs | 1.90 B events removed/s | 0.526 ns |
 | Mixed, 10 cycles | 18.7 µs | 53.5 M timeline events/s | 18.7 ns |
 | Mixed, 100 cycles | 275.5 µs | 36.3 M timeline events/s | 27.55 ns |
 
-Query, Replay, and Forward each process 1,000 events; Forward publishes horizon
+Query, Process until, and Forward each process 1,000 events; Forward publishes horizon
 1,001. Prune removes 500 of 1,000 events plus obsolete checkpoints. Mixed runs
 progress through 1,000 / 10,000 timeline events, with average cycle times of
 1.87 / 2.76 µs. Mixed time/event includes all four operations per timeline event,
 not just its application. New takes ownership of 1,000 prepared events without
 processing them, so time/event does not apply.
+
+Insertion was measured separately with the same release settings after adding the
+API. Each iteration admits one new event after 1,000 already-processed events.
+Preparation is untimed; admission includes the fixture's binary-search identity
+check and Vec growth from full capacity. This is not allocation-free insertion,
+nor a late-insertion benchmark. Other event-store implementations may have very
+different costs. A correctness check processes and queries the inserted event
+outside the timed section.
 
 Rates use the same count/time conversion as the unit table. Construction only
 takes ownership of prepared events; it does not process 1,000 events per call.
@@ -185,8 +228,9 @@ progress, not a count of individual apply invocations or events physically prune
 Each mixed cycle queries the next 100-event target, replays to it, forwards to
 retain the most recent 50 timestamps, and prunes. The next cycle therefore queries
 and replays after the preceding cleanup. The store is reset only between complete
-benchmark iterations, never between cycles. All events are preloaded because this
-API does not yet expose insertion. Vec prefix deletion shifts the remaining future
+benchmark iterations, never between cycles. All events remain preloaded in this
+mixed benchmark to preserve its four-operation baseline; insertion is measured
+separately. Vec prefix deletion shifts the remaining future
 events: the larger mixed case has a larger backlog as well as more cycles, so its
 higher average cannot be attributed solely to store age or checkpoint behavior.
 These are aggregate timings, not per-cycle latency distributions.
@@ -206,15 +250,16 @@ Unit tests share test-only fixtures in `types.rs`. Integration tests use only
 Each integration file owns its event, snapshot, storage, and context definitions:
 
 - `tests/query.rs`: inclusive reconstruction, gaps, initial state, and read-only isolation.
-- `tests/replay.rs`: incremental progress, complete timestamp batches, and historical reads.
+- `tests/process_until.rs`: incremental progress, complete timestamp batches, and historical reads.
+- `tests/insertion.rs`: ordered, late, same-time, minimum-time, and duplicate admission,
+  partial processing after multiple insertions, and horizon enforcement before/after pruning.
 - `tests/forward_prune.rs`: horizon boundaries, deferred/repeated cleanup, and continued
   playback after physical deletion.
 - `tests/forwarding_hooks.rs`: snapshot compaction survives queries, replay, pruning,
   and subsequent forwarding, including forwarding without event application.
 - `tests/merged_event_history.rs`: ordered history assembled from distinct storage sources.
 
-Late-event insertion/invalidation integration coverage is deferred until admission
-is exposed by the public API; tests do not bypass it by changing private store fields.
+Insertion/invalidation coverage uses the public API, never private store mutation.
 
 `apply.rs` retains its independent unit tests and benchmark.
 

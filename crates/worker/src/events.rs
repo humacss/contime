@@ -4,6 +4,8 @@ use ahash::AHashMap;
 
 use crate::types::{finish_if_ready, new_request, register_waiter, ApplyInput, Completion, Events, Request, RouteInput, SnapshotSlot};
 
+// The legacy batch API keeps event, checkpoint and completion adapters separate.
+#[allow(clippy::type_complexity)]
 pub(crate) fn insert_batch<B, S, K>(
     batch: B,
     snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, B::Completion, S::Rejection>>,
@@ -211,7 +213,9 @@ mod tests {
         assert_eq!(dirty, vec![7]);
     }
 
-    fn batch(count: u128) -> (ApplyBatch<TestInput, crossbeam_channel::Sender<Vec<()>>>, crossbeam_channel::Receiver<Vec<()>>) {
+    type TestBatch = ApplyBatch<TestInput, crossbeam_channel::Sender<Vec<()>>>;
+
+    fn batch(count: u128) -> (TestBatch, crossbeam_channel::Receiver<Vec<()>>) {
         let (completion, responses) = unbounded();
         let inputs = (0..count).map(|id| RoutedInput { snapshot_id: 7, input: TestInput(id) }).collect();
         (ApplyBatch { inputs, completion }, responses)
@@ -284,7 +288,7 @@ mod tests {
             bencher.iter_custom(|iterations| {
                 let mut measured = Duration::ZERO;
                 for _ in 0..iterations {
-                    let inputs = inputs.iter().cloned().collect::<Vec<_>>();
+                    let inputs = inputs.to_vec();
                     let started = Instant::now();
                     for input in inputs {
                         black_box(events.insert(input));
@@ -304,16 +308,6 @@ mod tests {
             bencher.iter(|| {
                 for _ in 0..1_000 {
                     crate::types::register_waiter(&mut slot, &request);
-                }
-            });
-        });
-
-        criterion.bench_function("worker/events/components/1000_empty_rejection_extensions", |bencher| {
-            let (completion, _responses) = unbounded::<Vec<()>>();
-            let request = crate::types::new_request::<_, ()>(completion);
-            bencher.iter(|| {
-                for _ in 0..1_000 {
-                    request.borrow_mut().rejections.extend(std::iter::empty::<()>());
                 }
             });
         });

@@ -1,32 +1,41 @@
 use std::time::{Duration, Instant};
 
 use contime_core::{checkpoints, ConTime, ConTimeConfig, Input};
-use contime_memory::ConservativeTrackedSize;
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+struct Time(u64);
+
+impl checkpoints::Timestamp for Time {
+    fn previous(&self) -> Option<Self> {
+        self.0.checked_sub(1).map(Self)
+    }
+}
+
+impl contime_worker::AdvanceTime for Time {
+    fn saturating_sub(&self, retention: &Self) -> Self {
+        Self(self.0.saturating_sub(retention.0))
+    }
+}
 
 struct BenchEvent {
     id: u128,
-    time: u64,
+    time: Time,
     snapshot_id: u128,
 }
 
-impl ConservativeTrackedSize for BenchEvent {
-    fn conservative_tracked_size(&self) -> usize {
-        1_024
+impl contime_checkpoints::Event for BenchEvent {
+    type Time = Time;
+
+    fn time(&self) -> Time {
+        self.time
     }
 }
-
 impl Input for BenchEvent {
-    type Time = u64;
-
     fn event_id(&self) -> u128 {
         self.id
     }
-
-    fn time(&self) -> u64 {
-        self.time
-    }
-
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
         emit(self.snapshot_id);
     }
@@ -34,20 +43,17 @@ impl Input for BenchEvent {
 
 #[derive(Clone, Default)]
 struct BenchSnapshot {
-    time: u64,
+    time: Time,
     count: u64,
 }
 
-impl ConservativeTrackedSize for BenchSnapshot {
-    fn conservative_tracked_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-    }
-}
-
 impl checkpoints::Snapshot for BenchSnapshot {
-    type Time = u64;
+    type Time = Time;
 
-    fn set_time(&mut self, time: u64) {
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Time) {
         self.time = time;
     }
 }
@@ -57,8 +63,8 @@ impl checkpoints::ApplyEvents<BenchEvent> for BenchSnapshot {
         Self::default()
     }
 
-    fn apply_events(&mut self, batch: checkpoints::ApplyBatch<'_, u64, BenchEvent>) {
-        self.count += batch.events.len() as u64;
+    fn apply_events(&mut self, batch: checkpoints::ApplyBatch<'_, '_, Time, BenchEvent>) {
+        self.count += batch.events.count() as u64;
     }
 }
 
@@ -79,14 +85,14 @@ impl Workload {
     }
 }
 
-fn config(router_count: usize, worker_count: usize, dirty: bool) -> ConTimeConfig<u64> {
+fn config(router_count: usize, worker_count: usize, dirty: bool) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
         placement: contime_router::Placement::default(),
-        memory_limit: 1_000_000_000,
-        memory_buffer: 1_000_000,
-        history_retention: 10,
+        pruning_interval: std::time::Duration::ZERO,
+
+        history_retention: Time(10),
         worker: contime_worker::WorkerConfig {
             maximum_dirty_age: Duration::from_secs(60),
             replays_per_receive: if dirty { 0 } else { 1_000 },
@@ -107,7 +113,7 @@ fn events(workload: Workload) -> Vec<BenchEvent> {
     for snapshot_id in 0..1_000_u128 {
         for time in times {
             id += 1;
-            events.push(BenchEvent { id, time: *time, snapshot_id });
+            events.push(BenchEvent { id, time: Time(*time), snapshot_id });
         }
     }
     events
@@ -119,20 +125,30 @@ fn measure_once(router_count: usize, worker_count: usize, workload: Workload) ->
     contime.apply(events(workload)).unwrap();
     if !dirty {
         // Materialize clean fixtures without moving the retained horizon.
-        contime.advance_to(if matches!(workload, Workload::Anchor) { 10 } else { 1 }).unwrap();
+        contime.advance_to(Time(if matches!(workload, Workload::Anchor) { 10 } else { 1 })).unwrap();
     }
     // With the target at zero, the dirty fixture is admitted but unprocessed.
     contime.wait_until_idle(Duration::from_secs(5)).unwrap();
     assert!(contime.errors().is_empty());
-    let before = contime.used_memory();
+
     let target = if matches!(workload, Workload::Anchor) { 18 } else { 20 };
 
     let started = Instant::now();
-    contime.advance_to(target).unwrap();
+    contime.advance_to(Time(target)).unwrap();
     contime.wait_until_idle(Duration::from_secs(5)).unwrap();
     let elapsed = started.elapsed();
 
-    assert!(contime.used_memory() < before);
+    // Verify completed pruning, not merely delivery of the advance command.
+    // Both queries, their allocations and thread shutdown are outside timing.
+    let final_count = if matches!(workload, Workload::Anchor) { 3 } else { 1 };
+    let anchors = contime.query_at(Time(0), 0..1_000).unwrap();
+    assert!(anchors.is_empty());
+    let current = contime.query_at(Time(target), 0..1_000).unwrap();
+    assert_eq!(current.len(), 1_000);
+    assert!(current.iter().all(|snapshot| snapshot.count == final_count));
+    let retained = contime.query_events_between(0, Time(0), Time(target)).unwrap();
+    let expected_times = if matches!(workload, Workload::Anchor) { vec![10] } else { vec![] };
+    assert_eq!(retained.iter().map(|event| event.time.0).collect::<Vec<_>>(), expected_times);
     assert!(contime.errors().is_empty());
     contime.shutdown();
     elapsed

@@ -1,6 +1,6 @@
 //! Storage ownership and playback initialization.
 use super::{Checkpoint, Playback};
-use crate::{EventStore, NoCheckpoint, Snapshot};
+use crate::{Event, EventStore, Insert, InsertEventStore, NoCheckpoint, Snapshot};
 use std::collections::VecDeque;
 
 /// Storage for one snapshot. Dirty is the inclusive valid-through boundary.
@@ -55,6 +55,31 @@ impl<S: Snapshot, H> Store<S, H> {
 }
 
 impl<S: Snapshot, H: EventStore<Time = S::Time>> Store<S, H> {
+    /// Admission and validity move together; event identity belongs to H.
+    pub fn insert(&mut self, event: H::Event) -> Insert
+    where
+        H: InsertEventStore,
+    {
+        let time = event.time();
+        if time < self.horizon {
+            return Insert::BeforeHorizon;
+        }
+        let result = self.events.insert(event);
+        if result == Insert::Inserted && time <= self.dirty {
+            let before = self.checkpoints.partition_point(|checkpoint| checkpoint.snapshot.time() < &time);
+            if let Some(index) = before.checked_sub(1) {
+                self.dirty = self.checkpoints[index].snapshot.time().clone();
+            } else {
+                // Only the original, pre-event checkpoint can be valid here.
+                // Drop same-time stale slots so an inclusive boundary cannot
+                // select them. This also handles minimum time without T - 1.
+                self.checkpoints.truncate(1);
+                self.dirty = self.checkpoints[0].snapshot.time().clone();
+            }
+        }
+        result
+    }
+
     /// Removes obsolete storage, preserving the forwarded checkpoint and all
     /// events at or after the horizon. Does not apply events or change boundaries.
     pub fn prune(&mut self) {

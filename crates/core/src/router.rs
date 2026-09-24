@@ -27,45 +27,39 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::types::testing::Time;
     use std::hint::black_box;
 
     use contime_api::{ApplyOutput, RejectionMessage};
-    use contime_memory::ConservativeTrackedSize;
+
     use contime_runtime::Router as RuntimeRouter;
     use contime_worker::ApplyInput;
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::unbounded;
 
     use crate::input::prepare_inputs;
-    use crate::{Input, MemoryBudget, RejectionReason, RouterBatch, RouterMessage, RouterProcess, WorkerMessage};
+    use crate::{Input, RejectionReason, RouterBatch, RouterMessage, RouterProcess, WorkerMessage};
 
     struct TestInput(u128);
 
-    impl ConservativeTrackedSize for TestInput {
-        fn conservative_tracked_size(&self) -> usize {
-            32
+    impl contime_checkpoints::Event for TestInput {
+        type Time = Time;
+
+        fn time(&self) -> Self::Time {
+            Time(0)
         }
     }
-
     impl Input for TestInput {
-        type Time = i64;
-
         fn event_id(&self) -> u128 {
             self.0
         }
-
-        fn time(&self) -> Self::Time {
-            0
-        }
-
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
             emit(self.0 % 2);
         }
     }
 
     fn batch(count: u128) -> RouterMessage<TestInput, ()> {
-        let budget = MemoryBudget::new(usize::MAX, 0);
-        let events = prepare_inputs(&budget, (0..count).map(TestInput).collect()).unwrap();
+        let events = prepare_inputs((0..count).map(TestInput).collect());
         let (completion, _rejections) = unbounded::<RejectionMessage<RejectionReason>>();
         RouterMessage::Apply(<RouterBatch<TestInput> as ApplyOutput<_, _>>::create(events, completion))
     }

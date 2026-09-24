@@ -1,12 +1,9 @@
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use contime_checkpoints as replay;
-use contime_events::{EventHistory, Insert};
 use contime_worker::{
-    work_messages, AdvanceInput, ApplyBatch, Checkpoints, Coordination, EventInsert, EventQueryInput, Events, IncrementalCheckpoints,
-    QueryCheckpoints, QueryEvents, RoutedInput, SnapshotListenInput, SnapshotListener, SnapshotQueryInput, WorkInput, WorkInputKind,
-    WorkerConfig,
+    work_messages, AdvanceInput, ApplyBatch, Coordination, EventInsert, EventQueryInput, RoutedInput, SnapshotListenInput,
+    SnapshotListener, SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind, WorkerConfig,
 };
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -16,134 +13,78 @@ struct Event {
     time: u64,
 }
 
-impl contime_events::Event for Event {
-    type Time = u64;
-    fn event_id(&self) -> u128 {
-        self.id
-    }
-    fn time(&self) -> u64 {
-        self.time
-    }
-}
-
-struct History(EventHistory<Event>);
-impl Events<Event> for History {
-    type Config = ();
-    type Rejection = u128;
-    type Time = u64;
-    fn create(_: u128, _: &(), horizon: &u64) -> Self {
-        Self(EventHistory::with_horizon(*horizon))
-    }
-    fn insert(&mut self, event: Event) -> EventInsert<u128> {
-        let id = event.id;
-        let outcome = self.0.insert(event);
-        EventInsert { changed: outcome == Insert::Inserted, rejections: if outcome == Insert::BeforeHorizon { vec![id] } else { vec![] } }
-    }
-    fn dirty_time(&self) -> &u64 {
-        self.0.dirty_time()
-    }
-    fn prune_before(&mut self, horizon: &u64) {
-        self.0.prune_before(horizon);
-    }
-}
-impl QueryEvents<Event> for History {
-    type Time = u64;
-    fn clone_between(&self, from: &u64, to: &u64) -> Vec<Event> {
-        self.0.clone_between(from, to)
-    }
-}
-impl replay::Events for History {
-    type Time = u64;
-    type Event = Event;
-    type Iter<'a> = Box<dyn Iterator<Item = replay::EventRef<'a, u64, Event>> + 'a>;
-    fn dirty_time(&self) -> &u64 {
-        self.0.dirty_time()
-    }
-    fn iter_after(&self, boundary: Option<&replay::CheckpointKey<u64>>) -> Self::Iter<'_> {
-        let boundary = boundary.cloned();
-        Box::new(
-            self.0
-                .iter()
-                .filter(move |(key, _)| boundary.as_ref().is_none_or(|b| (key.time, key.event_id) > (b.time, b.event_id)))
-                .map(|(key, event)| replay::EventRef { time: &key.time, event_id: key.event_id, event }),
-        )
-    }
-    fn acknowledge_replay(&mut self) {
-        self.0.mark_replayed();
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Snapshot {
     id: u128,
     time: u64,
     ids: Vec<u128>,
 }
-impl replay::Snapshot for Snapshot {
-    type Time = u64;
-    fn set_time(&mut self, time: u64) {
-        self.time = time;
-    }
-}
-impl replay::ApplyEvents<Event> for Snapshot {
-    fn create(id: u128, _: &Event) -> Self {
-        Self { id, time: 0, ids: vec![] }
-    }
-    fn apply_events(&mut self, batch: replay::ApplyBatch<'_, u64, Event>) {
-        self.ids.extend(batch.events.iter().map(|event| event.id));
-    }
-}
 struct Context {
     steps: Sender<Snapshot>,
     gate: Option<Receiver<()>>,
 }
-impl replay::ApplyWrapper<Snapshot, Event> for Context {
-    fn replay_event_batch(&mut self, batch: replay::EventBatch<'_, u64, Event>, inner: &mut replay::ApplyInner<'_, Snapshot>) {
-        inner.apply_event_batch(batch);
-        self.steps.send(inner.snapshot().clone()).unwrap();
-        if let Some(gate) = &self.gate {
-            gate.recv_timeout(Duration::from_secs(5)).unwrap();
-        }
-    }
+
+// A storage stub: these tests exercise worker scheduling, not checkpoint replay.
+struct TestStore {
+    id: u128,
+    events: Vec<Event>,
+    processed: Option<u64>,
+    horizon: u64,
+    prefix: Vec<u128>,
 }
-struct Checkpoint(replay::CheckpointStore<Snapshot>);
-impl Checkpoints<History> for Checkpoint {
+impl SnapshotStore<Event> for TestStore {
     type Config = ();
     type Context = Context;
     type Time = u64;
-    fn create(id: u128, _: &()) -> Self {
-        Self(replay::CheckpointStore::new(id, replay::CheckpointConfig { interval: 1 }))
-    }
-    fn update(&mut self, history: &mut History, context: &mut Context) -> u64 {
-        let time = *history.0.dirty_time();
-        replay::replay(&mut self.0, history, context);
-        time
-    }
-    fn advance_before(&mut self, history: &History, context: &mut Context, horizon: &u64) {
-        replay::advance_before(&mut self.0, history, context, horizon);
-    }
-}
-impl IncrementalCheckpoints<History> for Checkpoint {
-    fn invalidate(&mut self, history: &mut History) {
-        self.0.invalidate_from(history.0.dirty_time());
-        history.0.mark_replayed();
-    }
-    fn next_time(&self, history: &History) -> Option<u64> {
-        self.0.next_replay_time(history)
-    }
-    fn step(&mut self, history: &History, context: &mut Context, target: &u64) {
-        replay::replay_next(&mut self.0, history, context, target);
-    }
-}
-impl QueryCheckpoints<History> for Checkpoint {
-    type Context = Context;
-    type Time = u64;
     type Snapshot = Snapshot;
-    fn query_at(&self, history: &History, context: &mut Context, time: u64) -> Option<Box<Snapshot>> {
-        replay::query_at(&self.0, history, context, time)
+    type Rejection = u128;
+
+    fn create(id: u128, _: &(), horizon: &u64) -> Self {
+        Self { id, events: vec![], processed: None, horizon: *horizon, prefix: vec![] }
+    }
+    fn insert(&mut self, event: Event, horizon: &u64) -> EventInsert<u128> {
+        if event.time < *horizon {
+            return EventInsert { changed: false, rejections: vec![event.id] };
+        }
+        if self.events.iter().any(|existing| existing.id == event.id) {
+            return EventInsert { changed: false, rejections: vec![] };
+        }
+        if self.processed.is_some_and(|time| time >= event.time) {
+            self.processed = event.time.checked_sub(1);
+        }
+        self.events.push(event);
+        self.events.sort_by_key(|event| (event.time, event.id));
+        EventInsert { changed: true, rejections: vec![] }
+    }
+    fn event_time(event: &Event) -> u64 {
+        event.time
+    }
+    fn process_until(&mut self, time: &u64, context: &mut Context) {
+        let snapshot = self.query(*time, context).unwrap();
+        self.processed = Some(*time);
+        context.steps.send(*snapshot).unwrap();
+        if let Some(gate) = &context.gate {
+            gate.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+    }
+    fn query(&mut self, time: u64, _: &mut Context) -> Option<Box<Snapshot>> {
+        let ids = self.prefix.iter().copied().chain(self.events.iter().filter(|event| event.time <= time).map(|event| event.id)).collect();
+        Some(Box::new(Snapshot { id: self.id, time, ids }))
+    }
+    fn query_events(&self, from: &u64, to: &u64) -> Vec<Event> {
+        self.events.iter().filter(|event| event.time >= *from && event.time < *to).cloned().collect()
+    }
+    fn forward(&mut self, horizon: &u64, _: &mut Context) {
+        self.horizon = *horizon;
+    }
+    fn prune(&mut self) {
+        let count = self.events.partition_point(|event| event.time < self.horizon);
+        self.prefix.extend(self.events.drain(..count).map(|event| event.id));
     }
 }
 
+// Match the boxed-snapshot response contract.
+#[allow(clippy::vec_box)]
 struct Query(Sender<Vec<Box<Snapshot>>>);
 impl SnapshotQueryInput for Query {
     type Time = u64;
@@ -238,13 +179,13 @@ fn spawn(
     registrations: Receiver<Sender<bool>>,
     coordination: Option<Coordination<u64>>,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        work_messages::<_, History, Checkpoint>(input, config(), (), 0, (), Context { steps, gate }, registrations, coordination)
-    })
+    std::thread::spawn(move || work_messages::<_, TestStore>(input, config(), (), 0, Context { steps, gate }, registrations, coordination))
 }
 
 #[test]
 fn timestamp_order_across_snapshots_uses_snapshot_id_for_ties() {
+    let expected = vec![(20, 9, vec![3]), (30, 7, vec![2, 5, 4]), (30, 9, vec![3, 1])];
+
     let (input, receiver) = unbounded();
     let (steps, observed) = unbounded();
     apply(&input, &[(9, 1, 30), (7, 2, 20), (9, 3, 10), (7, 4, 30), (7, 5, 20)]);
@@ -252,7 +193,50 @@ fn timestamp_order_across_snapshots_uses_snapshot_id_for_ties() {
     drop(input);
     spawn(receiver, steps, None, crossbeam_channel::never(), None).join().unwrap();
     let actual = observed.try_iter().map(|s| (s.time, s.id, s.ids)).collect::<Vec<_>>();
-    assert_eq!(actual, vec![(10, 9, vec![3]), (20, 7, vec![2, 5]), (30, 7, vec![2, 5, 4]), (30, 9, vec![3, 1])]);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn equal_time_snapshots_merge_into_the_next_bucket() {
+    let expected = vec![(1, 20), (2, 20), (3, 40), (1, 40), (2, 40)];
+
+    let (input, receiver) = unbounded();
+    let (steps, observed) = unbounded();
+    apply(&input, &[(1, 1, 10), (2, 2, 10), (3, 3, 20), (1, 4, 40), (2, 5, 40)]);
+    advance(&input, 40);
+    drop(input);
+
+    spawn(receiver, steps, None, crossbeam_channel::never(), None).join().unwrap();
+    let actual = observed.try_iter().map(|snapshot| (snapshot.id, snapshot.time)).collect::<Vec<_>>();
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn insertion_at_completed_boundary_reopens_that_timestamp() {
+    let expected = vec![(20, vec![1]), (20, vec![1, 3]), (30, vec![1, 3, 2])];
+
+    let (input, receiver) = unbounded();
+    let (steps, observed) = unbounded();
+    let (release, gate) = unbounded();
+    apply(&input, &[(7, 1, 20), (7, 2, 30)]);
+    advance(&input, 20);
+    let worker = spawn(receiver, steps, Some(gate), crossbeam_channel::never(), None);
+
+    let first = receive(&observed);
+    apply(&input, &[(7, 3, 20)]);
+    release.send(()).unwrap();
+    let second = receive(&observed);
+    advance(&input, 30);
+    release.send(()).unwrap();
+    let third = receive(&observed);
+    drop(input);
+    release.send(()).unwrap();
+    worker.join().unwrap();
+    let actual = [first, second, third].into_iter().map(|snapshot| (snapshot.time, snapshot.ids)).collect::<Vec<_>>();
+
+    assert_eq!(actual, expected);
+    assert!(observed.is_empty());
 }
 
 #[test]
@@ -265,12 +249,10 @@ fn query_and_late_input_are_served_between_complete_buckets() {
     register.send(activity).unwrap();
     let worker = spawn(receiver, steps, Some(gate), registrations, None);
     assert!(!receive(&states));
-    apply(&input, &[(7, 1, 10), (7, 3, 20), (7, 4, 30)]);
+    apply(&input, &[(7, 1, 10), (7, 3, 20), (7, 4, 30), (9, 5, 20)]);
     advance(&input, 30);
-    assert_eq!(receive(&observed).ids, vec![1]);
-    while states.try_recv().is_ok() {}
-    release.send(()).unwrap();
     assert_eq!(receive(&observed).ids, vec![1, 3]);
+    while states.try_recv().is_ok() {}
     assert!(states.is_empty(), "pending computation must stay working between steps");
     let done = apply(&input, &[(7, 2, 10)]);
     let (response, snapshots) = unbounded();
@@ -279,9 +261,9 @@ fn query_and_late_input_are_served_between_complete_buckets() {
     assert_eq!(receive(&snapshots)[0].ids, vec![1, 2, 3, 4]);
     assert_eq!(done.recv_timeout(Duration::from_secs(5)), Err(crossbeam_channel::RecvTimeoutError::Disconnected));
     let corrected = receive(&observed);
-    assert_eq!((corrected.time, corrected.ids), (10, vec![1, 2]));
+    assert_eq!((corrected.time, corrected.ids), (20, vec![1, 2, 3]));
     release.send(()).unwrap();
-    assert_eq!(receive(&observed).ids, vec![1, 2, 3]);
+    assert_eq!(receive(&observed).ids, vec![5]);
     release.send(()).unwrap();
     assert_eq!(receive(&observed).ids, vec![1, 2, 3, 4]);
     release.send(()).unwrap();
@@ -296,14 +278,19 @@ fn fences_report_between_callbacks_without_waiting_for_idle() {
     let (release, gate) = unbounded();
     let (reports, minima) = unbounded();
     apply(&input, &[(7, 1, 10), (7, 2, 20)]);
-    advance(&input, 20);
-    let coordination = Coordination { router_count: 1, report: Box::new(move |round, minimum| reports.send((round, minimum)).unwrap()) };
+    advance(&input, 10);
+    let coordination = Coordination {
+        router_count: 1,
+        report: Box::new(move |round, minimum| reports.send((round, minimum)).unwrap()),
+        pruned: Box::new(|_| {}),
+    };
     let worker = spawn(receiver, steps, Some(gate), crossbeam_channel::never(), Some(coordination));
     assert_eq!(receive(&observed).time, 10);
     input.send(Message::Fence(1, 0)).unwrap();
     assert!(minima.is_empty());
     release.send(()).unwrap();
-    assert_eq!(receive(&minima), (1, Some(20)));
+    assert_eq!(receive(&minima), (1, Some(10)));
+    advance(&input, 20);
     assert_eq!(receive(&observed).time, 20);
     input.send(Message::Fence(2, 0)).unwrap();
     release.send(()).unwrap();
@@ -341,7 +328,7 @@ fn target_bounds_replay_future_only_is_idle_and_advance_does_not_prune() {
     advance(&input, 20);
     assert!(receive(&states));
     assert!(!receive(&states));
-    assert_eq!(observed.try_iter().map(|s| s.time).collect::<Vec<_>>(), vec![10, 20]);
+    assert_eq!(observed.try_iter().map(|s| s.time).collect::<Vec<_>>(), vec![20]);
     advance(&input, 10);
     let (response, events) = unbounded();
     input.send(Message::Events(EventQuery(response))).unwrap();
@@ -361,7 +348,11 @@ fn fences_wait_for_distinct_routers_and_report_pending_replay_only_once() {
     input.send(Message::Fence(1, 0)).unwrap();
     let (response, queries) = unbounded();
     input.send(Message::Query(Query(response))).unwrap();
-    let coordination = Coordination { router_count: 2, report: Box::new(move |round, minimum| reports.send((round, minimum)).unwrap()) };
+    let coordination = Coordination {
+        router_count: 2,
+        report: Box::new(move |round, minimum| reports.send((round, minimum)).unwrap()),
+        pruned: Box::new(|_| {}),
+    };
     let worker = spawn(receiver, steps, None, crossbeam_channel::never(), Some(coordination));
     receive(&queries);
     assert!(minima.is_empty());
@@ -391,7 +382,6 @@ fn explicit_prune_retains_boundary_and_sets_admission_horizon_for_new_histories(
     apply(&input, &[(7, 1, 10), (7, 2, 20), (7, 3, 30)]);
     advance(&input, 20);
     // Advance may be received in the same or the next activity cycle.
-    assert_eq!(receive(&observed).time, 10);
     assert_eq!(receive(&observed).time, 20);
     let (completion, pruned) = unbounded();
     input.send(Message::Prune(Advance(20, completion))).unwrap();
@@ -405,4 +395,95 @@ fn explicit_prune_retains_boundary_and_sets_admission_horizon_for_new_histories(
     assert_eq!(receive(&snapshots)[0].ids, vec![1, 2, 3]);
     drop(input);
     worker.join().unwrap();
+}
+
+#[test]
+fn queued_pruning_enforces_admission_on_existing_stores() {
+    let horizon = 20;
+    let expected_rejections = vec![2];
+    let expected_events = vec![1, 3];
+
+    let (input, receiver) = unbounded();
+    let (steps, observed) = unbounded();
+    apply(&input, &[(7, 1, horizon)]);
+    input.send(Message::Prune(Advance(horizon, unbounded().0))).unwrap();
+    let rejected = apply(&input, &[(7, 2, horizon - 1)]);
+    let accepted = apply(&input, &[(7, 3, horizon)]);
+    let (response, events) = unbounded();
+    input.send(Message::Events(EventQuery(response))).unwrap();
+    drop(input);
+
+    let worker = spawn(receiver, steps, None, crossbeam_channel::never(), None);
+    worker.join().unwrap();
+    let actual_rejections = receive(&rejected);
+    let actual_events = receive(&events).into_iter().map(|event| event.id).collect::<Vec<_>>();
+    let actual_completion = accepted.try_recv();
+
+    assert_eq!(actual_rejections, expected_rejections);
+    assert_eq!(actual_events, expected_events);
+    assert_eq!(actual_completion, Err(crossbeam_channel::TryRecvError::Disconnected));
+    assert!(observed.is_empty());
+}
+
+#[test]
+fn duplicate_insertion_does_not_reschedule_processed_history() {
+    let expected_times = vec![20];
+
+    let (input, receiver) = unbounded();
+    let (steps, observed) = unbounded();
+    let (release, gate) = unbounded();
+    apply(&input, &[(7, 1, 10), (7, 2, 20)]);
+    advance(&input, 20);
+    let worker = spawn(receiver, steps, Some(gate), crossbeam_channel::never(), None);
+    let first = receive(&observed);
+    let done = apply(&input, &[(7, 1, 10)]);
+    release.send(()).unwrap();
+    drop(input);
+
+    worker.join().unwrap();
+    let actual_times = vec![first.time];
+    let actual_completion = done.try_recv();
+
+    assert_eq!(actual_times, expected_times);
+    assert!(observed.is_empty());
+    assert_eq!(actual_completion, Err(crossbeam_channel::TryRecvError::Disconnected));
+}
+
+#[test]
+fn happy() {
+    let rounds = 50;
+    let expected_ids = (1..=rounds as u128).collect::<Vec<_>>();
+    let expected_event_responses = vec![Err(crossbeam_channel::RecvTimeoutError::Disconnected); rounds as usize];
+    let expected_application_count = rounds;
+
+    let (input, receiver) = unbounded();
+    let (steps, observed) = unbounded();
+    let worker = spawn(receiver, steps, None, crossbeam_channel::never(), None);
+    let mut actual_application_count = 0;
+    let mut actual_ids = Vec::new();
+    let mut actual_event_responses = Vec::new();
+
+    for time in 1..=rounds {
+        apply(&input, &[(7, time as u128, time)]);
+        advance(&input, time);
+        let snapshot = receive(&observed);
+        actual_application_count += 1;
+        actual_ids = snapshot.ids;
+        let (response, queries) = unbounded();
+        input.send(Message::Query(Query(response))).unwrap();
+        assert_eq!(receive(&queries)[0].ids, actual_ids);
+        let (completion, pruned) = unbounded();
+        input.send(Message::Prune(Advance(time + 1, completion))).unwrap();
+        assert_eq!(pruned.recv_timeout(Duration::from_secs(5)), Err(crossbeam_channel::RecvTimeoutError::Disconnected));
+        let (response, events) = unbounded();
+        input.send(Message::Events(EventQuery(response))).unwrap();
+        actual_event_responses.push(events.recv_timeout(Duration::from_secs(5)));
+    }
+    drop(input);
+    worker.join().unwrap();
+
+    assert_eq!(actual_application_count, expected_application_count);
+    assert_eq!(actual_ids, expected_ids);
+    assert_eq!(actual_event_responses, expected_event_responses);
+    assert!(observed.is_empty());
 }

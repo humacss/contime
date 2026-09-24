@@ -1,5 +1,6 @@
 //! Snapshot history accessed through [`SnapshotStore`].
 //! Consumers implement [`Snapshot`], [`Event`], [`EventStore`], and [`Apply`].
+//! [`InsertEventStore`] additionally enables event admission.
 //! Forwarding additionally requires [`Timestamp`].
 
 mod api;
@@ -14,7 +15,7 @@ mod types;
 
 pub use api::SnapshotStore;
 pub use forward::ForwardError;
-pub use types::{Apply, Checkpoint, Event, EventStore, NoCheckpoint, Snapshot, Timestamp};
+pub use types::{Apply, Checkpoint, Event, EventStore, Insert, InsertEventStore, NoCheckpoint, Snapshot, Timestamp};
 
 pub(crate) use commit::Commit;
 pub(crate) use playback::Playback;

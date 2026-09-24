@@ -1,4 +1,4 @@
-use contime_snapshots::{Apply, Checkpoint, Event, EventStore, Snapshot, SnapshotStore, Timestamp};
+use contime_snapshots::{Apply, Checkpoint, Event, EventStore, Insert, InsertEventStore, Snapshot, SnapshotStore, Timestamp};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use std::{hint::black_box, time::Duration};
 
@@ -56,6 +56,23 @@ impl Apply<Checkpoint<TestSnapshot>> for TestEvent {
         checkpoint.snapshot.sum += events.map(|event| event.1).sum::<u64>();
     }
 }
+impl InsertEventStore for TestEventStore {
+    // This fixture uses timestamp as identity; production identity is adapter-owned.
+    fn insert(&mut self, event: TestEvent) -> Insert {
+        let at = self.0.partition_point(|stored| stored.0 < event.0);
+        if self.0.get(at).is_some_and(|stored| stored.0 == event.0) {
+            return Insert::Duplicate;
+        }
+        self.0.insert(at, event);
+        Insert::Inserted
+    }
+}
+
+fn insertion_ready() -> Store {
+    let mut store = store(EVENT_COUNT);
+    store.process_until(Time(EVENT_COUNT), &()).unwrap();
+    store
+}
 fn events(count: u64) -> TestEventStore {
     TestEventStore((1..=count).map(|time| TestEvent(Time(time), time)).collect())
 }
@@ -67,13 +84,13 @@ fn hook(snapshot: &mut TestSnapshot, time: &Time, _: &()) {
 }
 fn prune_ready() -> Store {
     let mut store = store(EVENT_COUNT);
-    store.replay(Time(EVENT_COUNT), &()).unwrap();
+    store.process_until(Time(EVENT_COUNT), &()).unwrap();
     store.forward(Time(EVENT_COUNT / 2 + 1), &(), hook).unwrap();
     store
 }
 fn cycle(store: &mut Store, target: u64) -> Box<TestSnapshot> {
     let result = store.query(Time(target), &()).unwrap();
-    store.replay(Time(target), &()).unwrap();
+    store.process_until(Time(target), &()).unwrap();
     store.forward(Time(target - RETAINED_WINDOW + 1), &(), hook).unwrap();
     store.prune();
     result
@@ -84,10 +101,15 @@ fn expected(time: u64) -> TestSnapshot {
 
 // Run the exact fixtures through correctness checks before any measurements.
 fn verify() {
+    let mut inserted = insertion_ready();
+    let next = EVENT_COUNT + 1;
+    assert_eq!(inserted.insert(TestEvent(Time(next), next)), Insert::Inserted);
+    inserted.process_until(Time(next), &()).unwrap();
+    assert_eq!(*inserted.query(Time(next), &()).unwrap(), expected(next));
     let mut fresh = store(EVENT_COUNT);
     assert_eq!(*fresh.query(Time(0), &()).unwrap(), TestSnapshot::default());
     assert_eq!(*fresh.query(Time(EVENT_COUNT), &()).unwrap(), expected(EVENT_COUNT));
-    fresh.replay(Time(EVENT_COUNT), &()).unwrap();
+    fresh.process_until(Time(EVENT_COUNT), &()).unwrap();
     assert_eq!(*fresh.query(Time(EVENT_COUNT), &()).unwrap(), expected(EVENT_COUNT));
     let mut forwarded = store(EVENT_COUNT);
     forwarded.forward(Time(EVENT_COUNT + 1), &(), hook).unwrap();
@@ -111,6 +133,16 @@ fn verify() {
 fn benchmarks(c: &mut Criterion) {
     verify();
     let mut group = c.benchmark_group("snapshot_store");
+    group.bench_function("insert/ordered_after_1000_events", |b| {
+        b.iter_batched_ref(
+            insertion_ready,
+            |store| {
+                black_box(store.insert(black_box(TestEvent(Time(EVENT_COUNT + 1), EVENT_COUNT + 1))));
+                black_box(store);
+            },
+            BatchSize::SmallInput,
+        );
+    });
     group.bench_function("new", |b| {
         b.iter_batched(
             || (events(EVENT_COUNT), TestSnapshot::default()),
@@ -127,11 +159,11 @@ fn benchmarks(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    group.bench_function("replay/1000_events", |b| {
+    group.bench_function("process_until/1000_events", |b| {
         b.iter_batched_ref(
             || store(EVENT_COUNT),
             |store| {
-                black_box(&mut *store).replay(black_box(Time(EVENT_COUNT)), black_box(&())).unwrap();
+                black_box(&mut *store).process_until(black_box(Time(EVENT_COUNT)), black_box(&())).unwrap();
                 black_box(store);
             },
             BatchSize::SmallInput,

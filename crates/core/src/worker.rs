@@ -1,30 +1,24 @@
 use std::convert::Infallible;
 use std::marker::PhantomData;
 
-use contime_checkpoints::{ApplyEvents, ApplyWrapper, CheckpointConfig, Snapshot};
-use contime_memory::ConservativeTrackedSize;
+use crate::checkpoints::{ApplyEvents, ApplyWrapper, CheckpointConfig, Snapshot};
+
 use crossbeam_channel::Receiver;
 
-use crate::types::{CheckpointStorage, CheckpointStorageConfig, History};
-use crate::{Input, MemoryBudget, WorkerMessage, WorkerProcess};
+use crate::types::{CheckpointStorage, CheckpointStorageConfig};
+use crate::{Input, WorkerMessage, WorkerProcess};
 
 impl<I, S, W> WorkerProcess<I, S, W>
 where
     I: Input,
-    S: Snapshot + ConservativeTrackedSize,
+    S: Snapshot,
 {
-    pub fn new(
-        worker: contime_worker::WorkerConfig,
-        checkpoints: CheckpointConfig,
-        history_retention: I::Time,
-        budget: MemoryBudget,
-        wrapper: W,
-    ) -> Self {
+    pub fn new(worker: contime_worker::WorkerConfig, checkpoints: CheckpointConfig, history_retention: I::Time, wrapper: W) -> Self {
         Self {
             worker,
             checkpoints,
             history_retention,
-            budget,
+
             wrapper,
             activity: crossbeam_channel::never(),
             coordination: None,
@@ -36,20 +30,19 @@ where
 impl<I, S, W> contime_runtime::Worker for WorkerProcess<I, S, W>
 where
     I: Input,
-    S: Snapshot<Time = I::Time> + ApplyEvents<I> + ConservativeTrackedSize + Send + 'static,
+    S: Snapshot<Time = I::Time> + ApplyEvents<I> + Send + 'static,
     W: ApplyWrapper<S, I> + Send + 'static,
 {
     type Input = WorkerMessage<I, S>;
     type Error = Infallible;
 
     fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error> {
-        let checkpoint_config = CheckpointStorageConfig { checkpoints: self.checkpoints, budget: self.budget };
-        contime_worker::work_messages::<WorkerMessage<I, S>, History<I>, CheckpointStorage<S, W>>(
+        let checkpoint_config = CheckpointStorageConfig { checkpoints: self.checkpoints };
+        contime_worker::work_messages::<WorkerMessage<I, S>, CheckpointStorage<I, S, W>>(
             input,
             self.worker,
-            (),
-            self.history_retention,
             checkpoint_config,
+            self.history_retention,
             self.wrapper,
             self.activity,
             self.coordination,
@@ -60,44 +53,39 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::types::testing::Time;
     use std::hint::black_box;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
     use contime_api::RejectionMessage;
-    use contime_checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
-    use contime_memory::ConservativeTrackedSize;
+
     use contime_router::{RouteOutput, WorkerOutput};
     use contime_runtime::Worker as RuntimeWorker;
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use crate::input::prepare_inputs;
-    use crate::{CompletionHandle, Input, MemoryBudget, RejectionReason, Route, WorkerBatch, WorkerMessage, WorkerProcess};
+    use crate::{CompletionHandle, Input, RejectionReason, Route, WorkerBatch, WorkerMessage, WorkerProcess};
 
     struct TestInput {
         id: u128,
         value: usize,
     }
 
-    impl ConservativeTrackedSize for TestInput {
-        fn conservative_tracked_size(&self) -> usize {
-            32
+    impl contime_checkpoints::Event for TestInput {
+        type Time = Time;
+
+        fn time(&self) -> Self::Time {
+            Time(10)
         }
     }
-
     impl Input for TestInput {
-        type Time = i64;
-
         fn event_id(&self) -> u128 {
             self.id
         }
-
-        fn time(&self) -> Self::Time {
-            10
-        }
-
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
             emit(7);
         }
@@ -105,19 +93,16 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct TestSnapshot {
-        time: i64,
+        time: Time,
         value: usize,
     }
 
-    impl ConservativeTrackedSize for TestSnapshot {
-        fn conservative_tracked_size(&self) -> usize {
-            std::mem::size_of::<Self>()
-        }
-    }
-
     impl Snapshot for TestSnapshot {
-        type Time = i64;
+        type Time = Time;
 
+        fn time(&self) -> &Self::Time {
+            &self.time
+        }
         fn set_time(&mut self, time: Self::Time) {
             self.time = time;
         }
@@ -128,8 +113,8 @@ mod tests {
             Self::default()
         }
 
-        fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Time, TestInput>) {
-            self.value += batch.events.iter().map(|event| event.value).sum::<usize>();
+        fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Self::Time, TestInput>) {
+            self.value += batch.events.map(|event| event.value).sum::<usize>();
         }
     }
 
@@ -137,13 +122,13 @@ mod tests {
     struct RecordingWrapper(Arc<AtomicUsize>);
 
     impl ApplyWrapper<TestSnapshot, TestInput> for RecordingWrapper {
-        fn apply_event_batch(&mut self, batch: EventBatch<'_, i64, TestInput>, apply_inner: &mut ApplyInner<'_, TestSnapshot>) {
+        fn apply_event_batch(&mut self, batch: EventBatch<'_, '_, Time, TestInput>, apply_inner: &mut ApplyInner<'_, TestSnapshot>) {
             apply_inner.apply_event_batch(batch);
             self.0.store(apply_inner.snapshot().value, Ordering::Relaxed);
         }
     }
 
-    fn process(budget: MemoryBudget, observed: Arc<AtomicUsize>) -> WorkerProcess<TestInput, TestSnapshot, RecordingWrapper> {
+    fn process(observed: Arc<AtomicUsize>) -> WorkerProcess<TestInput, TestSnapshot, RecordingWrapper> {
         WorkerProcess::new(
             contime_worker::WorkerConfig {
                 maximum_dirty_age: Duration::from_micros(100),
@@ -152,17 +137,13 @@ mod tests {
                 deadline_compaction_multiplier: 2,
             },
             CheckpointConfig { interval: 100 },
-            0,
-            budget,
+            Time(0),
             RecordingWrapper(observed),
         )
     }
 
-    fn batch(
-        budget: &MemoryBudget,
-        count: u128,
-    ) -> (WorkerBatch<TestInput>, crossbeam_channel::Receiver<RejectionMessage<RejectionReason>>) {
-        let events = prepare_inputs(budget, (0..count).map(|id| TestInput { id, value: 1 }).collect()).unwrap();
+    fn batch(count: u128) -> (WorkerBatch<TestInput>, crossbeam_channel::Receiver<RejectionMessage<RejectionReason>>) {
+        let events = prepare_inputs((0..count).map(|id| TestInput { id, value: 1 }).collect());
         let routes = events.into_iter().map(|event| <Route<TestInput> as RouteOutput<_>>::create(7, event)).collect();
         let (sender, receiver) = unbounded();
         let batch = <WorkerBatch<TestInput> as WorkerOutput<_, _>>::create(routes, CompletionHandle::new(sender));
@@ -171,15 +152,14 @@ mod tests {
 
     #[test]
     fn worker_process_inserts_replays_and_completes_one_batch() {
-        let budget = MemoryBudget::new(100_000, 1_000);
         let observed = Arc::new(AtomicUsize::new(0));
         let (sender, receiver) = unbounded();
-        let (batch, rejections) = batch(&budget, 5);
+        let (batch, rejections) = batch(5);
         sender.send(WorkerMessage::Apply(batch)).unwrap();
-        sender.send(WorkerMessage::Advance(crate::Advance { time: 10, completion: unbounded().0 })).unwrap();
+        sender.send(WorkerMessage::Advance(crate::Advance { time: Time(10), completion: unbounded().0 })).unwrap();
         drop(sender);
 
-        RuntimeWorker::run(process(budget, Arc::clone(&observed)), receiver).unwrap();
+        RuntimeWorker::run(process(Arc::clone(&observed)), receiver).unwrap();
 
         assert_eq!(observed.load(Ordering::Relaxed), 5);
         assert_eq!(rejections.try_recv(), Err(TryRecvError::Disconnected));
@@ -192,13 +172,12 @@ mod tests {
         criterion.bench_function("core/worker/1000_events_one_snapshot", |bencher| {
             bencher.iter_batched(
                 || {
-                    let budget = MemoryBudget::new(usize::MAX, 0);
                     let observed = Arc::new(AtomicUsize::new(0));
                     let (sender, receiver) = unbounded();
-                    sender.send(WorkerMessage::Apply(batch(&budget, 1_000).0)).unwrap();
-                    sender.send(WorkerMessage::Advance(crate::Advance { time: 10, completion: unbounded().0 })).unwrap();
+                    sender.send(WorkerMessage::Apply(batch(1_000).0)).unwrap();
+                    sender.send(WorkerMessage::Advance(crate::Advance { time: Time(10), completion: unbounded().0 })).unwrap();
                     drop(sender);
-                    (process(budget, observed), receiver)
+                    (process(observed), receiver)
                 },
                 |(worker, receiver)| {
                     RuntimeWorker::run(worker, receiver).unwrap();

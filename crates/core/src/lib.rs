@@ -9,7 +9,6 @@ mod history;
 mod idle;
 mod input;
 mod listen;
-mod memory;
 mod message;
 mod query;
 mod router;
@@ -20,14 +19,13 @@ mod types;
 mod worker;
 
 pub use types::{
-    Advance, CompletionHandle, ConTime, ConTimeConfig, EventQuery, Input, MemoryBudget, RejectionReason, Route, RouterBatch, RouterMessage,
-    RouterProcess, SnapshotListen, SnapshotListener, SnapshotListenerMessage, SnapshotQuery, TrackedEvent, WorkerBatch, WorkerMessage,
+    Advance, CompletionHandle, ConTime, ConTimeConfig, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage,
+    RouterProcess, SharedEvent, SnapshotListen, SnapshotListener, SnapshotListenerMessage, SnapshotQuery, WorkerBatch, WorkerMessage,
     WorkerProcess,
 };
 
 pub use contime_api::{ApiError, ApplyResponse, RejectionMessage};
-pub use contime_checkpoints as checkpoints;
+pub mod checkpoints;
 pub use contime_lanes as lanes;
-pub use contime_memory as memory_tracking;
 pub use contime_router::Placement;
 pub use idle::IdleError;

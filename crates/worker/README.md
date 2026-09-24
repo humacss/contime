@@ -19,18 +19,28 @@ for adapting independently defined message types and choosing where
 
 ## Incremental message workers
 
-`work_messages` drains available messages, then computes one complete timestamp
-bucket for one snapshot. A keyed priority queue orders pending snapshots by
-their actual next timestamp and snapshot ID. Each snapshot has at most one
-queue entry. After each step, the worker flushes replay notifications and
-returns to its message queue.
+`work_messages` drains available messages, inserting complete incoming batches,
+then processes one snapshot to the next distinct pending timestamp or the
+advancement target, whichever is earlier. An ordered set groups pending work
+by timestamp; each snapshot has one entry. Equal-time entries needing that
+timestamp run before entries already complete through it, then by snapshot ID.
+After each step, the worker flushes replay notifications and returns to its
+message queue. There is no maximum processing range.
 
-Apply messages insert canonical history and immediately invalidate affected
-checkpoints through `IncrementalCheckpoints::invalidate`. The checkpoint
-adapter acknowledges that history changes have transferred to scheduling;
-`next_time` tracks unfinished replay independently. Late inputs invalidate the
-complete same-time bucket and its suffix. Request completion means insertion
-and invalidation finished, and does not wait for replay.
+Each message-worker snapshot owns one implementation of the worker's
+`SnapshotStore<I>` trait. Core supplies the adapter; the worker has no dependency
+on the concrete snapshot or event store crates. The adapter owns insertion and
+invalidation and processes through the worker-selected timestamp with
+`process_until`. The adapter exposes the incoming event's timestamp through
+`event_time`; it does not supply a storage-derived next replay timestamp.
+The worker tracks the earliest pending boundary and latest accepted timestamp
+per snapshot. Unfinished work moves into the destination bucket; work complete
+through the advancement target waits for a later advance. Work is removed once
+processing reaches the latest accepted event. These boundaries are conservative:
+an empty interval can remain scheduled without inspecting the stored events.
+Late inputs invalidate the complete same-time bucket and its suffix.
+Duplicate insertions return `changed = false` without invalidating progress.
+Request completion means insertion finished, not that replay is complete.
 
 The target starts at zero. `Advance` raises it monotonically; replay callbacks
 never process buckets beyond that target. Retained future inputs do not
@@ -44,12 +54,20 @@ callbacks, without waiting for idle. Duplicate and older fences are ignored.
 Only explicit `Prune` messages move the retained horizon: the caller must prove
 it safe, and the worker asserts that no pending timestamp precedes it. Events
 strictly before the horizon are folded into checkpoint anchors and pruned.
+Pruning is queued work: one snapshot history is pruned at a time, with incoming
+messages handled between histories. Completion and idle wait for queued pruning
+to finish; a single history's reconstruction and retention hooks are not interrupted.
+The optional coordination callback reports the completed horizon only after the
+whole pass succeeds, never from a drop handler or a failed retention hook.
+The worker passes its admission horizon to every insertion, so existing stores
+also reject older events while their forwarding/pruning jobs are still queued.
+Each pruning step calls the store's `forward` followed by `prune`.
 New histories inherit that admission horizon. `Advance` never infers pruning;
 the retained `history_retention` argument is ignored.
 
 The non-message `work` API remains a whole-history apply loop: it coalesces
 ready batches and updates each changed snapshot once per cycle. Input and
-checkpoint ownership, memory accounting, and admission policy remain supplied
+checkpoint ownership and admission policy remain supplied
 by the orchestrator.
 
 ## Worker configuration
@@ -64,123 +82,144 @@ global idle state and does not depend on Core.
 
 
 `WorkerConfig` retains legacy scheduling fields for source compatibility;
-message workers always yield after one timestamp bucket. Pending runnable
+message workers always yield after one snapshot-processing call. Pending runnable
 computation counts as working even if no messages remain. Worker exit closes
 activity subscriptions so the orchestrator can detect a stopped component.
 
-## Benchmark snapshot
+## Verification and performance (2026-09-24)
 
-Snapshot-listener unit results recorded on 2026-09-01:
+Measured on macOS arm64 with Rust 1.95.0, optimized builds and Criterion.
+These are worker-overhead measurements with storage stubs, not real event-store,
+snapshot-store, physics, or end-to-end core performance.
 
-| Worker-local operation | Total | Amortized |
-| --- | ---: | ---: |
-| Register one collection with 1,000 IDs | 58.069 us | 58.069 ns/ID |
-| Replay check, no collections | 2.1286 ns | 2.1286 ns/replay |
-| Replay check, one nonmatching collection | 6.2251 ns | 6.2251 ns/replay |
-| Accumulate + flush 1 matching snapshot | 54.117 ns | 54.117 ns/ID |
-| Accumulate + flush 100 matching snapshots | 994.68 ns | 9.947 ns/ID |
-| Accumulate + flush 1,000 matching snapshots | 8.7402 us | 8.740 ns/ID |
+### Message-worker integration benchmarks
 
-Registration deduplicates one collection's IDs, sends one batched `Registered`
-message, and attaches a compact generational collection ID to each worker-local
-snapshot slot. Replay notification inspects only memberships on snapshots that
-actually replayed, filters them by watched timestamp, and sends one batched
-`Replayed` message per touched collection. The empty case shows the fast path
-when no collection has been installed.
+The public `work_messages` loop runs synchronously on the benchmark thread.
+Fixture/channel construction and input generation are excluded. Timing includes
+worker/store creation, channel receives, priority-queue work, stub calls,
+responses, follow-up message sends, and teardown; no OS worker-thread startup or
+router is included. The store stub uses a FIFO and observable running sums,
+not real history insertion, deduplication, checkpoint replay, or retention.
 
-Horizon orchestration results for 1,000 worker-local histories recorded on
-2026-09-01:
+Each scenario first checks accepted/processed event counts, sum, processing-call
+count, query responses, forwarding and pruning counts outside the timed loop.
+Inputs and results pass through `black_box`. Figures are approximate Criterion
+point estimates (20 samples, 200 ms warmup, 1 s measurement).
 
-| Workload | Total | Histories/s |
-| --- | ---: | ---: |
-| Clean event pruning | 122.4 us | 8.17 million |
-| Checkpoint anchor + pruning | 127.9 us | 7.82 million |
-| Forced replay + anchor + pruning | 544.6 us | 1.84 million |
-
-Query unit results recorded on 2026-09-01:
-
-| Worker-local query | Total | Amortized |
-| --- | ---: | ---: |
-| One found snapshot | 59.66 ns | 59.66 ns/result |
-| 1,000 found event handles | 1.571 us | 1.57 ns/result |
-
-The snapshot case includes one history lookup, query-local reconstruction by
-the supplied checkpoint implementation, boxing, and the response callback. The
-event case includes one history lookup, range filtering, cloning 1,000 handles,
-and the response callback. Neither case includes router or API transport.
-
-Local release-mode Criterion results on 2026-09-03 compare immediate replay
-with ready-batch coalescing. All 1,000 batches are queued before worker entry;
-the checkpoint implementation records one inexpensive update per replay.
-
-| Public workload | Immediate replay | Coalesced cycle | Improvement |
+| Operation | Total time | Input throughput | Time/input event |
 | --- | ---: | ---: | ---: |
-| 1,000 batches, one snapshot/input | 113.70 us | 88.778 us | 21.9% |
-| 1,000 batches, four snapshots/inputs | 170.07 us | 115.64 us | 32.0% |
+| Insert 1,000 future events; no processing | 20.80 µs | 48.09M/s | 20.80 ns |
+| Insert/process 1,000 events, one snapshot/time | 22.05 µs | 45.36M/s | 22.05 ns |
+| Insert/process 1,000 events, distinct times | 22.20 µs | 45.04M/s | 22.20 ns |
+| Insert/process 10,000 events, distinct times | 221.55 µs | 45.14M/s | 22.16 ns |
+| Insert/process 1,000 events, 1,000 snapshots | 177.61 µs | 5.63M/s | 177.61 ns |
+| Insert/process 1,000 events + 1,000 query pairs | 118.36 µs | 8.45M/s | 118.36 ns |
+| Insert/process/prune 1,000 snapshots | 190.06 µs | 5.26M/s | 190.06 ns |
+| Mixed: 100 rounds, 10,000 events on 10 stores | 469.46 µs | 21.30M/s | 46.95 ns |
 
-### Input ownership comparison
+A query pair is one snapshot query and one event query, each returning one
+stub result. The query and pruning rows include insertion and processing;
+they are **not isolated query/prune latencies**. Throughput always counts input
+events, not query requests or internal replay operations.
 
-The generic ownership benchmark processes 1,000 one-input batches across four
-snapshots with one replay per receive. Input construction occurs outside the
-timed routine. `shared` is a benchmark-local one-pointer wrapper around
-`Arc<Event>`; production worker code does not refer to `Arc`.
+The mixed case reuses the same stores for 100 rounds, each with 100 events,
+10 snapshot queries, 10 event queries, and forwarding/pruning all 10 stores.
+The next round is enqueued by the completed processing callback, so this
+exercises repeated message handling rather than merely coalescing all rounds.
+All stages are prebuilt outside timing; enqueuing them is timed.
 
-| Event bytes | Owned total | Owned throughput | Shared total | Shared throughput |
-| ---: | ---: | ---: | ---: | ---: |
-| 64 | 199.76 µs | 5.006M/s | 165.95 µs | 6.026M/s |
-| 208 | 158.13 µs | 6.324M/s | 177.98 µs | 5.619M/s |
-| 1,008 | 192.15 µs | 5.204M/s | 190.59 µs | 5.247M/s |
+Distinct-timestamp processing scales approximately linearly from 1,000 to
+10,000 events (10.0× time for 10× events). Many snapshots cost more because the
+worker creates more stores and schedules separate snapshot/time steps.
+No obvious superlinear behavior appeared in this matrix. This does not prove
+long-running memory bounds or real-store performance.
 
-The worker does not fan inputs out or clone them, so these results show no
-stable relationship between payload size and ownership strategy. Scheduling,
-event insertion, checkpoint updates, and completion
-dominate this workload. Pointer ownership is selected for efficient router
-fan-out and retained event history, not because it intrinsically accelerates
-the worker loop.
+These results use worker-owned bucket scheduling. Against the preceding
+event-at-a-time scheduler with the same input fixtures, 1,000 distinct-time
+events improved from 53.98 to 22.20 µs because they now share one processing
+call. Shared-time work rose from 18.33 to 22.05 µs, and mixed work from 398.96
+to 469.46 µs. Worker-owned scheduling adds bookkeeping; it is not uniformly
+faster. The benchmark checks processing-call counts rather than event-timestamp
+batch counts, since a call can now cover multiple timestamps.
 
-### Pipeline comparison
+### Unit benchmarks
 
-The independently measured Arc/shared fast paths currently have the following
-approximate throughput:
+These are preceding baseline results from the inline unit suite, not remeasured
+after the scheduling change. Rate denominators
+are explicit: history/checkpoint operations are not advertised as event
+application throughput when their underlying implementation is stubbed.
 
-| Boundary | Throughput |
-| --- | ---: |
-| API, 1,000 already-shared inputs | 1.9–2.1 billion inputs/s |
-| Router, 64-byte-or-larger shared events | 122–148 million routes/s |
-| Worker, one replay per receive | 6.09–10.37 million routed inputs/s per worker |
+| Unit | Operation | Total time | Throughput | Time/item |
+| --- | --- | ---: | ---: | ---: |
+| Listen | Check with no listeners | 1.62 ns | 616M checks/s | 1.62 ns/check |
+| Listen | Check nonmatching collection | 4.05 ns | 247M checks/s | 4.05 ns/check |
+| Listen | Register 1,000 IDs | 43.25 µs | 23.12M IDs/s | 43.25 ns/ID |
+| Listen | Notify 1,000 matching IDs | 6.69 µs | 149.4M IDs/s | 6.69 ns/ID |
+| Query | Return one snapshot | 43.05 ns | 23.23M queries/s | 43.05 ns/query |
+| Query | Return 1,000 event handles | 1.27 µs | 790.1M handles/s | 1.27 ns/handle |
+| Events (legacy) | Insert 1,000 inputs | 4.06 µs | 246.2M inputs/s | 4.06 ns/input |
+| Checkpoints (legacy) | One update over a 1,000-event stub | 103.3 ns | 9.68M updates/s | 103.3 ns/update |
+| Advance (legacy) | Prune 1,000 clean histories | 6.92 µs | 144.4M histories/s | 6.92 ns/history |
+| Advance (legacy) | Forward/prune 1,000 histories | 6.96 µs | 143.6M histories/s | 6.96 ns/history |
+| Advance (legacy) | Replay/forward/prune 1,000 histories | 14.04 µs | 71.22M histories/s | 14.04 ns/history |
+| Work (legacy) | 100 batches × 1,000 inputs | 451.26 µs | 221.6M inputs/s | 4.51 ns/input |
 
-The worker is therefore the narrowest single instance, as expected for the
-stage that owns event stores and performs checkpoint updates. Dividing router
-route throughput by the measured worker range gives capacity for roughly
-13–22 equally loaded workers before routing becomes the next bottleneck. At 20
-workers, the lower worker measurement corresponds to about 122 million routed
-inputs/s, still within the measured router range.
+The empty-rejection-extension benchmark was removed: its work optimized away
+and the sub-nanosecond result did not measure useful worker behavior.
 
-These are boundary-specific microbenchmarks rather than one end-to-end
-measurement. The API shared-input benchmark excludes downstream receipt, the
-router benchmark excludes worker execution, and the worker fixtures use cheap
-in-memory event and checkpoint implementations. The comparison is useful for
-capacity direction, not a promise of aggregate application throughput.
+### Legacy public worker benchmarks
 
-An isolated order-preserving compaction from 2,001 deadline entries to 1,000
-cost about 9.93 us. Across 1,000 single-snapshot reactivation cycles, lower
-bounds of 64, 256, and 1,024 measured approximately 50.3 us, 49.5 us, and 47.1
-us respectively; 1,024 is the best current starting point.
+`worker_settings` continues to cover the separate batch-only `work` entry
+point. The ignored replay-budget sweep was removed; it measured identical
+behavior under four names. It now measures one coalesced case per shape, plus
+owned/shared input variants.
+
+| Operation | Total time | Throughput | Time/input event |
+| --- | ---: | ---: | ---: |
+| 1,000 one-input batches, one snapshot | 97.06 µs | 10.30M/s | 97.06 ns |
+| 1,000 four-input batches, four snapshots | 86.18 µs | 46.42M/s | 21.54 ns |
+| 1,000 owned 64-byte inputs | 64.28 µs | 15.56M/s | 64.28 ns |
+| 1,000 shared 64-byte inputs | 74.94 µs | 13.34M/s | 74.94 ns |
+| 1,000 owned 1,008-byte inputs | 83.78 µs | 11.94M/s | 83.78 ns |
+| 1,000 shared 1,008-byte inputs | 86.82 µs | 11.52M/s | 86.82 ns |
+
+The first legacy case was noisy (84–108 µs estimate interval). These fixtures
+use different message shapes and storage stubs than the message-worker matrix;
+do not interpret the tables as a before/after speedup.
+
+### Reproduce
+
+Run from the repository root. Set `CRITERION_HOME` to a writable output directory
+if the default crate-local `target/criterion` is unavailable.
+
+```sh
+cargo +1.95.0 test --offline --manifest-path crates/worker/Cargo.toml --all-targets
+cargo +1.95.0 test --release --offline --manifest-path crates/worker/Cargo.toml --lib benchmark -- --ignored --nocapture --test-threads=1
+cargo +1.95.0 bench --offline --manifest-path crates/worker/Cargo.toml --bench messages
+cargo +1.95.0 bench --offline --manifest-path crates/worker/Cargo.toml --bench worker_settings -- --sample-size 20 --warm-up-time 0.2 --measurement-time 1
+cargo +1.95.0 clippy --offline --manifest-path crates/worker/Cargo.toml --all-targets -- -D warnings
+```
+
+Run timing suites serially to avoid contention. Unit tests and integration tests
+are 28 and 15 respectively; the eight ignored inline benchmark entry points run
+separately. Both public benchmark targets also run smoke checks under
+`test --all-targets`.
 
 ## Source units
 
-- `queue.rs`: keyed priority-queue operations and their isolated unit
-  benchmarks.
-- `schedule.rs`: dirty-time and pending-count scheduling policy.
-- `events.rs`: event-store creation, insertion, and dirty scheduling.
-- `checkpoints.rs`: checkpoint materialization and request completion.
-- `listen.rs`: listener registration, replay notification, and disconnected
-  sender cleanup.
-- `work.rs`: message-priority timestamp scheduling and the blocking receive loop.
-- `tests/incremental.rs`: real-history/checkpoint coverage for ordering, rewind,
-  query priority, target bounds, activity, fences, and explicit pruning.
-- `tests/worker_settings.rs`: public replay-budget and deadline behavior.
-- `benches/worker_settings.rs`: end-to-end worker configuration benchmarks.
+- `listen.rs`: listener registration, replay notification, disconnected sender cleanup.
+- `query.rs`: snapshot/event query dispatch through the store contract.
+- `work.rs`: message-priority timestamp scheduling and the blocking receive loop;
+  also the retained legacy batch-only loop.
+- `types.rs`: worker storage and transport contracts.
+- `events.rs`, `checkpoints.rs`: legacy batch-only insertion/update helpers.
+- `advance.rs`: test-only legacy horizon orchestration.
+- `tests/incremental.rs`: storage-stub coverage for ordering, rewind, queries,
+  target bounds, activity, fences, duplicates, pruning and repeated mixed work.
+- `tests/worker_settings.rs`: legacy coalescing behavior.
+- `benches/messages.rs`: public message-worker overhead with storage stubs.
+- `benches/worker_settings.rs`: legacy batch-worker and input-ownership benchmarks.
 
-Each executable unit contains inline unit tests and an ignored inline
-Criterion benchmark.
+The uncompiled legacy `queue.rs` and `schedule.rs` files and their unused
+`priority-queue` dependency were removed; they remain available in Git history.
+Concrete snapshot-store integration belongs in core.
