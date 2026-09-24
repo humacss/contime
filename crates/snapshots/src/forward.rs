@@ -194,7 +194,7 @@ mod tests {
             .warm_up_time(std::time::Duration::from_millis(200))
             .measurement_time(std::time::Duration::from_secs(1))
             .sample_size(30);
-        criterion.bench_function("checkpoints/forward/1000_events_10_intervals", |b| {
+        criterion.bench_function("snapshots/forward/1000_events_10_intervals", |b| {
             b.iter_batched_ref(
                 || {
                     let events = TestEventStore((1..=event_count).map(|time| TestEvent(time, 1)).collect());

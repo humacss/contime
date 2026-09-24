@@ -190,7 +190,7 @@ mod tests {
             .warm_up_time(std::time::Duration::from_millis(200))
             .measurement_time(std::time::Duration::from_secs(1))
             .sample_size(30);
-        criterion.bench_function("checkpoints/unit/store/new_and_drop", |b| {
+        criterion.bench_function("snapshots/unit/store/new_and_drop", |b| {
             b.iter(|| {
                 black_box(Store::new(
                     black_box(TestEventStore::default()),
@@ -199,7 +199,7 @@ mod tests {
                 ));
             });
         });
-        criterion.bench_function("checkpoints/unit/store/play_1024_checkpoints", |b| {
+        criterion.bench_function("snapshots/unit/store/play_1024_checkpoints", |b| {
             b.iter(|| {
                 black_box(black_box(&mut populated).play(black_box(&target)).unwrap());
             });
@@ -289,7 +289,7 @@ mod tests {
             .sample_size(30);
         for event_count in [1000, 10_000] {
             let horizon = event_count / 2 + 1;
-            let name = format!("checkpoints/unit/store/prune_half_of_{event_count}_events");
+            let name = format!("snapshots/unit/store/prune_half_of_{event_count}_events");
             criterion.bench_function(&name, |b| {
                 b.iter_batched_ref(
                     || {

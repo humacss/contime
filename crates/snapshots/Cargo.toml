@@ -1,0 +1,18 @@
+[package]
+name = "contime-snapshots"
+version = "0.1.0"
+edition = "2021"
+autobenches = false
+license = "MIT"
+description = "Snapshot store with query, replay, forwarding, and pruning for ConTime"
+publish = false
+
+[[bench]]
+name = "api"
+harness = false
+
+[dependencies]
+
+[dev-dependencies]
+rstest = { version = "0.26", default-features = false }
+criterion = { version = "0.5", features = ["html_reports"] }

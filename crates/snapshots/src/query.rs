@@ -92,7 +92,7 @@ mod tests {
             .sample_size(30);
         for event_count in [1000, 10_000] {
             for interval in [10, 100] {
-                let name = format!("checkpoints/query/{event_count}_events_{}_intervals", event_count / interval);
+                let name = format!("snapshots/query/{event_count}_events_{}_intervals", event_count / interval);
                 criterion.bench_function(&name, |b| {
                     b.iter_batched_ref(
                         || {

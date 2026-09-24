@@ -13,7 +13,7 @@ crossbeam-channel = "0.5"
 priority-queue = "2"
 
 [dev-dependencies]
-contime-checkpoints = { path = "../checkpoints" }
+contime-checkpoints = { package = "contime-snapshots", path = "../snapshots" }
 contime-events = { path = "../events" }
 criterion = { version = "0.5", features = ["html_reports"] }
 

@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 contime-api = { path = "../api" }
-contime-checkpoints = { path = "../checkpoints" }
+contime-checkpoints = { package = "contime-snapshots", path = "../snapshots" }
 contime-events = { path = "../events" }
 contime-lanes = { path = "../lanes" }
 contime-memory = { path = "../memory" }

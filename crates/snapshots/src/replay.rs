@@ -142,7 +142,7 @@ mod tests {
             .measurement_time(std::time::Duration::from_secs(1))
             .sample_size(30);
         for dirty in [false, true] {
-            let name = if dirty { "checkpoints/replay/rebuild_1000" } else { "checkpoints/replay/fresh_1000" };
+            let name = if dirty { "snapshots/replay/rebuild_1000" } else { "snapshots/replay/fresh_1000" };
             criterion.bench_function(name, |b| {
                 b.iter_batched_ref(
                     || {
