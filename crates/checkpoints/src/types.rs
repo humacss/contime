@@ -1,196 +1,155 @@
-use std::collections::VecDeque;
+/// No valid checkpoint exists at or before the requested time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoCheckpoint;
 
-/// Checkpoint retention policy.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CheckpointConfig {
-    /// Number of applied events between retained cadence checkpoints.
-    ///
-    /// Zero disables cadence checkpoints while retaining the current tip.
-    pub interval: u64,
+impl std::fmt::Display for NoCheckpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("no valid checkpoint at or before the requested time")
+    }
+}
+impl std::error::Error for NoCheckpoint {}
+
+/// Materialized state at a complete timestamp boundary.
+#[derive(Clone, Debug)]
+pub struct Checkpoint<S>
+where
+    S: Snapshot,
+{
+    pub snapshot: S,
+    pub history_event_count: u64,
 }
 
-/// The canonical position of an event or checkpoint.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct CheckpointKey<T> {
-    pub time: T,
-    pub event_id: u128,
+/// A discrete timestamp with a checked immediate predecessor.
+pub trait Timestamp: Clone + Default + Ord {
+    fn previous(&self) -> Option<Self>;
 }
 
-/// One borrowed canonical event supplied by an event store.
-#[derive(Clone, Copy, Debug)]
-pub struct EventRef<'a, T, E> {
-    pub time: &'a T,
-    pub event_id: u128,
-    pub event: &'a E,
-}
-
-/// Canonical events and replay acknowledgement required by apply-time replay.
-pub trait Events {
+/// Borrowed access to canonical events. Insertion and physical cleanup belong
+/// to the owning consumer, not checkpoint commit policies.
+pub trait EventStore {
     type Time: Clone + Default + Ord;
-    type Event;
-    type Iter<'a>: Iterator<Item = EventRef<'a, Self::Time, Self::Event>>
+    type Event: Event<Time = Self::Time>;
+    type Iter<'a>: Iterator<Item = &'a Self::Event>
     where
         Self: 'a,
         Self::Time: 'a,
         Self::Event: 'a;
 
-    /// Returns the earliest timestamp changed since the previous replay.
-    fn dirty_time(&self) -> &Self::Time;
-
-    /// Iterates canonically after `boundary`, or from the beginning when it is
-    /// absent.
-    fn iter_after(&self, boundary: Option<&CheckpointKey<Self::Time>>) -> Self::Iter<'_>;
-
-    /// Acknowledges that the canonical events exposed by the completed replay
-    /// have been reflected in checkpoint state.
-    ///
-    /// Replay calls this exactly once after successful completion, including
-    /// when no events required application. A replay that panics is not
-    /// acknowledged.
-    fn acknowledge_replay(&mut self);
+    /// Iterates canonically strictly after the complete timestamp `boundary`,
+    /// or from the beginning when it is absent.
+    fn iter_after(&self, boundary: Option<&Self::Time>) -> Self::Iter<'_>;
 }
 
 /// Consumer-owned state retained in checkpoints.
 pub trait Snapshot: Clone {
     type Time: Clone + Default + Ord;
 
-    /// Updates the materialized state's logical time after applying a bucket.
+    /// Timestamp through which all canonical events have been processed.
+    fn time(&self) -> &Self::Time;
+
+    /// Records completion of a whole timestamp batch, even if its events were filtered.
     fn set_time(&mut self, time: Self::Time);
 }
 
-/// One complete same-time event bucket.
-#[derive(Clone, Debug)]
-pub struct EventBatch<'a, T, E> {
-    pub snapshot_id: u128,
-    pub time: T,
-    pub events: &'a [&'a E],
+/// Time used for timestamp batches and checkpoint boundaries.
+/// Core adapters may implement this independently of their event-store contract.
+pub trait Event {
+    type Time: PartialEq;
+    fn time(&self) -> Self::Time;
 }
 
-/// One effective event batch selected from a canonical timestamp bucket.
-#[derive(Clone, Debug)]
-pub struct ApplyBatch<'a, T, E> {
-    pub snapshot_id: u128,
-    pub time: T,
-    /// Cumulative raw history event count represented through the canonical
-    /// bucket from which this effective batch was selected.
-    pub history_event_count: u64,
-    pub events: &'a [&'a E],
+/// Consumer-defined application of one complete timestamp batch.
+/// Mutation and any application hooks belong entirely to this implementation.
+pub trait Apply<S, C = ()>: Event + Sized {
+    fn apply<'a>(snapshot: &mut S, events: impl Iterator<Item = &'a Self>, context: &C)
+    where
+        Self: 'a;
 }
 
-/// Consumer-provided snapshot materialization and event application behavior.
-pub trait ApplyEvents<E>: Snapshot {
-    /// Creates clean state with the identity selected by the first event.
-    fn create(snapshot_id: u128, first_event: &E) -> Self;
+/// Shared fixtures for unit tests and application benchmarks only.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::{Apply, Checkpoint, Event, EventStore, Snapshot, Timestamp};
 
-    /// Applies one effective event batch.
-    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Time, E>);
-}
+    pub type Time = u64;
 
-/// The only mutable snapshot access exposed to apply wrappers.
-pub struct ApplyInner<'a, S>
-where
-    S: Snapshot,
-{
-    pub(crate) snapshot: &'a mut S,
-    pub(crate) history_event_count: u64,
-    pub(crate) apply_count: usize,
-}
-
-/// Infallible extension seam around same-timestamp snapshot application.
-///
-/// Implementations must call `ApplyInner::apply_event_batch` at least once.
-/// They may filter or partition the canonical batch and may use an empty
-/// effective batch to suppress every event.
-pub trait ApplyWrapper<S, E>
-where
-    S: ApplyEvents<E>,
-{
-    fn apply_event_batch(&mut self, batch: EventBatch<'_, S::Time, E>, apply_inner: &mut ApplyInner<'_, S>) {
-        apply_inner.apply_event_batch(batch);
+    impl Timestamp for Time {
+        fn previous(&self) -> Option<Self> {
+            self.checked_sub(1)
+        }
     }
 
-    /// Applies a batch while replaying changes to retained event history.
-    /// Override to publish effects after application. Queries and retention
-    /// reconstruction call only `apply_event_batch`, never this hook.
-    fn replay_event_batch(&mut self, batch: EventBatch<'_, S::Time, E>, apply_inner: &mut ApplyInner<'_, S>) {
-        self.apply_event_batch(batch, apply_inner);
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct TestSnapshot {
+        pub time: Time,
+        pub sum: u64,
     }
 
-    /// Compact consumer-owned data when the retained history boundary advances.
-    /// Called for the reconstructed replay anchor and every remaining checkpoint,
-    /// never during ordinary application, replay, or query reconstruction.
-    /// Preserve snapshot time and all state needed to query or replay at/after
-    /// `horizon`. Mutations must not affect clones held by other readers.
-    /// This hook must not emit events; its default is a no-op.
-    fn retain_snapshot(&mut self, _snapshot: &mut S, _horizon: &S::Time) {}
-}
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct TestEvent(pub Time, pub u64);
+    #[derive(Default)]
+    pub struct TestEventStore(pub Vec<TestEvent>);
 
-impl<S, E> ApplyWrapper<S, E> for () where S: ApplyEvents<E> {}
+    impl Snapshot for TestSnapshot {
+        type Time = Time;
+        fn time(&self) -> &Time {
+            &self.time
+        }
+        fn set_time(&mut self, time: Time) {
+            self.time = time;
+        }
+    }
 
-/// One retained materialized checkpoint.
-#[derive(Clone, Debug)]
-pub struct Checkpoint<S>
-where
-    S: Snapshot,
-{
-    pub key: CheckpointKey<S::Time>,
-    pub snapshot: S,
-    pub history_event_count: u64,
-}
+    impl Event for TestEvent {
+        type Time = Time;
+        fn time(&self) -> Time {
+            self.0
+        }
+    }
 
-/// State retained before the ordinary checkpoint sequence.
-///
-/// A missing boundary represents the clean initial snapshot before its first
-/// event. Later advancement replaces it with a boundary at the final pruned
-/// event.
-#[derive(Clone, Debug)]
-pub struct ReplayAnchor<S>
-where
-    S: Snapshot,
-{
-    pub boundary: Option<CheckpointKey<S::Time>>,
-    pub snapshot: S,
-    pub history_event_count: u64,
-}
+    impl EventStore for TestEventStore {
+        type Time = Time;
+        type Event = TestEvent;
+        type Iter<'a> = std::slice::Iter<'a, TestEvent>;
+        fn iter_after(&self, boundary: Option<&Time>) -> Self::Iter<'_> {
+            let start = boundary.map_or(0, |time| self.0.partition_point(|event| event.0 <= *time));
+            self.0[start..].iter()
+        }
+    }
 
-/// Materialized checkpoints for one externally scheduled snapshot ID.
-#[derive(Clone)]
-pub struct CheckpointStore<S>
-where
-    S: Snapshot,
-{
-    pub(crate) snapshot_id: u128,
-    pub(crate) interval: u64,
-    pub(crate) anchor: Option<ReplayAnchor<S>>,
-    pub(crate) checkpoints: VecDeque<Checkpoint<S>>,
-    pub(crate) retained_horizon: Option<S::Time>,
-}
+    impl Apply<Checkpoint<TestSnapshot>> for TestEvent {
+        fn apply<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, _: &()) {
+            checkpoint.snapshot.sum += events.map(|event| event.1).sum::<u64>();
+        }
+    }
 
-/// Checkpoint-owned state used while one replay walks canonical events.
-pub(crate) struct ReplaySession<'a, S>
-where
-    S: Snapshot,
-{
-    pub(crate) store: &'a mut CheckpointStore<S>,
-    pub(crate) working_snapshot: Option<S>,
-    pub(crate) start_key: Option<CheckpointKey<S::Time>>,
-    pub(crate) history_event_count: u64,
-    pub(crate) applied_events: u64,
-    pub(crate) events_since_checkpoint: u64,
-    pub(crate) next_checkpoint_index: usize,
-}
+    impl Apply<Checkpoint<TestSnapshot>, u64> for TestEvent {
+        fn apply<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, context: &u64) {
+            checkpoint.snapshot.sum += events.map(|event| event.1).sum::<u64>() + context;
+        }
+    }
 
-/// The effect of one apply-time replay on retained checkpoint state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ApplyResult {
-    /// Number of canonical events applied during this replay.
-    pub applied_events: u64,
-    /// Total checkpoints retained after this replay.
-    pub retained_checkpoints: usize,
-}
+    #[test]
+    fn sum_fixture_preserves_checkpoint_metadata() {
+        let expected_sum = 12;
+        let expected_context_sum = 22;
+        let expected_time = 10;
+        let expected_count = 7;
 
-/// The structural effect of one checkpoint-horizon advancement.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AdvanceResult {
-    pub removed_checkpoints: usize,
+        let events = [TestEvent(20, 3), TestEvent(20, 4)];
+        let initial = Checkpoint { snapshot: TestSnapshot { time: expected_time, sum: 5 }, history_event_count: expected_count };
+        let mut plain = initial.clone();
+        let mut contextual = initial;
+        let context = 10u64;
+
+        TestEvent::apply(&mut plain, events.iter(), &());
+        TestEvent::apply(&mut contextual, events.iter(), &context);
+
+        assert_eq!(plain.snapshot.sum, expected_sum);
+        assert_eq!(contextual.snapshot.sum, expected_context_sum);
+        assert_eq!(plain.snapshot.time, expected_time);
+        assert_eq!(contextual.snapshot.time, expected_time);
+        assert_eq!(plain.history_event_count, expected_count);
+        assert_eq!(contextual.history_event_count, expected_count);
+    }
 }
