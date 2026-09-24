@@ -69,7 +69,9 @@ where
             return;
         }
         if let Some(store) = &mut self.store {
-            let application = Application { snapshot_id: self.snapshot_id, wrapper: std::cell::RefCell::new(context), live: true };
+            // Reconstruct retained state without republishing historical effects.
+            // Consumer compaction still runs through the forwarding hook below.
+            let application = Application { snapshot_id: self.snapshot_id, wrapper: std::cell::RefCell::new(context), live: false };
             store
                 .forward(horizon.clone(), &application, |snapshot, time, application| {
                     application.wrapper.borrow_mut().retain_snapshot(snapshot, time);
@@ -234,6 +236,7 @@ mod tests {
         let expected_sum = 7;
         let expected_compacted = 3;
         let expected_hooks = vec![Time(10), Time(19)];
+        let expected_effects = vec![Time(20)];
 
         let mut store = Adapter::create(7, &CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 1 } }, &Time(0));
         let mut context = Context::default();
@@ -241,6 +244,7 @@ mod tests {
         store.insert(event(2, 20, 4), &Time(0));
 
         store.forward(&Time(20), &mut context);
+        let forwarding_effects = context.effects.clone();
         store.prune();
         let rejected_query = store.query(Time(19), &mut context);
         let retained = store.query_events(&Time(0), &Time(30));
@@ -248,10 +252,11 @@ mod tests {
         let actual = store.query(Time(20), &mut context).unwrap();
 
         assert!(rejected_query.is_none());
+        assert!(forwarding_effects.is_empty());
         assert_eq!(retained.iter().map(|event| event.event_id()).collect::<Vec<_>>(), vec![2]);
         assert_eq!(actual.compacted, expected_compacted);
         assert_eq!(actual.compacted + actual.recent, expected_sum);
         assert_eq!(context.forwards, expected_hooks);
-        assert_eq!(context.effects, vec![Time(10), Time(20)]);
+        assert_eq!(context.effects, expected_effects);
     }
 }

@@ -61,7 +61,7 @@ current canonical batch. All effective partitions see that preceding count;
 the snapshot kernel increments it after application. Consumers must not treat
 it as the resulting count or use it as a newly generated publication identity.
 
-Live processing and forwarding use `replay_event_batch`; queries use only
+Live processing uses `replay_event_batch`; queries and forwarding use only
 `apply_event_batch` and never publish live effects. Forwarding additionally calls
 `retain_snapshot` after consumed timestamps and at the horizon's predecessor.
 That hook may compact consumer data without changing observable state.
