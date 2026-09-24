@@ -194,7 +194,7 @@ mod tests {
             .warm_up_time(std::time::Duration::from_millis(200))
             .measurement_time(std::time::Duration::from_secs(1))
             .sample_size(30);
-        criterion.bench_function("checkpoints/unit/apply_1000_timestamps/running_sum", |b| {
+        criterion.bench_function("snapshots/unit/apply_1000_timestamps/running_sum", |b| {
             b.iter(|| {
                 let mut checkpoint = Checkpoint { snapshot: TestSnapshot { time: 0, sum: 0 }, history_event_count: 0 };
                 apply(&mut checkpoint, std::hint::black_box(&events).iter(), std::hint::black_box(&()));

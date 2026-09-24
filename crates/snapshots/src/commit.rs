@@ -182,7 +182,7 @@ mod tests {
             .warm_up_time(std::time::Duration::from_millis(200))
             .measurement_time(std::time::Duration::from_secs(1))
             .sample_size(30);
-        criterion.bench_function("checkpoints/unit/commit/replace_and_set_dirty", |b| {
+        criterion.bench_function("snapshots/unit/commit/replace_and_set_dirty", |b| {
             b.iter(|| {
                 commit(black_box(&mut store), black_box(&working), black_box(&mut index), |access| {
                     access.replace_checkpoint(black_box(0));

@@ -347,13 +347,13 @@ mod tests {
             .warm_up_time(std::time::Duration::from_millis(200))
             .measurement_time(std::time::Duration::from_secs(1))
             .sample_size(30);
-        criterion.bench_function("checkpoints/unit/playback/new", |b| {
+        criterion.bench_function("snapshots/unit/playback/new", |b| {
             b.iter(|| {
                 black_box(Playback::new(black_box(&mut store), black_box(0)));
             });
         });
         let mut playback = Playback::new(&mut store, 0);
-        criterion.bench_function("checkpoints/unit/playback/begin_100_events", |b| {
+        criterion.bench_function("snapshots/unit/playback/begin_100_events", |b| {
             b.iter(|| {
                 let (checkpoint, events) = black_box(&mut playback).begin();
                 let sum = events.map(|event| black_box(event.1)).sum::<Time>();
@@ -361,7 +361,7 @@ mod tests {
             });
         });
         playback.checkpoint.history_event_count = interval;
-        criterion.bench_function("checkpoints/unit/playback/commit", |b| {
+        criterion.bench_function("snapshots/unit/playback/commit", |b| {
             b.iter(|| {
                 playback.interval_start_count = black_box(0);
                 black_box(&mut playback).commit(|_| {});
