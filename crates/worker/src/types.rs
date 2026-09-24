@@ -72,7 +72,7 @@ pub trait Completion<R> {
 
 impl<R> Completion<R> for crossbeam_channel::Sender<Vec<R>> {
     fn reject(self, rejections: Vec<R>) {
-        let _ = self.send(rejections);
+        let _ = crossbeam_channel::Sender::send(&self, rejections);
     }
 }
 
@@ -172,10 +172,12 @@ pub trait IncrementalCheckpoints<S>: Checkpoints<S> {
     fn step(&mut self, events: &S, context: &mut Self::Context, target: &Self::Time);
 }
 
-/// Reports a worker's earliest pending timestamp after every router fence.
+/// Reports safe-pruning measurements and successfully completed pruning passes.
 pub struct Coordination<T> {
     pub router_count: usize,
     pub report: Box<dyn FnMut(u64, Option<T>) + Send>,
+    /// Called only after every history and retention hook in a pass finishes.
+    pub pruned: Box<dyn FnMut(T) + Send>,
 }
 
 /// Read-only checkpoint reconstruction required by worker queries.
@@ -257,6 +259,8 @@ pub trait WorkInput {
     type SnapshotListen;
     type Advance;
 
+    // Keep the five caller-selected message types explicit at this boundary.
+    #[allow(clippy::type_complexity)]
     fn into_kind(self) -> WorkInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::SnapshotListen, Self::Advance>;
 }
 
@@ -274,17 +278,16 @@ pub(crate) struct SnapshotSlot<S, K, C, R> {
     pub(crate) checkpoints: Option<K>,
     pub(crate) dirty: bool,
     pub(crate) waiters: Vec<Request<C, R>>,
-    pub(crate) notification_ids: Vec<NotificationId>,
 }
 
 impl<S, K, C, R> SnapshotSlot<S, K, C, R> {
     pub(crate) const fn metadata_only() -> Self {
-        Self { events: None, checkpoints: None, dirty: false, waiters: Vec::new(), notification_ids: Vec::new() }
+        Self { events: None, checkpoints: None, dirty: false, waiters: Vec::new() }
     }
 
     #[cfg(test)]
     pub(crate) fn with_events(events: S) -> Self {
-        Self { events: Some(events), checkpoints: None, dirty: false, waiters: Vec::new(), notification_ids: Vec::new() }
+        Self { events: Some(events), checkpoints: None, dirty: false, waiters: Vec::new() }
     }
 }
 
@@ -342,6 +345,44 @@ where
     }
 }
 
+/// Storage operations needed by the timestamp-driven worker.
+/// The orchestrator adapts its snapshot store to this contract.
+pub trait SnapshotStore<I>: Sized {
+    type Config;
+    type Context;
+    type Time: AdvanceTime;
+    type Snapshot;
+    type Rejection;
+
+    fn create(snapshot_id: u128, config: &Self::Config, horizon: &Self::Time) -> Self;
+    /// Reject inputs before admission_horizon, including while forwarding is queued.
+    /// A duplicate must not invalidate progress and must return changed = false.
+    fn insert(&mut self, input: I, admission_horizon: &Self::Time) -> EventInsert<Self::Rejection>;
+    /// Timestamp of an input, used by the worker to schedule changed histories.
+    fn event_time(input: &I) -> Self::Time;
+    /// Process complete timestamp batches through time, inclusively.
+    fn process_until(&mut self, time: &Self::Time, context: &mut Self::Context);
+    /// Reconstruct fresh state without publishing effects or changing replay progress.
+    fn query(&mut self, time: Self::Time, context: &mut Self::Context) -> Option<Box<Self::Snapshot>>;
+    fn query_events(&self, from: &Self::Time, to: &Self::Time) -> Vec<I>
+    where
+        I: Clone;
+    /// Establish the checkpoint preceding horizon, including forwarding hooks.
+    fn forward(&mut self, horizon: &Self::Time, context: &mut Self::Context);
+    /// Remove history made unnecessary by the last successful forward.
+    fn prune(&mut self);
+}
+
+pub(crate) struct StoreSlot<S> {
+    pub(crate) store: Option<S>,
+    pub(crate) notification_ids: Vec<NotificationId>,
+}
+impl<S> StoreSlot<S> {
+    pub(crate) fn metadata_only() -> Self {
+        Self { store: None, notification_ids: Vec::new() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::SnapshotSlot;
@@ -354,6 +395,5 @@ mod tests {
         assert!(slot.checkpoints.is_none());
         assert!(!slot.dirty);
         assert!(slot.waiters.is_empty());
-        assert!(slot.notification_ids.is_empty());
     }
 }

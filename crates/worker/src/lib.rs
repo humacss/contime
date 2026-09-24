@@ -13,6 +13,6 @@ mod work;
 pub use types::{
     AdvanceInput, AdvanceOutput, AdvanceTime, ApplyBatch, ApplyInput, Checkpoints, Completion, Coordination, EventInsert, EventQueryInput,
     EventQueryResponse, Events, IncrementalCheckpoints, QueryCheckpoints, QueryEvents, RouteInput, RoutedInput, SnapshotListenInput,
-    SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, WorkInput, WorkInputKind, WorkerConfig,
+    SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput, WorkInputKind, WorkerConfig,
 };
 pub use work::{work, work_messages};

@@ -1,37 +1,42 @@
 use std::marker::PhantomData;
-use std::sync::atomic::AtomicUsize;
+
+#[cfg(test)]
+pub(crate) mod testing {
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+    pub struct Time(pub i64);
+
+    impl contime_checkpoints::Timestamp for Time {
+        fn previous(&self) -> Option<Self> {
+            self.0.checked_sub(1).map(Self)
+        }
+    }
+    impl contime_worker::AdvanceTime for Time {
+        fn saturating_sub(&self, other: &Self) -> Self {
+            Self(self.0.saturating_sub(other.0))
+        }
+    }
+}
 use std::sync::Arc;
 
-use contime_memory::{ConservativeTrackedSize, TrackedArc};
 use crossbeam_channel::{Receiver, Sender};
 
-/// Process-wide conservative memory accounting shared by every core adapter.
-#[derive(Clone)]
-pub struct MemoryBudget {
-    pub(crate) state: Arc<MemoryState>,
-}
-
-pub(crate) struct MemoryState {
-    pub(crate) used: AtomicUsize,
-    pub(crate) maximum: usize,
-    pub(crate) buffer: usize,
-}
-
 /// The event information required by the complete apply pipeline.
-pub trait Input: ConservativeTrackedSize + Send + Sync + 'static {
-    type Time: contime_worker::AdvanceTime + Send + Sync + 'static;
-
+pub trait Input:
+    contime_checkpoints::Event<Time: contime_worker::AdvanceTime + contime_checkpoints::Timestamp + Send + Sync + 'static>
+    + Send
+    + Sync
+    + 'static
+{
     fn event_id(&self) -> u128;
-    fn time(&self) -> Self::Time;
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128));
 }
 
-/// One event whose retained allocation and shared handles are memory tracked.
-pub struct TrackedEvent<I>
+/// An immutable event shared by its routed snapshot histories.
+pub struct SharedEvent<I>
 where
     I: Input,
 {
-    pub(crate) inner: TrackedArc<I, MemoryBudget>,
+    pub(crate) inner: Arc<I>,
 }
 
 /// A core-owned reason returned at the public apply boundary.
@@ -40,7 +45,6 @@ pub enum RejectionReason {
     BeforeHistoryHorizon,
     BeforeSafeTime,
     BeforeSourceTime,
-    MemoryFull,
 }
 
 /// Request completion forwarded unchanged from API admission to the worker.
@@ -59,7 +63,7 @@ pub struct RouterBatch<I>
 where
     I: Input,
 {
-    pub(crate) inputs: Vec<TrackedEvent<I>>,
+    pub(crate) inputs: Vec<SharedEvent<I>>,
     pub(crate) completion: CompletionHandle,
 }
 
@@ -76,7 +80,7 @@ where
     pub(crate) snapshot_id: u128,
     pub(crate) from: T,
     pub(crate) to: T,
-    pub(crate) response: Sender<Vec<TrackedEvent<I>>>,
+    pub(crate) response: Sender<Vec<SharedEvent<I>>>,
 }
 
 /// Notification emitted by a registered snapshot listener.
@@ -112,6 +116,8 @@ where
     Fence { round: u64, observed: Sender<u64> },
     Internal { source: I::Time, batch: RouterBatch<I> },
     Report { round: u64, worker: usize, minimum: Option<I::Time> },
+    Pruned { worker: usize, horizon: I::Time },
+    SubscribePrunedHorizon(Sender<I::Time>),
     Shutdown,
 }
 
@@ -121,7 +127,7 @@ where
     I: Input,
 {
     pub(crate) snapshot_id: u128,
-    pub(crate) input: TrackedEvent<I>,
+    pub(crate) input: SharedEvent<I>,
 }
 
 /// One routed apply batch consumed by a worker.
@@ -150,34 +156,30 @@ pub(crate) struct History<I>
 where
     I: Input,
 {
-    pub(crate) events: contime_events::EventHistory<TrackedEvent<I>>,
+    pub(crate) events: contime_events::EventHistory<SharedEvent<I>>,
 }
 
 pub(crate) enum HistoryIter<'a, I>
 where
     I: Input,
 {
-    All(contime_events::EventHistoryIter<'a, TrackedEvent<I>>),
-    Range(contime_events::EventHistoryRangeIter<'a, TrackedEvent<I>>),
+    All(contime_events::EventHistoryIter<'a, SharedEvent<I>>),
+    Range(contime_events::EventHistoryRangeIter<'a, SharedEvent<I>>),
 }
 
 pub(crate) struct CheckpointStorageConfig {
-    pub(crate) checkpoints: contime_checkpoints::CheckpointConfig,
-    pub(crate) budget: MemoryBudget,
+    pub(crate) checkpoints: crate::checkpoints::CheckpointConfig,
 }
 
-pub(crate) struct CheckpointState<S>
+pub(crate) struct CheckpointStorage<I, S, W>
 where
-    S: contime_checkpoints::Snapshot,
+    I: Input,
+    S: contime_checkpoints::Snapshot<Time = I::Time>,
 {
-    pub(crate) checkpoints: contime_checkpoints::CheckpointStore<S>,
-}
-
-pub(crate) struct CheckpointStorage<S, W>
-where
-    S: contime_checkpoints::Snapshot + ConservativeTrackedSize,
-{
-    pub(crate) state: contime_memory::TrackedBox<CheckpointState<S>, MemoryBudget>,
+    pub(crate) snapshot_id: u128,
+    pub(crate) horizon: I::Time,
+    pub(crate) interval: u64,
+    pub(crate) store: Option<contime_checkpoints::SnapshotStore<S, History<I>>>,
     pub(crate) wrapper: PhantomData<fn() -> W>,
 }
 
@@ -197,12 +199,12 @@ where
 pub struct WorkerProcess<I, S, W>
 where
     I: Input,
-    S: contime_checkpoints::Snapshot + ConservativeTrackedSize,
+    S: contime_checkpoints::Snapshot,
 {
     pub(crate) worker: contime_worker::WorkerConfig,
-    pub(crate) checkpoints: contime_checkpoints::CheckpointConfig,
+    pub(crate) checkpoints: crate::checkpoints::CheckpointConfig,
     pub(crate) history_retention: I::Time,
-    pub(crate) budget: MemoryBudget,
+
     pub(crate) wrapper: W,
     pub(crate) activity: Receiver<Sender<bool>>,
     pub(crate) coordination: Option<contime_worker::Coordination<I::Time>>,
@@ -215,14 +217,15 @@ pub struct ConTimeConfig<T> {
     pub router_count: usize,
     pub worker_count: usize,
     pub placement: contime_router::Placement,
-    pub memory_limit: usize,
-    pub memory_buffer: usize,
+    /// Minimum wall-clock spacing between safe-pruning measurement rounds.
+    /// Zero starts the next required round immediately; safety fences still apply.
+    pub pruning_interval: std::time::Duration,
     pub history_retention: T,
     pub worker: contime_worker::WorkerConfig,
-    pub checkpoints: contime_checkpoints::CheckpointConfig,
+    pub checkpoints: crate::checkpoints::CheckpointConfig,
 }
 
-/// A running, memory-accounted apply-and-query pipeline.
+/// A running apply-and-query pipeline.
 pub struct ConTime<I, S, W>
 where
     I: Input,
@@ -232,7 +235,7 @@ where
     pub(crate) coordinator: std::thread::JoinHandle<()>,
     pub(crate) errors: Receiver<contime_api::RejectionMessage<RejectionReason>>,
     pub(crate) error_sender: Sender<contime_api::RejectionMessage<RejectionReason>>,
-    pub(crate) budget: MemoryBudget,
+
     pub(crate) subscriptions: Vec<Sender<Sender<bool>>>,
     pub(crate) queues: Vec<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub(crate) types: PhantomData<fn() -> (S, W)>,

@@ -72,7 +72,7 @@ fn happy(#[case] horizon: u64, #[case] interval: u64, #[case] compacted_sum: u64
     let before_prune = snapshots.query(Time(horizon), &()).unwrap();
     snapshots.prune();
     let after_prune = snapshots.query(Time(horizon), &()).unwrap();
-    snapshots.replay(Time(30), &()).unwrap();
+    snapshots.process_until(Time(30), &()).unwrap();
     let replayed = snapshots.query(Time(30), &()).unwrap();
     snapshots.forward(Time(40), &(), compact).unwrap();
     snapshots.prune();

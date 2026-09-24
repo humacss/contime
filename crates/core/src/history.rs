@@ -1,9 +1,8 @@
-use contime_checkpoints::{CheckpointKey, EventRef};
 use contime_events::Insert;
 use contime_worker::EventInsert;
 
 use crate::types::{History, HistoryIter};
-use crate::{Input, RejectionMessage, RejectionReason, TrackedEvent};
+use crate::{Input, RejectionMessage, RejectionReason, SharedEvent};
 
 impl<I> History<I>
 where
@@ -13,7 +12,17 @@ where
         Self { events: contime_events::EventHistory::with_horizon(horizon) }
     }
 
-    pub(crate) fn insert(&mut self, input: TrackedEvent<I>) -> EventInsert<RejectionMessage<RejectionReason>> {
+    #[cfg(test)]
+    pub(crate) fn dirty_time(&self) -> &I::Time {
+        self.events.dirty_time()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn acknowledge_replay(&mut self) {
+        self.events.mark_replayed();
+    }
+
+    pub(crate) fn insert(&mut self, input: SharedEvent<I>) -> EventInsert<RejectionMessage<RejectionReason>> {
         let event_id = input.event_id();
         match self.events.insert(input) {
             Insert::Inserted => EventInsert { changed: true, rejections: Vec::new() },
@@ -26,7 +35,7 @@ where
     }
 }
 
-impl<I> contime_worker::Events<TrackedEvent<I>> for History<I>
+impl<I> contime_worker::Events<SharedEvent<I>> for History<I>
 where
     I: Input,
 {
@@ -38,7 +47,7 @@ where
         Self::with_horizon(horizon.clone())
     }
 
-    fn insert(&mut self, input: TrackedEvent<I>) -> EventInsert<Self::Rejection> {
+    fn insert(&mut self, input: SharedEvent<I>) -> EventInsert<Self::Rejection> {
         self.insert(input)
     }
 
@@ -51,13 +60,13 @@ where
     }
 }
 
-impl<I> contime_worker::QueryEvents<TrackedEvent<I>> for History<I>
+impl<I> contime_worker::QueryEvents<SharedEvent<I>> for History<I>
 where
     I: Input,
 {
     type Time = I::Time;
 
-    fn clone_between(&self, from: &Self::Time, to: &Self::Time) -> Vec<TrackedEvent<I>> {
+    fn clone_between(&self, from: &Self::Time, to: &Self::Time) -> Vec<SharedEvent<I>> {
         self.events.clone_between(from, to)
     }
 }
@@ -66,132 +75,128 @@ impl<'a, I> Iterator for HistoryIter<'a, I>
 where
     I: Input,
 {
-    type Item = EventRef<'a, I::Time, I>;
+    type Item = &'a SharedEvent<I>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = match self {
             Self::All(iter) => iter.next(),
             Self::Range(iter) => iter.next(),
         }?;
-        Some(EventRef { time: &next.0.time, event_id: next.0.event_id, event: next.1.as_ref() })
+        Some(next.1)
     }
 }
 
-impl<I> contime_checkpoints::Events for History<I>
+impl<I> contime_checkpoints::EventStore for History<I>
 where
     I: Input,
 {
     type Time = I::Time;
-    type Event = I;
+    type Event = SharedEvent<I>;
     type Iter<'a>
         = HistoryIter<'a, I>
     where
         Self: 'a;
 
-    fn dirty_time(&self) -> &Self::Time {
-        self.events.dirty_time()
-    }
-
-    fn iter_after(&self, boundary: Option<&CheckpointKey<Self::Time>>) -> Self::Iter<'_> {
+    fn iter_after(&self, boundary: Option<&Self::Time>) -> Self::Iter<'_> {
         match boundary {
-            Some(boundary) => HistoryIter::Range(
-                self.events.iter_after(&contime_events::EventKey { time: boundary.time.clone(), event_id: boundary.event_id }),
-            ),
+            Some(boundary) => {
+                HistoryIter::Range(self.events.iter_after(&contime_events::EventKey { time: boundary.clone(), event_id: u128::MAX }))
+            }
             None => HistoryIter::All(self.events.iter()),
         }
     }
 
-    fn acknowledge_replay(&mut self) {
-        self.events.mark_replayed();
+    fn prune_before(&mut self, horizon: &Self::Time) {
+        self.events.prune_before(horizon);
+    }
+}
+
+impl<I: Input> contime_checkpoints::InsertEventStore for History<I> {
+    fn insert(&mut self, event: SharedEvent<I>) -> contime_checkpoints::Insert {
+        match self.events.insert(event) {
+            Insert::Inserted => contime_checkpoints::Insert::Inserted,
+            Insert::Duplicate => contime_checkpoints::Insert::Duplicate,
+            Insert::BeforeHorizon => contime_checkpoints::Insert::BeforeHorizon,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::types::testing::Time;
     use std::hint::black_box;
 
-    use contime_checkpoints::Events as ReplayEvents;
-    use contime_memory::ConservativeTrackedSize;
+    use contime_checkpoints::EventStore as ReplayEvents;
+
     use contime_worker::Events as WorkerEvents;
     use criterion::{BatchSize, Criterion};
 
     use crate::input::prepare_inputs;
     use crate::types::History;
-    use crate::{Input, MemoryBudget};
+    use crate::Input;
 
     #[derive(Debug)]
     struct TestInput {
         id: u128,
-        time: i64,
+        time: Time,
     }
 
-    impl ConservativeTrackedSize for TestInput {
-        fn conservative_tracked_size(&self) -> usize {
-            32
-        }
-    }
-
-    impl Input for TestInput {
-        type Time = i64;
-
-        fn event_id(&self) -> u128 {
-            self.id
-        }
+    impl contime_checkpoints::Event for TestInput {
+        type Time = Time;
 
         fn time(&self) -> Self::Time {
             self.time
         }
-
+    }
+    impl Input for TestInput {
+        fn event_id(&self) -> u128 {
+            self.id
+        }
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
             emit(7);
         }
     }
 
-    fn event(budget: &MemoryBudget, id: u128, time: i64) -> crate::TrackedEvent<TestInput> {
-        prepare_inputs(budget, vec![TestInput { id, time }]).unwrap().pop().unwrap()
+    fn event(id: u128, time: Time) -> crate::SharedEvent<TestInput> {
+        prepare_inputs(vec![TestInput { id, time }]).pop().unwrap()
     }
 
     #[test]
     fn history_deduplicates_and_exposes_raw_events_in_canonical_order() {
-        let budget = MemoryBudget::new(10_000, 100);
-        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &0);
+        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &Time(0));
 
-        assert!(history.insert(event(&budget, 2, 20)).changed);
-        assert!(history.insert(event(&budget, 1, 10)).changed);
-        assert!(!history.insert(event(&budget, 1, 30)).changed);
+        assert!(history.insert(event(2, Time(20))).changed);
+        assert!(history.insert(event(1, Time(10))).changed);
+        assert!(!history.insert(event(1, Time(30))).changed);
 
-        let retained = ReplayEvents::iter_after(&history, None)
-            .map(|event| (event.event_id, event.time.to_owned(), event.event.id))
-            .collect::<Vec<_>>();
-        assert_eq!(retained, vec![(1, 10, 1), (2, 20, 2)]);
-        assert_eq!(ReplayEvents::dirty_time(&history), &10);
+        let retained = ReplayEvents::iter_after(&history, None).map(|event| (event.id, event.time, event.id)).collect::<Vec<_>>();
+        assert_eq!(retained, vec![(1, Time(10), 1), (2, Time(20), 2)]);
+        assert_eq!(history.dirty_time(), &Time(10));
     }
 
     #[test]
     fn replay_acknowledgement_moves_dirty_time_to_the_latest_event() {
-        let budget = MemoryBudget::new(10_000, 100);
-        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &0);
-        history.insert(event(&budget, 2, 20));
-        history.insert(event(&budget, 1, 10));
+        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &Time(0));
+        history.insert(event(2, Time(20)));
+        history.insert(event(1, Time(10)));
 
-        ReplayEvents::acknowledge_replay(&mut history);
+        history.acknowledge_replay();
 
-        assert_eq!(ReplayEvents::dirty_time(&history), &20);
+        assert_eq!(history.dirty_time(), &Time(20));
     }
 
     #[test]
-    fn pre_horizon_inputs_are_rejected_and_release_their_tracked_allocation() {
-        let budget = MemoryBudget::new(10_000, 100);
-        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &10);
+    fn pre_horizon_inputs_are_rejected() {
+        let mut history = <History<TestInput> as WorkerEvents<_>>::create(7, &(), &Time(10));
 
-        let rejection = history.insert(event(&budget, 1, 9));
+        let rejection = history.insert(event(1, Time(9)));
 
         assert!(!rejection.changed);
         assert_eq!(rejection.rejections.len(), 1);
         assert_eq!(rejection.rejections[0].event_id, 1);
         assert_eq!(rejection.rejections[0].reason, crate::RejectionReason::BeforeHistoryHorizon);
-        assert_eq!(budget.used(), 0);
-        assert!(history.insert(event(&budget, 2, 10)).changed);
+
+        assert!(history.insert(event(2, Time(10))).changed);
     }
 
     #[test]
@@ -201,9 +206,8 @@ mod tests {
         criterion.bench_function("core/history/1000_ordered_inserts", |bencher| {
             bencher.iter_batched(
                 || {
-                    let budget = MemoryBudget::new(usize::MAX, 0);
-                    let inputs = prepare_inputs(&budget, (0..1_000).map(|id| TestInput { id, time: id as i64 }).collect()).unwrap();
-                    (History::with_horizon(0), inputs)
+                    let inputs = prepare_inputs((0..1_000).map(|id| TestInput { id, time: Time(id as i64) }).collect());
+                    (History::with_horizon(Time(0)), inputs)
                 },
                 |(mut history, inputs)| {
                     for input in inputs {

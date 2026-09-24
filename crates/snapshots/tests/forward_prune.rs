@@ -67,11 +67,11 @@ fn happy(#[case] replay_first: bool) {
     let mut hooks = Vec::new();
 
     if replay_first {
-        snapshots.replay(Time(30), &context).unwrap();
+        snapshots.process_until(Time(30), &context).unwrap();
     }
     snapshots.forward(Time(20), &context, |_, time, _| hooks.push(*time)).unwrap();
     let expired = snapshots.query(Time(19), &context);
-    snapshots.replay(Time(30), &context).unwrap();
+    snapshots.process_until(Time(30), &context).unwrap();
     let actual = snapshots.query(Time(30), &context).unwrap();
 
     assert_eq!(actual.sum, expected_sum);
@@ -115,7 +115,7 @@ fn multiple_forwards_can_be_followed_by_one_prune() {
     snapshots.prune();
     let calls_after_prune = context.get();
     let expired = snapshots.query(Time(29), &context);
-    snapshots.replay(Time(30), &context).unwrap();
+    snapshots.process_until(Time(30), &context).unwrap();
     let actual = snapshots.query(Time(30), &context).unwrap();
 
     assert_eq!(*actual, expected);

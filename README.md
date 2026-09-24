@@ -1,5 +1,15 @@
 # contime
 
+The modern [`contime-core`](crates/core/README.md) pipeline no longer includes
+memory accounting, tracked ownership or budget-based rejection. The `crates/memory`
+subcrate has been removed for now: these mechanisms added unnecessary complexity
+while the design is evolving and are not needed at this stage. We plan to revisit
+memory accounting and budget management later. The previous implementation is
+available in Git at `085b00c44d12b040d9f80f3f7a74a8341d2b0644`, under `crates/memory`.
+History pruning remains enabled; removing accounting does not prevent measuring
+or investigating actual process memory usage. The root implementation described
+below is legacy.
+
 `contime` is an in-memory Rust crate that builds queryable continuous-time state from unreliable event streams.
 
 `contime` supports bounded memory, enables concurrent multi-threaded/multi-processor processing, designed for very cheap best and average case processing.

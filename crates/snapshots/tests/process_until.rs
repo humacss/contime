@@ -1,3 +1,4 @@
+//! Processing through inclusive targets retains progress for later calls.
 use contime_snapshots::{Apply, Checkpoint, Event, EventStore, Snapshot, SnapshotStore};
 use std::cell::RefCell;
 
@@ -68,10 +69,10 @@ fn happy(#[case] interval: u64) {
     let mut store = SnapshotStore::new(events, TestSnapshot { time: 0, balance: 0 }, interval);
     let context = Context::default();
 
-    store.replay(0, &context).unwrap();
-    store.replay(10, &context).unwrap();
-    store.replay(20, &context).unwrap();
-    store.replay(100, &context).unwrap();
+    store.process_until(0, &context).unwrap();
+    store.process_until(10, &context).unwrap();
+    store.process_until(20, &context).unwrap();
+    store.process_until(100, &context).unwrap();
     let replay_batches = context.batches.borrow().clone();
     let actual = store.query(20, &context).unwrap();
     let historical = store.query(10, &context).unwrap();
@@ -91,9 +92,9 @@ fn target_before_next_event_leaves_it_pending() {
     let mut store = SnapshotStore::new(events, expected_before.clone(), 1);
     let context = Context::default();
 
-    store.replay(9, &context).unwrap();
+    store.process_until(9, &context).unwrap();
     let before = store.query(9, &context).unwrap();
-    store.replay(10, &context).unwrap();
+    store.process_until(10, &context).unwrap();
     let after = store.query(10, &context).unwrap();
 
     assert_eq!(*before, expected_before);

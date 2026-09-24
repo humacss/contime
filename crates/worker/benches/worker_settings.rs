@@ -201,18 +201,17 @@ fn benchmark_ownership_for_size<const PAYLOAD_BYTES: usize>(criterion: &mut Crit
 fn benchmark_work_settings(criterion: &mut Criterion) {
     for snapshot_count in [1, 4] {
         let mut group = criterion.benchmark_group(format!("worker/settings/1000_batches/{snapshot_count}_snapshots"));
-        for replay_budget in [0, 1, 4, 16] {
-            group.bench_function(format!("{replay_budget}_replays_per_receive"), |bencher| {
-                bencher.iter_batched(
-                    || (input_batches(1_000, snapshot_count), Arc::new(AtomicUsize::new(0))),
-                    |(receiver, context)| {
-                        work::<_, BenchEvents, BenchCheckpoints>(receiver, config(replay_budget), (), (), Arc::clone(&context));
-                        black_box(context.load(Ordering::Relaxed));
-                    },
-                    BatchSize::LargeInput,
-                );
-            });
-        }
+        group.throughput(Throughput::Elements(1_000 * snapshot_count as u64));
+        group.bench_function("coalesced", |bencher| {
+            bencher.iter_batched(
+                || (input_batches(1_000, snapshot_count), Arc::new(AtomicUsize::new(0))),
+                |(receiver, context)| {
+                    work::<_, BenchEvents, BenchCheckpoints>(receiver, config(0), (), (), Arc::clone(&context));
+                    black_box(context.load(Ordering::Relaxed));
+                },
+                BatchSize::LargeInput,
+            );
+        });
         group.finish();
     }
 

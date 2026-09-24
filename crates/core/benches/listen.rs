@@ -1,11 +1,26 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use contime_checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
+use contime_core::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
 use contime_core::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, SnapshotListenerMessage};
-use contime_memory::ConservativeTrackedSize;
+
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+struct Time(u64);
+
+impl contime_core::checkpoints::Timestamp for Time {
+    fn previous(&self) -> Option<Self> {
+        self.0.checked_sub(1).map(Self)
+    }
+}
+
+impl contime_worker::AdvanceTime for Time {
+    fn saturating_sub(&self, retention: &Self) -> Self {
+        Self(self.0.saturating_sub(retention.0))
+    }
+}
 
 const EVENTS_PER_BATCH: usize = 1_000;
 const BATCHES_PER_SAMPLE: usize = 100;
@@ -15,23 +30,17 @@ struct BenchEvent {
     snapshot_id: u128,
 }
 
-impl ConservativeTrackedSize for BenchEvent {
-    fn conservative_tracked_size(&self) -> usize {
-        64
+impl contime_checkpoints::Event for BenchEvent {
+    type Time = Time;
+
+    fn time(&self) -> Self::Time {
+        Time(1)
     }
 }
-
 impl Input for BenchEvent {
-    type Time = u64;
-
     fn event_id(&self) -> u128 {
         self.id
     }
-
-    fn time(&self) -> Self::Time {
-        1
-    }
-
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
         emit(self.snapshot_id);
     }
@@ -39,19 +48,16 @@ impl Input for BenchEvent {
 
 #[derive(Clone, Default)]
 struct BenchSnapshot {
-    time: u64,
+    time: Time,
     count: usize,
 }
 
-impl ConservativeTrackedSize for BenchSnapshot {
-    fn conservative_tracked_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-    }
-}
-
 impl Snapshot for BenchSnapshot {
-    type Time = u64;
+    type Time = Time;
 
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
     fn set_time(&mut self, time: Self::Time) {
         self.time = time;
     }
@@ -62,19 +68,19 @@ impl ApplyEvents<BenchEvent> for BenchSnapshot {
         Self::default()
     }
 
-    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Time, BenchEvent>) {
-        self.count += batch.events.len();
+    fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Self::Time, BenchEvent>) {
+        self.count += batch.events.count();
     }
 }
 
-fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<u64> {
+fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
         placement: contime_router::Placement::default(),
-        memory_limit: usize::MAX,
-        memory_buffer: 0,
-        history_retention: 0,
+        pruning_interval: std::time::Duration::from_millis(100),
+
+        history_retention: Time(0),
         worker: contime_worker::WorkerConfig {
             maximum_dirty_age: Duration::from_secs(60),
             replays_per_receive: usize::MAX,
@@ -85,14 +91,14 @@ fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<u64> {
     }
 }
 
-fn receive_registration_batches(receiver: &Receiver<SnapshotListenerMessage<u64>>, expected_ids: usize) -> usize {
+fn receive_registration_batches(receiver: &Receiver<SnapshotListenerMessage<Time>>, expected_ids: usize) -> usize {
     let mut batches = 0;
     let mut registered = BTreeSet::new();
     while registered.len() < expected_ids {
         let SnapshotListenerMessage::Registered { time, snapshot_ids } = receiver.recv().unwrap() else {
             panic!("replay arrived while listener registration was incomplete")
         };
-        assert_eq!(time, u64::MAX);
+        assert_eq!(time, Time(u64::MAX));
         registered.extend(snapshot_ids);
         batches += 1;
     }
@@ -100,7 +106,7 @@ fn receive_registration_batches(receiver: &Receiver<SnapshotListenerMessage<u64>
     batches
 }
 
-fn receive_replay_batches(receiver: &Receiver<SnapshotListenerMessage<u64>>, expected_ids: usize) {
+fn receive_replay_batches(receiver: &Receiver<SnapshotListenerMessage<Time>>, expected_ids: usize) {
     let mut replayed = BTreeSet::new();
     // Called after idle: coalescing and timestamp steps determine notification
     // count, so verify every affected snapshot instead of assuming batch count.
@@ -108,7 +114,7 @@ fn receive_replay_batches(receiver: &Receiver<SnapshotListenerMessage<u64>>, exp
         let SnapshotListenerMessage::Replayed { time, snapshot_ids } = message else {
             panic!("unexpected registration acknowledgement in measured workload")
         };
-        assert_eq!(time, u64::MAX);
+        assert_eq!(time, Time(u64::MAX));
         assert!(!snapshot_ids.is_empty());
         replayed.extend(snapshot_ids);
     }
@@ -130,7 +136,7 @@ fn prepare_batches(snapshot_count: usize, batch_count: usize, next_id: &mut u128
 }
 
 fn warm_runtime(contime: &ConTime<BenchEvent, BenchSnapshot, ()>, snapshot_count: usize, next_id: &mut u128) {
-    contime.advance_to(1).unwrap();
+    contime.advance_to(Time(1)).unwrap();
     let (rejections, completed) = unbounded::<RejectionMessage<RejectionReason>>();
     contime.send(prepare_batches(snapshot_count, 1, next_id).pop().unwrap(), rejections).unwrap();
     assert!(completed.into_iter().next().is_none());
@@ -155,7 +161,7 @@ fn benchmark_replay_overhead(criterion: &mut Criterion) {
 
                     let listener = listeners_enabled.then(|| {
                         let (notifications, observed) = unbounded();
-                        contime.send_listen_snapshots(u64::MAX, 0..snapshot_count as u128, notifications).unwrap();
+                        contime.send_listen_snapshots(Time(u64::MAX), 0..snapshot_count as u128, notifications).unwrap();
                         receive_registration_batches(&observed, snapshot_count);
                         observed
                     });

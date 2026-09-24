@@ -87,22 +87,21 @@ impl<I: Input, S, W> ConTime<I, S, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use contime_checkpoints::{ApplyBatch, ApplyEvents, Snapshot};
-    use contime_memory::ConservativeTrackedSize;
+    use crate::checkpoints::{ApplyBatch, ApplyEvents, Snapshot};
+    use crate::types::testing::Time;
 
     #[derive(Clone, Default)]
-    struct Value;
-    impl ConservativeTrackedSize for Value {
-        fn conservative_tracked_size(&self) -> usize {
-            1
+    struct Value(Time);
+
+    impl contime_checkpoints::Event for Value {
+        type Time = Time;
+
+        fn time(&self) -> Time {
+            Time(0)
         }
     }
     impl Input for Value {
-        type Time = u64;
         fn event_id(&self) -> u128 {
-            0
-        }
-        fn time(&self) -> u64 {
             0
         }
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
@@ -110,14 +109,19 @@ mod tests {
         }
     }
     impl Snapshot for Value {
-        type Time = u64;
-        fn set_time(&mut self, _: u64) {}
+        type Time = Time;
+        fn time(&self) -> &Time {
+            &self.0
+        }
+        fn set_time(&mut self, time: Time) {
+            self.0 = time;
+        }
     }
     impl ApplyEvents<Value> for Value {
         fn create(_: u128, _: &Value) -> Self {
-            Self
+            Self(Time(0))
         }
-        fn apply_events(&mut self, _: ApplyBatch<'_, u64, Value>) {}
+        fn apply_events(&mut self, _: ApplyBatch<'_, '_, Time, Value>) {}
     }
 
     fn core() -> ConTime<Value, Value, ()> {
@@ -126,16 +130,16 @@ mod tests {
                 router_count: 1,
                 worker_count: 1,
                 placement: contime_router::Placement::default(),
-                memory_limit: 1_000_000,
-                memory_buffer: 0,
-                history_retention: 0,
+                pruning_interval: std::time::Duration::from_millis(100),
+
+                history_retention: Time(0),
                 worker: contime_worker::WorkerConfig {
                     maximum_dirty_age: Duration::from_millis(1),
                     replays_per_receive: 1,
                     deadline_compaction_minimum: 1_024,
                     deadline_compaction_multiplier: 2,
                 },
-                checkpoints: contime_checkpoints::CheckpointConfig { interval: 100 },
+                checkpoints: crate::checkpoints::CheckpointConfig { interval: 100 },
             },
             (),
         )

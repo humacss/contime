@@ -15,22 +15,14 @@ where
         inputs: impl IntoIterator<Item = I>,
         rejection_sender: Sender<RejectionMessage<RejectionReason>>,
     ) -> Result<(), ApiError> {
-        send_to(&self.budget, &self.input, inputs, rejection_sender)
+        send_to(&self.input, inputs, rejection_sender)
     }
 
     /// Submits causal output from an active application. Outputs must be
     /// enqueued before that application returns and cannot precede its time.
     /// Unlike external input, these records use the proven safe boundary.
     pub fn apply_internal(&self, source: I::Time, inputs: impl IntoIterator<Item = I>) -> Result<(), ApiError> {
-        let inputs = match prepare_inputs(&self.budget, inputs.into_iter().collect()) {
-            Ok(inputs) => inputs,
-            Err(rejections) => {
-                for rejection in rejections {
-                    let _ = self.error_sender.send(rejection);
-                }
-                return Ok(());
-            }
-        };
+        let inputs = prepare_inputs(inputs.into_iter().collect());
         self.input
             .send(RouterMessage::Internal {
                 source,
@@ -41,7 +33,6 @@ where
 }
 
 fn send_to<I, S>(
-    budget: &crate::MemoryBudget,
     output: &Sender<RouterMessage<I, S>>,
     inputs: impl IntoIterator<Item = I>,
     rejection_sender: Sender<RejectionMessage<RejectionReason>>,
@@ -50,54 +41,41 @@ where
     I: Input,
 {
     let inputs = inputs.into_iter().collect::<Vec<_>>();
-    let inputs = match prepare_inputs(budget, inputs) {
-        Ok(inputs) => inputs,
-        Err(rejections) => {
-            for rejection in rejections {
-                let _ = rejection_sender.send(rejection);
-            }
-            return Ok(());
-        }
-    };
+    let inputs = prepare_inputs(inputs);
     contime_api::send::<RouterMessage<I, S>, _, _, _, _>(output, inputs, rejection_sender)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::types::testing::Time;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
-    use contime_checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
-    use contime_memory::ConservativeTrackedSize;
+    use crate::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
+
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::unbounded;
 
     use super::send_to;
-    use crate::{ConTime, ConTimeConfig, Input, MemoryBudget, RejectionMessage, RejectionReason, RouterMessage};
+    use crate::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, RouterMessage};
 
     struct TestInput {
         id: u128,
         value: usize,
     }
 
-    impl ConservativeTrackedSize for TestInput {
-        fn conservative_tracked_size(&self) -> usize {
-            64
+    impl contime_checkpoints::Event for TestInput {
+        type Time = Time;
+
+        fn time(&self) -> Self::Time {
+            Time(1)
         }
     }
-
     impl Input for TestInput {
-        type Time = i64;
-
         fn event_id(&self) -> u128 {
             self.id
         }
-
-        fn time(&self) -> Self::Time {
-            1
-        }
-
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
             emit(7);
         }
@@ -105,19 +83,19 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct TestSnapshot {
+        time: Time,
         value: usize,
     }
 
-    impl ConservativeTrackedSize for TestSnapshot {
-        fn conservative_tracked_size(&self) -> usize {
-            std::mem::size_of::<Self>()
-        }
-    }
-
     impl Snapshot for TestSnapshot {
-        type Time = i64;
+        type Time = Time;
 
-        fn set_time(&mut self, _time: Self::Time) {}
+        fn time(&self) -> &Self::Time {
+            &self.time
+        }
+        fn set_time(&mut self, time: Self::Time) {
+            self.time = time;
+        }
     }
 
     impl ApplyEvents<TestInput> for TestSnapshot {
@@ -125,8 +103,8 @@ mod tests {
             Self::default()
         }
 
-        fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Time, TestInput>) {
-            self.value += batch.events.iter().map(|event| event.value).sum::<usize>();
+        fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Self::Time, TestInput>) {
+            self.value += batch.events.map(|event| event.value).sum::<usize>();
         }
     }
 
@@ -134,20 +112,20 @@ mod tests {
     struct RecordingWrapper(Arc<AtomicUsize>);
 
     impl ApplyWrapper<TestSnapshot, TestInput> for RecordingWrapper {
-        fn apply_event_batch(&mut self, batch: EventBatch<'_, i64, TestInput>, apply_inner: &mut ApplyInner<'_, TestSnapshot>) {
+        fn apply_event_batch(&mut self, batch: EventBatch<'_, '_, Time, TestInput>, apply_inner: &mut ApplyInner<'_, TestSnapshot>) {
             apply_inner.apply_event_batch(batch);
             self.0.store(apply_inner.snapshot().value, Ordering::Relaxed);
         }
     }
 
-    fn config(memory_limit: usize, memory_buffer: usize) -> ConTimeConfig<i64> {
+    fn config() -> ConTimeConfig<Time> {
         ConTimeConfig {
             router_count: 1,
             worker_count: 1,
             placement: contime_router::Placement::default(),
-            memory_limit,
-            memory_buffer,
-            history_retention: 0,
+            pruning_interval: std::time::Duration::from_millis(100),
+
+            history_retention: Time(0),
             worker: contime_worker::WorkerConfig {
                 maximum_dirty_age: Duration::from_micros(100),
                 replays_per_receive: 1,
@@ -162,8 +140,7 @@ mod tests {
     fn receiver_closure_reports_admission_and_idle_wait_reports_application() {
         let observed = Arc::new(AtomicUsize::new(0));
         let contime =
-            ConTime::<TestInput, TestSnapshot, RecordingWrapper>::start(config(100_000, 1_000), RecordingWrapper(Arc::clone(&observed)))
-                .unwrap();
+            ConTime::<TestInput, TestSnapshot, RecordingWrapper>::start(config(), RecordingWrapper(Arc::clone(&observed))).unwrap();
         let (sender, receiver) = unbounded::<RejectionMessage<RejectionReason>>();
 
         contime.send([TestInput { id: 1, value: 5 }], sender.clone()).unwrap();
@@ -172,25 +149,9 @@ mod tests {
 
         assert_eq!(receiver.into_iter().collect::<Vec<_>>(), Vec::new());
         assert_eq!(observed.load(Ordering::Relaxed), 0);
-        contime.advance_to(1).unwrap();
+        contime.advance_to(Time(1)).unwrap();
         contime.wait_until_idle(Duration::from_secs(2)).unwrap();
         assert_eq!(observed.load(Ordering::Relaxed), 12);
-        contime.shutdown();
-    }
-
-    #[test]
-    fn rejected_send_reports_every_input_through_the_supplied_channel() {
-        let observed = Arc::new(AtomicUsize::new(0));
-        let contime =
-            ConTime::<TestInput, TestSnapshot, RecordingWrapper>::start(config(100, 50), RecordingWrapper(Arc::clone(&observed))).unwrap();
-        let (sender, receiver) = unbounded::<RejectionMessage<RejectionReason>>();
-
-        contime.send([TestInput { id: 1, value: 5 }, TestInput { id: 2, value: 7 }], sender).unwrap();
-
-        let rejections = receiver.into_iter().collect::<Vec<_>>();
-        assert_eq!(rejections.len(), 2);
-        assert!(rejections.iter().all(|rejection| rejection.reason == RejectionReason::MemoryFull));
-        assert_eq!(observed.load(Ordering::Relaxed), 0);
         contime.shutdown();
     }
 
@@ -201,15 +162,14 @@ mod tests {
         criterion.bench_function("core/send/prepare_and_forward_1000", |bencher| {
             bencher.iter_batched(
                 || {
-                    let budget = MemoryBudget::new(usize::MAX, 0);
                     let inputs = (0..1_000).map(|id| TestInput { id, value: 1 }).collect::<Vec<_>>();
                     let (rejection_sender, rejection_receiver) = unbounded();
                     let (output, output_receiver) = unbounded::<RouterMessage<TestInput, TestSnapshot>>();
-                    (budget, inputs, rejection_sender, rejection_receiver, output, output_receiver)
+                    (inputs, rejection_sender, rejection_receiver, output, output_receiver)
                 },
-                |(budget, inputs, rejection_sender, rejection_receiver, output, output_receiver)| {
-                    send_to(&budget, &output, inputs, rejection_sender).unwrap();
-                    std::hint::black_box((budget, rejection_receiver, output, output_receiver))
+                |(inputs, rejection_sender, rejection_receiver, output, output_receiver)| {
+                    send_to(&output, inputs, rejection_sender).unwrap();
+                    std::hint::black_box((rejection_receiver, output, output_receiver))
                 },
                 BatchSize::LargeInput,
             );

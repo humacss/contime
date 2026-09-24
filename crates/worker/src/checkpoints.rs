@@ -86,10 +86,9 @@ mod tests {
         fn advance_before(&mut self, _events: &TestEvents, _context: &mut Vec<usize>, _horizon: &u64) {}
     }
 
-    fn snapshot() -> (
-        AHashMap<u128, SnapshotSlot<TestEvents, TestCheckpoints, crossbeam_channel::Sender<Vec<()>>, ()>>,
-        crossbeam_channel::Receiver<Vec<()>>,
-    ) {
+    type TestSnapshots = AHashMap<u128, SnapshotSlot<TestEvents, TestCheckpoints, crossbeam_channel::Sender<Vec<()>>, ()>>;
+
+    fn snapshot() -> (TestSnapshots, crossbeam_channel::Receiver<Vec<()>>) {
         let (completion, responses) = unbounded::<Vec<()>>();
         let request = new_request(completion);
         let mut slot = SnapshotSlot::with_events(TestEvents((0..1_000).collect()));

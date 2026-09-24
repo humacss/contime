@@ -1,32 +1,40 @@
 use std::time::Duration;
 
 use contime_core::{checkpoints, ConTime, ConTimeConfig, Input};
-use contime_memory::ConservativeTrackedSize;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+struct Time(u64);
+
+impl checkpoints::Timestamp for Time {
+    fn previous(&self) -> Option<Self> {
+        self.0.checked_sub(1).map(Self)
+    }
+}
+
+impl contime_worker::AdvanceTime for Time {
+    fn saturating_sub(&self, retention: &Self) -> Self {
+        Self(self.0.saturating_sub(retention.0))
+    }
+}
 
 struct TestEvent {
     id: u128,
-    time: u64,
+    time: Time,
     value: u64,
     snapshot_id: u128,
 }
 
-impl ConservativeTrackedSize for TestEvent {
-    fn conservative_tracked_size(&self) -> usize {
-        128
+impl contime_checkpoints::Event for TestEvent {
+    type Time = Time;
+
+    fn time(&self) -> Time {
+        self.time
     }
 }
-
 impl Input for TestEvent {
-    type Time = u64;
-
     fn event_id(&self) -> u128 {
         self.id
     }
-
-    fn time(&self) -> u64 {
-        self.time
-    }
-
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
         emit(self.snapshot_id);
     }
@@ -35,20 +43,17 @@ impl Input for TestEvent {
 #[derive(Clone, Default)]
 struct TestSnapshot {
     snapshot_id: u128,
-    time: u64,
+    time: Time,
     value: u64,
 }
 
-impl ConservativeTrackedSize for TestSnapshot {
-    fn conservative_tracked_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-    }
-}
-
 impl checkpoints::Snapshot for TestSnapshot {
-    type Time = u64;
+    type Time = Time;
 
-    fn set_time(&mut self, time: u64) {
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Time) {
         self.time = time;
     }
 }
@@ -58,23 +63,23 @@ impl checkpoints::ApplyEvents<TestEvent> for TestSnapshot {
         Self { snapshot_id, ..Self::default() }
     }
 
-    fn apply_events(&mut self, batch: checkpoints::ApplyBatch<'_, u64, TestEvent>) {
-        self.value += batch.events.iter().map(|event| event.value).sum::<u64>();
+    fn apply_events(&mut self, batch: checkpoints::ApplyBatch<'_, '_, Time, TestEvent>) {
+        self.value += batch.events.map(|event| event.value).sum::<u64>();
     }
 }
 
-fn config(router_count: usize, worker_count: usize, retention: u64) -> ConTimeConfig<u64> {
+fn config(router_count: usize, worker_count: usize, retention: u64) -> ConTimeConfig<Time> {
     config_with_replays(router_count, worker_count, retention, 1)
 }
 
-fn config_with_replays(router_count: usize, worker_count: usize, retention: u64, replays_per_receive: usize) -> ConTimeConfig<u64> {
+fn config_with_replays(router_count: usize, worker_count: usize, retention: u64, replays_per_receive: usize) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
         placement: contime_router::Placement::default(),
-        memory_limit: 10_000_000,
-        memory_buffer: 1_000,
-        history_retention: retention,
+        pruning_interval: std::time::Duration::from_millis(100),
+
+        history_retention: Time(retention),
         worker: contime_worker::WorkerConfig {
             maximum_dirty_age: Duration::from_micros(100),
             replays_per_receive,
@@ -90,7 +95,7 @@ fn event(id: u128, time: u64, value: u64) -> TestEvent {
 }
 
 fn event_for(snapshot_id: u128, id: u128, time: u64, value: u64) -> TestEvent {
-    TestEvent { id, time, value, snapshot_id }
+    TestEvent { id, time: Time(time), value, snapshot_id }
 }
 
 #[test]
@@ -102,14 +107,14 @@ fn idle_wait_finishes_all_queued_batches_without_advancing_time() {
         core.send([event_for(id, id, 10, 1)], tx).unwrap();
     }
     core.wait_until_idle(Duration::from_secs(2)).unwrap();
-    let snapshots = core.query_at(10, 0..128).unwrap();
+    let snapshots = core.query_at(Time(10), 0..128).unwrap();
     assert_eq!(snapshots.len(), 128);
     assert!(snapshots.iter().all(|snapshot| snapshot.value == 1));
     // Waiting must not prune or advance history.
     core.apply([event_for(0, 999, 0, 7)]).unwrap();
     core.wait_until_idle(Duration::from_secs(2)).unwrap();
     assert!(core.errors().is_empty());
-    assert_eq!(core.query_at(10, [0]).unwrap()[0].value, 8);
+    assert_eq!(core.query_at(Time(10), [0]).unwrap()[0].value, 8);
     core.shutdown();
 }
 
@@ -121,7 +126,7 @@ fn repeated_idle_subscriptions_do_not_stop_later_work() {
         let (tx, _rx) = crossbeam_channel::unbounded();
         core.send([event_for(7, round, 10, 1)], tx).unwrap();
         core.wait_until_idle(Duration::from_secs(2)).unwrap();
-        assert_eq!(core.query_at(10, [7]).unwrap()[0].value, round as u64 + 1);
+        assert_eq!(core.query_at(Time(10), [7]).unwrap()[0].value, round as u64 + 1);
     }
     core.shutdown();
 }
@@ -147,7 +152,7 @@ struct BlockReplay {
 impl checkpoints::ApplyWrapper<TestSnapshot, TestEvent> for BlockReplay {
     fn replay_event_batch(
         &mut self,
-        batch: checkpoints::EventBatch<'_, u64, TestEvent>,
+        batch: checkpoints::EventBatch<'_, '_, Time, TestEvent>,
         inner: &mut checkpoints::ApplyInner<'_, TestSnapshot>,
     ) {
         inner.apply_event_batch(batch);
@@ -161,13 +166,13 @@ fn idle_wait_includes_after_apply_and_does_not_block_empty_queries() {
     let (entered, observed) = crossbeam_channel::unbounded();
     let (release, blocked) = crossbeam_channel::unbounded();
     let core = ConTime::start(config(2, 2, 1_000), BlockReplay { entered, release: blocked }).unwrap();
-    core.advance_to(10).unwrap();
+    core.advance_to(Time(10)).unwrap();
     let (tx, _rx) = crossbeam_channel::unbounded();
     core.send([event(1, 10, 1)], tx).unwrap();
     observed.recv_timeout(Duration::from_secs(2)).unwrap();
     let completed = core.wait_until_idle(Duration::from_millis(20));
     let (query_tx, query_rx) = crossbeam_channel::unbounded();
-    core.send_query_at(10, [], query_tx).unwrap();
+    core.send_query_at(Time(10), [], query_tx).unwrap();
     let query = query_rx.recv_timeout(Duration::from_secs(2));
     release.send(()).unwrap();
     assert_eq!(completed, Err(contime_core::IdleError::Timeout));
@@ -184,7 +189,7 @@ fn late_buckets_and_boundary_updates_preserve_checkpoints() {
             settings.checkpoints.interval = interval;
             let core = ConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
             core.apply([event(1, 0, 1), event(2, 50, 1)]).unwrap();
-            core.advance_to(50).unwrap();
+            core.advance_to(Time(50)).unwrap();
             core.wait_until_idle(Duration::from_secs(2)).unwrap();
             assert!(core.errors().is_empty());
             let mut expected = 2;
@@ -199,18 +204,18 @@ fn late_buckets_and_boundary_updates_preserve_checkpoints() {
                 assert!(core.errors().is_empty());
                 expected += late_count as u64 * 2;
                 assert_eq!(
-                    core.query_at(200, [7]).unwrap()[0].value,
+                    core.query_at(Time(200), [7]).unwrap()[0].value,
                     expected,
                     "interval={interval} late_count={late_count} round={round}"
                 );
             }
-            core.advance_to(250).unwrap();
+            core.advance_to(Time(250)).unwrap();
             core.wait_until_idle(Duration::from_secs(2)).unwrap();
             core.apply([event(99_000, 200, 1)]).unwrap();
-            core.advance_to(300).unwrap();
+            core.advance_to(Time(300)).unwrap();
             core.wait_until_idle(Duration::from_secs(2)).unwrap();
             assert!(core.errors().is_empty());
-            let snapshots = core.query_at(300, [7]).unwrap();
+            let snapshots = core.query_at(Time(300), [7]).unwrap();
             assert_eq!(snapshots[0].snapshot_id, 7);
             assert_eq!(snapshots[0].value, expected + 1);
             core.shutdown();
@@ -224,7 +229,7 @@ fn uneven_late_buckets_preserve_checkpoint_suffix() {
         let mut settings = config(1, 1, 30);
         settings.checkpoints.interval = interval;
         let core = ConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
-        core.advance_to(30).unwrap();
+        core.advance_to(Time(30)).unwrap();
         let mut seed = 17u64;
         let mut id = 1;
         for round in 0..500 {
@@ -239,7 +244,7 @@ fn uneven_late_buckets_preserve_checkpoint_suffix() {
             core.apply(batch).unwrap();
             core.wait_until_idle(Duration::from_secs(2)).unwrap();
             assert!(core.errors().is_empty(), "interval={interval} round={round}");
-            assert_eq!(core.query_at(50, [7]).unwrap()[0].value, (id - 1) as u64);
+            assert_eq!(core.query_at(Time(50), [7]).unwrap()[0].value, (id - 1) as u64);
         }
         core.shutdown();
     }
@@ -258,13 +263,13 @@ fn repeated_pruning_and_updates_at_the_retained_boundary_preserve_state() {
                     .unwrap_or_else(|error| panic!("interval={interval} boundary={boundary} offset={offset} id={id}: {error:?}"));
                 id += 1;
             }
-            core.advance_to(boundary + 20).unwrap();
+            core.advance_to(Time(boundary + 20)).unwrap();
             core.wait_until_idle(Duration::from_secs(2)).unwrap();
             assert!(core.errors().is_empty(), "interval={interval} boundary={boundary}");
             core.apply([event(id, boundary + 20, 1)]).unwrap();
             core.wait_until_idle(Duration::from_secs(2)).unwrap();
             assert!(core.errors().is_empty(), "retained boundary correction interval={interval} boundary={boundary}");
-            assert_eq!(core.query_at(boundary + 20, [7]).unwrap()[0].value, id as u64);
+            assert_eq!(core.query_at(Time(boundary + 20), [7]).unwrap()[0].value, id as u64);
             id += 1;
         }
         core.shutdown();

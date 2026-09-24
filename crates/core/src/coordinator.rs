@@ -15,6 +15,7 @@ pub(crate) fn run<I: Input, S>(
     registrations: Receiver<Sender<bool>>,
     retention: I::Time,
     workers: usize,
+    pruning_interval: Duration,
 ) {
     let mut frontier = Frontier::new(workers);
     let mut target = I::Time::default();
@@ -23,6 +24,9 @@ pub(crate) fn run<I: Input, S>(
     let mut working = false;
     let mut next_round = Instant::now();
     let mut awaiting_marker = None;
+    let mut pruned = vec![I::Time::default(); workers];
+    let mut completed_horizon = I::Time::default();
+    let mut horizon_listeners: Vec<Sender<I::Time>> = Vec::new();
     loop {
         let pruning = frontier.requested() > frontier.safe();
         if pruning && !frontier.measuring() && Instant::now() >= next_round {
@@ -35,7 +39,7 @@ pub(crate) fn run<I: Input, S>(
                 if output.send(RouterMessage::Fence { round, observed: observed.clone() }).is_err() {
                     return;
                 }
-                next_round = Instant::now() + Duration::from_millis(100);
+                next_round = Instant::now() + pruning_interval;
             }
         }
         let busy = pruning || !input.is_empty() || !observations.is_empty();
@@ -94,6 +98,23 @@ pub(crate) fn run<I: Input, S>(
             Err(crossbeam_channel::TryRecvError::Disconnected) => return,
         };
         let forwarded = match message {
+            RouterMessage::SubscribePrunedHorizon(listener) => {
+                if listener.send(completed_horizon.clone()).is_ok() {
+                    horizon_listeners.push(listener);
+                }
+                None
+            }
+            RouterMessage::Pruned { worker, horizon } => {
+                if let Some(previous) = pruned.get_mut(worker) {
+                    *previous = previous.clone().max(horizon);
+                    let minimum = pruned.iter().min().expect("at least one worker");
+                    if minimum > &completed_horizon {
+                        completed_horizon = minimum.clone();
+                        horizon_listeners.retain(|listener| listener.send(completed_horizon.clone()).is_ok());
+                    }
+                }
+                None
+            }
             RouterMessage::Apply(batch) => admit(batch, None, &mut frontier),
             RouterMessage::Internal { source, batch } => admit(batch, Some(source), &mut frontier),
             RouterMessage::Advance(mut advance) => {
@@ -140,50 +161,96 @@ fn admit<I: Input, S>(mut batch: RouterBatch<I>, source: Option<I::Time>, fronti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CompletionHandle, MemoryBudget};
-    use contime_memory::ConservativeTrackedSize;
+    use crate::types::testing::Time;
+    use crate::CompletionHandle;
 
-    struct Event(u64);
-    impl ConservativeTrackedSize for Event {
-        fn conservative_tracked_size(&self) -> usize {
-            8
+    struct Event(Time);
+
+    impl contime_checkpoints::Event for Event {
+        type Time = Time;
+
+        fn time(&self) -> Time {
+            self.0
         }
     }
     impl Input for Event {
-        type Time = u64;
         fn event_id(&self) -> u128 {
-            self.0.into()
-        }
-        fn time(&self) -> u64 {
-            self.0
+            self.0 .0 as u128
         }
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
             emit(1);
         }
     }
 
-    fn batch(time: u64, sender: &Sender<RejectionMessage<RejectionReason>>) -> RouterBatch<Event> {
-        RouterBatch {
-            inputs: crate::input::prepare_inputs(&MemoryBudget::new(100_000, 0), vec![Event(time)]).unwrap(),
-            completion: CompletionHandle { sender: sender.clone() },
-        }
+    fn batch(time: Time, sender: &Sender<RejectionMessage<RejectionReason>>) -> RouterBatch<Event> {
+        RouterBatch { inputs: crate::input::prepare_inputs(vec![Event(time)]), completion: CompletionHandle { sender: sender.clone() } }
     }
 
     #[test]
     fn requested_horizon_rejects_external_but_preserves_causal_work_until_proven_safe() {
         let mut frontier = Frontier::new(1);
-        frontier.request(100);
+        frontier.request(Time(100));
         let (errors, rejected) = crossbeam_channel::unbounded();
-        assert!(admit::<_, ()>(batch(80, &errors), None, &mut frontier).is_none());
+        assert!(admit::<_, ()>(batch(Time(80), &errors), None, &mut frontier).is_none());
         assert_eq!(rejected.recv().unwrap().reason, RejectionReason::BeforeHistoryHorizon);
-        assert!(admit::<_, ()>(batch(80, &errors), Some(80), &mut frontier).is_some());
-        assert!(admit::<_, ()>(batch(79, &errors), Some(80), &mut frontier).is_none());
+        assert!(admit::<_, ()>(batch(Time(80), &errors), Some(Time(80)), &mut frontier).is_some());
+        assert!(admit::<_, ()>(batch(Time(79), &errors), Some(Time(80)), &mut frontier).is_none());
         assert_eq!(rejected.recv().unwrap().reason, RejectionReason::BeforeSourceTime);
         let round = frontier.begin().unwrap();
-        assert_eq!(frontier.report(round, 0, None), Some(100));
-        assert!(admit::<_, ()>(batch(80, &errors), Some(80), &mut frontier).is_none());
+        assert_eq!(frontier.report(round, 0, None), Some(Time(100)));
+        assert!(admit::<_, ()>(batch(Time(80), &errors), Some(Time(80)), &mut frontier).is_none());
         assert_eq!(rejected.recv().unwrap().reason, RejectionReason::BeforeSafeTime);
-        assert!(admit::<_, ()>(batch(100, &errors), Some(80), &mut frontier).is_some());
+        assert!(admit::<_, ()>(batch(Time(100), &errors), Some(Time(80)), &mut frontier).is_some());
+    }
+
+    #[test]
+    fn configured_interval_controls_followup_rounds_without_delaying_messages() {
+        for interval in [Duration::ZERO, Duration::from_secs(3600)] {
+            let (input, incoming) = crossbeam_channel::unbounded();
+            let (output, routed) = crossbeam_channel::unbounded();
+            let (control, controls) = crossbeam_channel::unbounded();
+            let (_registration, registrations) = crossbeam_channel::unbounded();
+            let handle = std::thread::spawn(move || {
+                run::<Event, ()>(Arc::new(incoming), output, vec![control], registrations, Time(0), 1, interval)
+            });
+            let (completion, _) = crossbeam_channel::unbounded();
+            input.send(RouterMessage::Advance(Advance { time: Time(100), completion })).unwrap();
+            assert!(matches!(routed.recv_timeout(Duration::from_secs(2)).unwrap(), RouterMessage::Advance(_)));
+            let RouterMessage::Fence { round, observed } = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
+                panic!("missing first round");
+            };
+            observed.send(round).unwrap();
+            assert_eq!(controls.recv_timeout(Duration::from_secs(2)).unwrap().round, round);
+            input.send(RouterMessage::Report { round, worker: 0, minimum: Some(Time(80)) }).unwrap();
+            let RouterMessage::Prune(advance) = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
+                panic!("missing partial prune");
+            };
+            assert_eq!(advance.time, Time(80));
+
+            // A FIFO query probes the next coordinator iteration, without sleeps
+            // or a tight wall-clock assertion. Zero must start another round
+            // before consuming it; a long interval must still forward the query.
+            let (response, _) = crossbeam_channel::unbounded();
+            input.send(RouterMessage::SnapshotQuery(crate::SnapshotQuery { time: Time(100), snapshot_ids: vec![1], response })).unwrap();
+            if interval.is_zero() {
+                let RouterMessage::Fence { round: next, observed } = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
+                    panic!("zero interval did not immediately start the next round");
+                };
+                assert!(next > round);
+                observed.send(next).unwrap();
+                controls.recv_timeout(Duration::from_secs(2)).unwrap();
+                input.send(RouterMessage::Report { round: next, worker: 0, minimum: None }).unwrap();
+            }
+            assert!(matches!(routed.recv_timeout(Duration::from_secs(2)).unwrap(), RouterMessage::SnapshotQuery(_)));
+            if interval.is_zero() {
+                let RouterMessage::Prune(advance) = routed.recv_timeout(Duration::from_secs(2)).unwrap() else {
+                    panic!("missing completed prune");
+                };
+                assert_eq!(advance.time, Time(100));
+            }
+            input.send(RouterMessage::Shutdown).unwrap();
+            handle.join().unwrap();
+        }
     }
 
     #[test]
@@ -192,9 +259,11 @@ mod tests {
         let (output, routed) = crossbeam_channel::unbounded();
         let (control, controls) = crossbeam_channel::unbounded();
         let (_registration, registrations) = crossbeam_channel::unbounded();
-        let handle = std::thread::spawn(move || run::<Event, ()>(Arc::new(incoming), output, vec![control], registrations, 0, 2));
+        let handle = std::thread::spawn(move || {
+            run::<Event, ()>(Arc::new(incoming), output, vec![control], registrations, Time(0), 2, Duration::from_millis(100))
+        });
         let (completion, _) = crossbeam_channel::unbounded();
-        input.send(RouterMessage::Advance(Advance { time: 100, completion })).unwrap();
+        input.send(RouterMessage::Advance(Advance { time: Time(100), completion })).unwrap();
         assert!(matches!(routed.recv_timeout(Duration::from_secs(1)).unwrap(), RouterMessage::Advance(_)));
         let RouterMessage::Fence { round, observed } = routed.recv_timeout(Duration::from_secs(1)).unwrap() else {
             panic!("missing marker");
@@ -206,17 +275,50 @@ mod tests {
         // A query is a FIFO probe: it must pass through without waiting for the
         // missing worker, and no prune may have preceded it.
         let (response, _) = crossbeam_channel::unbounded();
-        input.send(RouterMessage::SnapshotQuery(crate::SnapshotQuery { time: 100, snapshot_ids: vec![1], response })).unwrap();
+        input.send(RouterMessage::SnapshotQuery(crate::SnapshotQuery { time: Time(100), snapshot_ids: vec![1], response })).unwrap();
         assert!(matches!(routed.recv_timeout(Duration::from_secs(1)).unwrap(), RouterMessage::SnapshotQuery(_)));
         let (errors, _) = crossbeam_channel::unbounded();
-        input.send(RouterMessage::Internal { source: 80, batch: batch(80, &errors) }).unwrap();
+        input.send(RouterMessage::Internal { source: Time(80), batch: batch(Time(80), &errors) }).unwrap();
         input.send(RouterMessage::Report { round, worker: 1, minimum: None }).unwrap();
         assert!(matches!(routed.recv_timeout(Duration::from_secs(1)).unwrap(), RouterMessage::Apply(_)));
         let RouterMessage::Prune(advance) = routed.recv_timeout(Duration::from_secs(1)).unwrap() else {
             panic!("missing prune");
         };
-        assert_eq!(advance.time, 80);
+        assert_eq!(advance.time, Time(80));
         input.send(RouterMessage::Shutdown).unwrap();
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn completed_horizon_requires_every_worker_and_ignores_older_reports() {
+        let (input, incoming) = crossbeam_channel::unbounded();
+        let (output, _routed) = crossbeam_channel::unbounded();
+        let (_registration, registrations) = crossbeam_channel::unbounded();
+        let handle = std::thread::spawn(move || {
+            run::<Event, ()>(Arc::new(incoming), output, vec![], registrations, Time(0), 2, Duration::from_millis(100))
+        });
+        let (updates, horizons) = crossbeam_channel::unbounded();
+        input.send(RouterMessage::SubscribePrunedHorizon(updates)).unwrap();
+        assert_eq!(horizons.recv_timeout(Duration::from_secs(2)).unwrap(), Time(0));
+        // Registration is a FIFO barrier for the preceding completion reports.
+        let current = || {
+            let (sender, receiver) = crossbeam_channel::unbounded();
+            input.send(RouterMessage::SubscribePrunedHorizon(sender)).unwrap();
+            receiver.recv_timeout(Duration::from_secs(2)).unwrap()
+        };
+        input.send(RouterMessage::Pruned { worker: 0, horizon: Time(100) }).unwrap();
+        assert_eq!(current(), Time(0));
+        assert!(horizons.is_empty());
+        input.send(RouterMessage::Pruned { worker: 1, horizon: Time(80) }).unwrap();
+        assert_eq!(horizons.recv_timeout(Duration::from_secs(2)).unwrap(), Time(80));
+        input.send(RouterMessage::Pruned { worker: 1, horizon: Time(50) }).unwrap();
+        input.send(RouterMessage::Pruned { worker: 0, horizon: Time(100) }).unwrap();
+        assert_eq!(current(), Time(80));
+        assert!(horizons.is_empty());
+        input.send(RouterMessage::Pruned { worker: 1, horizon: Time(120) }).unwrap();
+        assert_eq!(horizons.recv_timeout(Duration::from_secs(2)).unwrap(), Time(100));
+        input.send(RouterMessage::Shutdown).unwrap();
+        handle.join().unwrap();
+        assert_eq!(horizons.recv(), Err(crossbeam_channel::RecvError));
     }
 }

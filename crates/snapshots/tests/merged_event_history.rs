@@ -87,7 +87,7 @@ fn happy(#[case] checkpoint_interval: u64) {
     };
     let mut snapshots = SnapshotStore::new(history, TestSnapshot(initial_sum, initial_time), checkpoint_interval);
 
-    snapshots.replay(expected_time, &context).unwrap();
+    snapshots.process_until(expected_time, &context).unwrap();
     let actual = snapshots.query(expected_time, &context).unwrap();
     let actual_sum = actual.0;
     let actual_time = *actual.time();

@@ -1,17 +1,17 @@
-use std::cmp::Reverse;
+use std::collections::{BTreeSet, VecDeque};
+use std::ops::Bound::{Excluded, Unbounded};
 
 use ahash::{AHashMap, AHashSet};
 use crossbeam_channel::{Receiver, TryRecvError};
-use priority_queue::PriorityQueue;
 
 use crate::checkpoints::update_snapshot;
 use crate::events::insert_batch;
 use crate::listen::NotificationCollections;
 use crate::query::{query_events, query_snapshots};
 use crate::types::{
-    AdvanceInput, ApplyInput, Checkpoints, Completion, Coordination, EventQueryInput, EventQueryResponse, Events, IncrementalCheckpoints,
-    QueryCheckpoints, QueryEvents, ReplayUpdate, RouteInput, SnapshotListenInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot,
-    WorkInput, WorkInputKind, WorkerConfig,
+    AdvanceInput, ApplyInput, Checkpoints, Completion, Coordination, EventQueryInput, EventQueryResponse, Events, ReplayUpdate, RouteInput,
+    SnapshotListenInput, SnapshotQueryInput, SnapshotQueryResponse, SnapshotSlot, SnapshotStore, StoreSlot, WorkInput, WorkInputKind,
+    WorkerConfig,
 };
 
 /// Drains ready event batches into one apply cycle and updates each changed
@@ -67,96 +67,84 @@ fn work_with_batch_limit<B, S, K>(
 type ApplyRoute<M> = <<M as WorkInput>::Apply as ApplyInput>::Route;
 type ApplyCompletion<M> = <<M as WorkInput>::Apply as ApplyInput>::Completion;
 type ApplyEvent<M> = <ApplyRoute<M> as RouteInput>::Input;
-type EventTime<M, S> = <S as Events<ApplyEvent<M>>>::Time;
+type EventTime<M, S> = <S as SnapshotStore<ApplyEvent<M>>>::Time;
+type PendingPrune<T, C> = (T, std::vec::IntoIter<u128>, C);
 /// Runs with activity subscriptions: false means idle, true means working.
 /// Registrations are serviced only in the idle phase; work receivers are ordinary channels.
 /// `history_retention` is retained for compatibility; only explicit Prune messages prune.
-pub fn work_messages<M, S, K>(
+pub fn work_messages<M, S>(
     input: Receiver<M>,
     _config: WorkerConfig,
-    events_config: S::Config,
-    _history_retention: <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
-    checkpoints_config: K::Config,
-    checkpoints_context: <K as Checkpoints<S>>::Context,
+    store_config: S::Config,
+    _history_retention: S::Time,
+    store_context: S::Context,
     registrations: Receiver<crossbeam_channel::Sender<bool>>,
     coordination: Option<Coordination<EventTime<M, S>>>,
 ) where
     M: WorkInput,
     M::Apply: ApplyInput,
-    S: Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>
-        + QueryEvents<
-            <<M::Apply as ApplyInput>::Route as RouteInput>::Input,
-            Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
-        >,
-    K: IncrementalCheckpoints<S, Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>
-        + QueryCheckpoints<S, Context = <K as Checkpoints<S>>::Context>,
-    <M::Apply as ApplyInput>::Completion: Completion<S::Rejection>,
-    M::SnapshotQuery: SnapshotQueryInput<Time = <K as QueryCheckpoints<S>>::Time>,
-    <M::SnapshotQuery as SnapshotQueryInput>::Response: SnapshotQueryResponse<<K as QueryCheckpoints<S>>::Snapshot>,
-    M::EventQuery: EventQueryInput<Time = <S as QueryEvents<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
-    <M::EventQuery as EventQueryInput>::Response: EventQueryResponse<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>,
-    M::SnapshotListen: SnapshotListenInput<Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
-    M::Advance: AdvanceInput<Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
-    <<M::Apply as ApplyInput>::Route as RouteInput>::Input: Clone,
+    S: SnapshotStore<ApplyEvent<M>>,
+    ApplyCompletion<M>: Completion<S::Rejection>,
+    M::SnapshotQuery: SnapshotQueryInput<Time = S::Time>,
+    <M::SnapshotQuery as SnapshotQueryInput>::Response: SnapshotQueryResponse<S::Snapshot>,
+    M::EventQuery: EventQueryInput<Time = S::Time>,
+    <M::EventQuery as EventQueryInput>::Response: EventQueryResponse<ApplyEvent<M>>,
+    M::SnapshotListen: SnapshotListenInput<Time = S::Time>,
+    M::Advance: AdvanceInput<Time = S::Time>,
+    ApplyEvent<M>: Clone,
 {
-    let mut worker =
-        MessageWorker::<M, S, K>::new(&input, &registrations, events_config, checkpoints_config, checkpoints_context, coordination);
+    let mut worker = MessageWorker::<M, S>::new(&input, &registrations, store_config, store_context, coordination);
     worker.activity_loop();
 }
 
-struct MessageWorker<'a, M, S, K>
+struct MessageWorker<'a, M, S>
 where
     M: WorkInput,
     M::Apply: ApplyInput,
-    S: Events<ApplyEvent<M>>,
-    K: Checkpoints<S, Time = EventTime<M, S>>,
-    ApplyCompletion<M>: Completion<S::Rejection>,
-    M::SnapshotListen: SnapshotListenInput<Time = EventTime<M, S>>,
+    S: SnapshotStore<ApplyEvent<M>>,
+    M::SnapshotListen: SnapshotListenInput<Time = S::Time>,
+    M::Advance: AdvanceInput<Time = S::Time>,
 {
     input: &'a Receiver<M>,
     registrations: &'a Receiver<crossbeam_channel::Sender<bool>>,
-    snapshots: AHashMap<u128, SnapshotSlot<S, K, ApplyCompletion<M>, S::Rejection>>,
-    listeners: NotificationCollections<EventTime<M, S>, <M::SnapshotListen as SnapshotListenInput>::Listener>,
+    snapshots: AHashMap<u128, StoreSlot<S>>,
+    listeners: NotificationCollections<S::Time, <M::SnapshotListen as SnapshotListenInput>::Listener>,
     activity_listeners: Vec<crossbeam_channel::Sender<bool>>,
-    events_config: S::Config,
-    checkpoints_config: K::Config,
-    checkpoints_context: <K as Checkpoints<S>>::Context,
-    current_time: EventTime<M, S>,
-    horizon: EventTime<M, S>,
-    schedule: PriorityQueue<u128, Reverse<(EventTime<M, S>, u128)>>,
-    coordination: Option<Coordination<EventTime<M, S>>>,
+    store_config: S::Config,
+    store_context: S::Context,
+    current_time: S::Time,
+    horizon: S::Time,
+    pending_prunes: VecDeque<PendingPrune<S::Time, <M::Advance as AdvanceInput>::Completion>>,
+    // false = needs this timestamp; true = already processed through it.
+    schedule: BTreeSet<(S::Time, bool, u128)>,
+    pending: AHashMap<u128, (S::Time, bool)>,
+    latest: AHashMap<u128, S::Time>,
+    coordination: Option<Coordination<S::Time>>,
     fence_round: Option<u64>,
     fence_routers: AHashSet<usize>,
     reported_round: Option<u64>,
 }
 
-impl<'a, M, S, K> MessageWorker<'a, M, S, K>
+impl<'a, M, S> MessageWorker<'a, M, S>
 where
     M: WorkInput,
     M::Apply: ApplyInput,
-    S: Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>
-        + QueryEvents<
-            <<M::Apply as ApplyInput>::Route as RouteInput>::Input,
-            Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time,
-        >,
-    K: IncrementalCheckpoints<S, Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>
-        + QueryCheckpoints<S, Context = <K as Checkpoints<S>>::Context>,
-    <M::Apply as ApplyInput>::Completion: Completion<S::Rejection>,
-    M::SnapshotQuery: SnapshotQueryInput<Time = <K as QueryCheckpoints<S>>::Time>,
-    <M::SnapshotQuery as SnapshotQueryInput>::Response: SnapshotQueryResponse<<K as QueryCheckpoints<S>>::Snapshot>,
-    M::EventQuery: EventQueryInput<Time = <S as QueryEvents<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
-    <M::EventQuery as EventQueryInput>::Response: EventQueryResponse<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>,
-    M::SnapshotListen: SnapshotListenInput<Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
-    M::Advance: AdvanceInput<Time = <S as Events<<<M::Apply as ApplyInput>::Route as RouteInput>::Input>>::Time>,
-    <<M::Apply as ApplyInput>::Route as RouteInput>::Input: Clone,
+    S: SnapshotStore<ApplyEvent<M>>,
+    ApplyCompletion<M>: Completion<S::Rejection>,
+    M::SnapshotQuery: SnapshotQueryInput<Time = S::Time>,
+    <M::SnapshotQuery as SnapshotQueryInput>::Response: SnapshotQueryResponse<S::Snapshot>,
+    M::EventQuery: EventQueryInput<Time = S::Time>,
+    <M::EventQuery as EventQueryInput>::Response: EventQueryResponse<ApplyEvent<M>>,
+    M::SnapshotListen: SnapshotListenInput<Time = S::Time>,
+    M::Advance: AdvanceInput<Time = S::Time>,
+    ApplyEvent<M>: Clone,
 {
     fn new(
         input: &'a Receiver<M>,
         registrations: &'a Receiver<crossbeam_channel::Sender<bool>>,
-        events_config: S::Config,
-        checkpoints_config: K::Config,
-        checkpoints_context: <K as Checkpoints<S>>::Context,
-        coordination: Option<Coordination<EventTime<M, S>>>,
+        store_config: S::Config,
+        store_context: S::Context,
+        coordination: Option<Coordination<S::Time>>,
     ) -> Self {
         Self {
             input,
@@ -164,16 +152,18 @@ where
             snapshots: AHashMap::new(),
             listeners: NotificationCollections::new(),
             activity_listeners: Vec::new(),
-            current_time: EventTime::<M, S>::default(),
-            horizon: EventTime::<M, S>::default(),
-            schedule: PriorityQueue::new(),
+            current_time: S::Time::default(),
+            horizon: S::Time::default(),
+            pending_prunes: VecDeque::new(),
+            schedule: BTreeSet::new(),
+            pending: AHashMap::new(),
+            latest: AHashMap::new(),
             coordination,
             fence_round: None,
             fence_routers: AHashSet::new(),
             reported_round: None,
-            events_config,
-            checkpoints_config,
-            checkpoints_context,
+            store_config,
+            store_context,
         }
     }
 
@@ -209,7 +199,7 @@ where
             let message = match self.input.try_recv() {
                 Ok(message) => message.into_kind(),
                 Err(reason) => {
-                    if self.step() {
+                    if self.prune_step() || self.step() {
                         continue;
                     }
                     return reason;
@@ -220,9 +210,9 @@ where
                     self.apply_batch(batch);
                 }
                 WorkInputKind::SnapshotQuery(query) => {
-                    query_snapshots(query, &self.snapshots, &self.checkpoints_config, &mut self.checkpoints_context)
+                    query_snapshots::<_, ApplyEvent<M>, _>(query, &mut self.snapshots, &mut self.store_context)
                 }
-                WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _, _, _, _>(query, &self.snapshots),
+                WorkInputKind::EventQuery(query) => query_events::<_, ApplyEvent<M>, _>(query, &self.snapshots),
                 WorkInputKind::SnapshotListen(registration) => {
                     let (time, snapshot_ids, listener) = registration.into_parts();
                     self.listeners.register(time, snapshot_ids, listener, &mut self.snapshots);
@@ -235,8 +225,14 @@ where
                 WorkInputKind::Fence { round, router } => self.fence(round, router),
                 WorkInputKind::Prune(prune) => {
                     let (horizon, completion) = prune.into_parts();
-                    self.prune(horizon);
-                    drop(completion);
+                    if horizon > self.horizon {
+                        assert!(self.schedule.first().is_none_or(|(time, _, _)| time >= &horizon), "prune would discard pending replay");
+                        let snapshots = self.snapshots.keys().copied().collect::<Vec<_>>().into_iter();
+                        self.horizon = horizon.clone();
+                        self.pending_prunes.push_back((horizon, snapshots, completion));
+                    } else if !self.pending_prunes.is_empty() {
+                        self.pending_prunes.push_back((horizon, Vec::new().into_iter(), completion));
+                    }
                 }
             }
         }
@@ -247,18 +243,15 @@ where
         let mut rejections = Vec::new();
         for route in routes {
             let (snapshot_id, input) = route.into_parts();
-            let slot = self.snapshots.entry(snapshot_id).or_insert_with(SnapshotSlot::metadata_only);
-            let events = slot.events.get_or_insert_with(|| S::create(snapshot_id, &self.events_config, &self.horizon));
-            let result = events.insert(input);
+            let time = S::event_time(&input);
+            let slot = self.snapshots.entry(snapshot_id).or_insert_with(StoreSlot::metadata_only);
+            let store = slot.store.get_or_insert_with(|| S::create(snapshot_id, &self.store_config, &self.horizon));
+            let result = store.insert(input, &self.horizon);
             rejections.extend(result.rejections);
             if result.changed {
-                let checkpoints = slot.checkpoints.get_or_insert_with(|| K::create(snapshot_id, &self.checkpoints_config));
-                checkpoints.invalidate(events);
-                if let Some(time) = checkpoints.next_time(events) {
-                    self.schedule.push(snapshot_id, Reverse((time, snapshot_id)));
-                } else {
-                    self.schedule.remove(&snapshot_id);
-                }
+                self.latest.entry(snapshot_id).and_modify(|latest| *latest = latest.clone().max(time.clone())).or_insert(time.clone());
+                let pending = self.pending.get(&snapshot_id).cloned().map_or((time.clone(), false), |old| old.min((time, false)));
+                self.schedule_at(snapshot_id, pending);
             }
         }
         if !rejections.is_empty() {
@@ -266,18 +259,31 @@ where
         }
     }
 
-    /// Runs one entire timestamp for the earliest snapshot, then yields to input.
+    fn schedule_at(&mut self, snapshot_id: u128, pending: (S::Time, bool)) {
+        if let Some((time, complete)) = self.pending.insert(snapshot_id, pending.clone()) {
+            self.schedule.remove(&(time, complete, snapshot_id));
+        }
+        self.schedule.insert((pending.0, pending.1, snapshot_id));
+    }
+
+    /// Processes one snapshot to the next distinct bucket or target, then yields.
     fn step(&mut self) -> bool {
-        if !self.schedule.peek().is_some_and(|(_, Reverse((time, _)))| time <= &self.current_time) {
+        let Some((time, complete, snapshot_id)) = self.schedule.first().cloned() else { return false };
+        if time > self.current_time || (complete && time == self.current_time) {
             return false;
         }
-        let (snapshot_id, Reverse((time, _))) = self.schedule.pop().expect("runnable snapshot exists");
+        let end = self
+            .schedule
+            .range((Excluded((time.clone(), true, u128::MAX)), Unbounded))
+            .next()
+            .map_or_else(|| self.current_time.clone(), |(next, _, _)| next.clone().min(self.current_time.clone()));
+        self.schedule.pop_first();
+        self.pending.remove(&snapshot_id);
         let slot = self.snapshots.get_mut(&snapshot_id).expect("scheduled history exists");
-        let events = slot.events.as_ref().expect("scheduled events exist");
-        let checkpoints = slot.checkpoints.as_mut().expect("scheduled checkpoints exist");
-        checkpoints.step(events, &mut self.checkpoints_context, &time);
-        if let Some(next) = checkpoints.next_time(events) {
-            self.schedule.push(snapshot_id, Reverse((next, snapshot_id)));
+        let store = slot.store.as_mut().expect("scheduled store exists");
+        store.process_until(&end, &mut self.store_context);
+        if self.latest.get(&snapshot_id).is_some_and(|latest| latest > &end) {
+            self.schedule_at(snapshot_id, (end, true));
         }
         self.listeners.record(ReplayUpdate { snapshot_id, affected_from: time }, &mut self.snapshots);
         self.listeners.flush();
@@ -299,25 +305,30 @@ where
         self.fence_routers.insert(router);
         if self.fence_routers.len() == coordination.router_count {
             self.reported_round = Some(round);
-            let earliest = self.schedule.peek().map(|(_, Reverse((time, _)))| time.clone());
+            let earliest = self.schedule.first().map(|(time, _, _)| time.clone());
             (coordination.report)(round, earliest);
         }
     }
 
-    fn prune(&mut self, horizon: EventTime<M, S>) {
-        if horizon <= self.horizon {
-            return;
-        }
-        assert!(self.schedule.peek().is_none_or(|(_, Reverse((time, _)))| time >= &horizon), "prune would discard pending replay");
-        for slot in self.snapshots.values_mut() {
-            let Some(events) = slot.events.as_mut() else { continue };
-            if let Some(checkpoints) = slot.checkpoints.as_mut() {
-                assert!(checkpoints.next_time(events).is_none_or(|time| time >= horizon), "prune would discard pending replay");
-                checkpoints.advance_before(events, &mut self.checkpoints_context, &horizon);
+    /// Prunes one history, then returns to message handling. Completion stays
+    /// owned by the job until every captured history has been processed.
+    fn prune_step(&mut self) -> bool {
+        let Some((horizon, snapshots, _)) = self.pending_prunes.front_mut() else { return false };
+        if let Some(snapshot_id) = snapshots.next() {
+            let slot = self.snapshots.get_mut(&snapshot_id).expect("pruning history exists");
+            if let Some(store) = slot.store.as_mut() {
+                assert!(self.pending.get(&snapshot_id).is_none_or(|(time, _)| time >= horizon), "prune would discard pending replay");
+                store.forward(horizon, &mut self.store_context);
+                store.prune();
             }
-            events.prune_before(&horizon);
         }
-        self.horizon = horizon;
+        if snapshots.len() == 0 {
+            if let Some(coordination) = self.coordination.as_mut() {
+                (coordination.pruned)(horizon.clone());
+            }
+            self.pending_prunes.pop_front();
+        }
+        true
     }
 }
 #[cfg(test)]

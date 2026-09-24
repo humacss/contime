@@ -1,9 +1,17 @@
 # contime-core
 
+`subscribe_pruned_horizon()` returns an independent receiver of completed history
+pruning horizons. Registration sends the current horizon (initially the time
+type's default); later values strictly increase only after every worker finishes
+its pruning pass and retention hooks. This is distinct from requested advancement
+and safe-to-prune permission. Consumers can drain these notifications without
+blocking advancement. Shutdown closes the receiver; worker failure never counts
+as successful pruning.
+
 `contime-core` is the smallest complete apply, query, and advance composition of the isolated
-ConTime subcrates. It owns the process topology and memory budget while
+ConTime subcrates. It owns the process topology while
 delegating API batching, deterministic routing, worker scheduling, canonical
-event storage, checkpoint replay, lane application, and ownership accounting
+event storage, checkpoint replay, and lane application
 to their specialized crates.
 
 The crate does not depend on the root `contime` crate.
@@ -17,8 +25,7 @@ operation kinds.
 
 ```text
 owned inputs
-  -> conservative batch admission
-  -> tracked shared events
+  -> shared events
   -> API batch
   -> admission coordinator
   -> shared router queue
@@ -29,11 +36,54 @@ owned inputs
   -> shared rejection stream
 ```
 
-Consumers implement `Input`, the snapshot contracts re-exported through
+Consumers implement `checkpoints::Event` for event time, `Input`
+for event identity and snapshot routing, the snapshot contracts exposed through
 `contime_core::checkpoints`, and their lane types through
-`contime_core::lanes`. Accepted event allocations are tracked once. Router
-fan-out clones only tracked pointers. Checkpoint snapshots are retained in
-independently mutable tracked ownership and report size changes after replay.
+`contime_core::lanes`. Router fan-out shares immutable events through ordinary
+`Arc` ownership. Histories directly own their mutable checkpoints.
+
+Core's `checkpoints` module defines the iterator-based application/hook interface
+for its consumers. Each worker history owns one concrete `SnapshotStore`, created
+from the first accepted event with an initial snapshot at the active horizon.
+The snapshot store owns canonical insertion, invalidation, replay, forwarding,
+and pruning. Core's event-history adapter preserves event-ID ordering within
+each complete timestamp. Worker scheduling does not inspect the event history.
+
+`EventBatch<'iterator, 'event, T, E>` and `ApplyBatch` borrow an iterator of
+`&E`; they no longer expose slices. The separate lifetimes allow local filtering
+and peeking without cloning events or collecting replay ranges. Consumers can
+use `batch.events.map(...)` or `by_ref()` to consume the batch. A consumer may
+stop early: the snapshot kernel drains the remaining canonical timestamp batch
+before recording its time and count.
+
+`history_event_count` on Core's application context is the count **before** the
+current canonical batch. All effective partitions see that preceding count;
+the snapshot kernel increments it after application. Consumers must not treat
+it as the resulting count or use it as a newly generated publication identity.
+
+Live processing and forwarding use `replay_event_batch`; queries use only
+`apply_event_batch` and never publish live effects. Forwarding additionally calls
+`retain_snapshot` after consumed timestamps and at the horizon's predecessor.
+That hook may compact consumer data without changing observable state.
+
+Timestamp types implement both `checkpoints::Timestamp` (checked immediate
+predecessor) and `contime_worker::AdvanceTime` (retention subtraction). A local
+wrapper is required for primitive integers because these traits belong to
+different crates. Tests and benchmarks define their own wrappers; automatic
+macro generation is deferred. For example:
+
+```rust
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+struct Time(u64);
+impl contime_core::checkpoints::Timestamp for Time {
+    fn previous(&self) -> Option<Self> { self.0.checked_sub(1).map(Self) }
+}
+impl contime_worker::AdvanceTime for Time {
+    fn saturating_sub(&self, retention: &Self) -> Self {
+        Self(self.0.saturating_sub(retention.0))
+    }
+}
+```
 
 `apply` enqueues external inputs and returns without waiting. Rejections are
 received through `errors()`; use `wait_until_idle` when a test needs processing
@@ -41,17 +91,17 @@ to finish. The processing target starts at the time type's default value and
 is moved forward by `advance_to`. Future inputs remain available to queries
 but do not publish application effects until their time is reached.
 
-The memory safety buffer is excluded from normal input admission. A batch that
-does not fit is rejected as a whole with one `MemoryFull` result per event ID.
-The first pass does not separately estimate unused capacity in internal event
-collections; the configured buffer covers that implementation overhead.
+Memory accounting and budget rejection have been removed. Their last committed
+implementation is available at `085b00c44d12b040d9f80f3f7a74a8341d2b0644`.
+History retention still prunes old events and checkpoints; actual process memory
+must be monitored externally. There is no built-in memory cap.
 
 ## Query flow
 
 Snapshot and event-history queries use the same runtime, router queues, and
 worker queues as applies. Snapshot queries partition requested IDs across
 workers and return only found boxed snapshots. Event queries target one
-snapshot history and return cloned tracked handles over `[from, to)`. Receiver
+snapshot history and return cloned shared handles over `[from, to)`. Receiver
 closure signals that every affected worker has completed.
 
 Query reconstruction is read-only: it does not modify retained checkpoints,
@@ -78,8 +128,18 @@ of `history_retention` worth of time. The admission coordinator rejects new
 external input before the requested horizon. Router fences and worker reports
 establish a conservative safe boundary before any retained data is removed.
 Accepted work and its causal outputs remain protected during that measurement.
-Pruning preserves a replay anchor and keeps events exactly at the boundary.
-Queries older than the anchor return that anchor as a best-effort result.
+Forwarding establishes a checkpoint at the horizon's predecessor; pruning
+preserves it and keeps events exactly at the horizon. Snapshot queries before
+the completed store horizon return no snapshot, never a stale anchor. The public
+multi-snapshot query API continues to return only found snapshots, rather than
+introducing a new per-snapshot error response.
+
+`ConTimeConfig::pruning_interval` sets the minimum wall-clock spacing between
+safe-pruning measurement rounds. Use 100 ms for the previous cadence, or
+`Duration::ZERO` to start the next needed round immediately. Zero removes only
+the timer delay: router fences and all worker reports are still required.
+The `advance` benchmark uses zero, excludes fixture setup and teardown, and
+verifies retained events and anchor state after the measured idle wait.
 
 `apply_internal(source_time, inputs)` is reserved for causal outputs submitted
 before an active application returns. It enforces the proven safe boundary
@@ -88,7 +148,7 @@ use this contract. Queries do not establish submission or replay barriers.
 
 ### Historical benchmark baseline
 
-The figures below predate incremental scheduling and the admission coordinator;
+The figures below predate memory-accounting removal, incremental scheduling and the admission coordinator;
 they are not measurements of the current implementation.
 
 Local optimized advancement-only results for 1,000 histories on 2026-09-01:
@@ -220,10 +280,8 @@ show ordinary thread-scheduling noise rather than a speedup. The useful signal
 is that listener overhead is mostly within measurement variance; the clearest
 case, 1,000 listened snapshots on one worker, adds about 18.2 ns per event.
 
-Current limitations are deliberate: disconnected listeners remain stored
-until their snapshot replays again, listener storage is not yet included in
-the retained event/checkpoint memory budget, and there is no explicit listener
-identity or removal command.
+Disconnected listeners remain stored until their snapshot replays again.
+There is no explicit listener identity or removal command.
 
 The worker measurement intentionally includes all worker-owned work after its
 batch is already available: snapshot lookup, canonical insertion, scheduling,
@@ -292,6 +350,26 @@ At ten workers, the confidence intervals for one and two routers overlap. The
 second router does not improve this workload: one router already feeds the ten
 workers faster than they consume the routed batches.
 
+## Snapshot-store integration measurements (2026-09-24)
+
+Representative end-to-end measurements with Rust 1.95.0, one router and one
+worker, 10 samples, 200 ms warmup and 1 s measurement. These are ballpark
+measurements, not an apples-to-apples comparison with the historical tables above.
+
+| Operation | Total time | Throughput | Time per item |
+| --- | ---: | ---: | ---: |
+| Send and process one batch of 1,000 events | 111.98 us | 8.930 M events/s | 111.98 ns/event |
+| Query 1,000 snapshots | 78.512 us | 12.737 M snapshots/s | 78.512 ns/snapshot |
+| Advance and prune 1,000 clean histories | 93.033 us | 10.749 M histories/s | 93.033 ns/history |
+| Advance and prune 1,000 histories with intermediate checkpoints | 121.92 us | 8.202 M histories/s | 121.92 ns/history |
+| Process, advance and prune 1,000 dirty histories | 371.10 us | 2.695 M histories/s | 371.10 ns/history |
+
+Advance measurements use a zero pruning interval and wait for completed work.
+Fixture setup, verification queries and shutdown are outside their timing.
+Query throughput counts returned snapshots, and advance throughput counts
+histories, not event applications. The dirty advance case includes processing
+previously admitted events; it is not a pure pruning measurement.
+
 ## Verification
 
 Run unit tests:
@@ -303,10 +381,6 @@ cargo test --manifest-path crates/core/Cargo.toml
 Run each inline unit benchmark:
 
 ```bash
-cargo test --release --manifest-path crates/core/Cargo.toml \
-  memory::tests::benchmark_memory -- --ignored --nocapture
-cargo test --release --manifest-path crates/core/Cargo.toml \
-  input::tests::benchmark_input -- --ignored --nocapture
 cargo test --release --manifest-path crates/core/Cargo.toml \
   message::tests::benchmark_message -- --ignored --nocapture
 cargo test --release --manifest-path crates/core/Cargo.toml \
@@ -321,8 +395,6 @@ cargo test --release --manifest-path crates/core/Cargo.toml \
   send::tests::benchmark_send -- --ignored --nocapture
 cargo test --release --manifest-path crates/core/Cargo.toml \
   start::tests::benchmark_start -- --ignored --nocapture
-cargo test --release --manifest-path crates/core/Cargo.toml \
-  apply::tests::benchmark_apply -- --ignored --nocapture
 cargo test --release --manifest-path crates/core/Cargo.toml \
   shutdown::tests::benchmark_shutdown -- --ignored --nocapture
 cargo test --release --manifest-path crates/core/Cargo.toml \

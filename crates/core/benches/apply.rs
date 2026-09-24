@@ -2,10 +2,25 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use contime_core::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
-use contime_core::memory_tracking::ConservativeTrackedSize;
+
 use contime_core::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+struct Time(i64);
+
+impl contime_core::checkpoints::Timestamp for Time {
+    fn previous(&self) -> Option<Self> {
+        self.0.checked_sub(1).map(Self)
+    }
+}
+
+impl contime_worker::AdvanceTime for Time {
+    fn saturating_sub(&self, retention: &Self) -> Self {
+        Self(self.0.saturating_sub(retention.0))
+    }
+}
 
 const EVENT_COUNT: usize = 1_000;
 const BATCH_SIZES: [usize; 4] = [1, 10, 100, 1_000];
@@ -16,30 +31,24 @@ const TOPOLOGIES: [(usize, usize); 6] = [(1, 1), (1, 2), (1, 4), (1, 8), (1, 10)
 struct BenchInput {
     id: u128,
     snapshot_id: u128,
-    time: i64,
+    time: Time,
     value: usize,
     payload: [u8; 16],
 }
 
 const _: [(); 64] = [(); std::mem::size_of::<BenchInput>()];
 
-impl ConservativeTrackedSize for BenchInput {
-    fn conservative_tracked_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-    }
-}
-
-impl Input for BenchInput {
-    type Time = i64;
-
-    fn event_id(&self) -> u128 {
-        self.id
-    }
+impl contime_checkpoints::Event for BenchInput {
+    type Time = Time;
 
     fn time(&self) -> Self::Time {
         self.time
     }
-
+}
+impl Input for BenchInput {
+    fn event_id(&self) -> u128 {
+        self.id
+    }
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
         emit(self.snapshot_id);
     }
@@ -47,19 +56,16 @@ impl Input for BenchInput {
 
 #[derive(Clone, Default)]
 struct BenchSnapshot {
-    time: i64,
+    time: Time,
     value: usize,
 }
 
-impl ConservativeTrackedSize for BenchSnapshot {
-    fn conservative_tracked_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-    }
-}
-
 impl Snapshot for BenchSnapshot {
-    type Time = i64;
+    type Time = Time;
 
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
     fn set_time(&mut self, time: Self::Time) {
         self.time = time;
     }
@@ -70,21 +76,20 @@ impl ApplyEvents<BenchInput> for BenchSnapshot {
         Self::default()
     }
 
-    fn apply_events(&mut self, batch: ApplyBatch<'_, Self::Time, BenchInput>) {
-        let added =
-            batch.events.iter().fold(0_usize, |total, event| total.wrapping_add(event.value).wrapping_add(event.payload[0] as usize));
+    fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Self::Time, BenchInput>) {
+        let added = batch.events.fold(0_usize, |total, event| total.wrapping_add(event.value).wrapping_add(event.payload[0] as usize));
         self.value = black_box(self.value.wrapping_add(added));
     }
 }
 
-fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<i64> {
+fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
         placement: contime_router::Placement::default(),
-        memory_limit: 256 * 1024 * 1024,
-        memory_buffer: 1024 * 1024,
-        history_retention: EVENT_COUNT as i64,
+        pruning_interval: std::time::Duration::from_millis(100),
+
+        history_retention: Time(EVENT_COUNT as i64),
         worker: contime_worker::WorkerConfig {
             maximum_dirty_age: Duration::from_micros(100),
             replays_per_receive: 1,
@@ -100,7 +105,7 @@ fn input(id: usize) -> BenchInput {
 }
 
 fn routed_input(id: u128, time: i64, snapshot_id: u128) -> BenchInput {
-    BenchInput { id, snapshot_id, time, value: 1, payload: [0; 16] }
+    BenchInput { id, snapshot_id, time: Time(time), value: 1, payload: [0; 16] }
 }
 
 fn batches(batch_size: usize) -> Vec<Vec<BenchInput>> {
@@ -133,7 +138,7 @@ fn measure(iterations: u64, batch_size: usize) -> Duration {
 
     for _ in 0..iterations {
         let contime = ConTime::<BenchInput, BenchSnapshot, ()>::start(config(1, 1), ()).unwrap();
-        contime.advance_to(EVENT_COUNT as i64).unwrap();
+        contime.advance_to(Time(EVENT_COUNT as i64)).unwrap();
         assert_eq!(send_and_wait(&contime, prepare_workload(vec![vec![input(0)]])), 0);
         let workload = prepare_workload(batches(batch_size));
 
@@ -142,7 +147,7 @@ fn measure(iterations: u64, batch_size: usize) -> Duration {
         measured += started.elapsed();
 
         assert_eq!(rejection_count, 0);
-        black_box(contime.used_memory());
+
         let report = contime.shutdown();
         assert!(report.routers.iter().all(|outcome| *outcome == contime_runtime::ThreadOutcome::Completed));
         assert!(report.workers.iter().all(|outcome| *outcome == contime_runtime::ThreadOutcome::Completed));
@@ -215,7 +220,7 @@ fn measure_topology(iterations: u64, router_count: usize, worker_count: usize, s
 
     for _ in 0..iterations {
         let contime = ConTime::<BenchInput, BenchSnapshot, ()>::start(config(router_count, worker_count), ()).unwrap();
-        contime.advance_to(EVENT_COUNT as i64).unwrap();
+        contime.advance_to(Time(EVENT_COUNT as i64)).unwrap();
         assert_eq!(send_and_wait(&contime, prepare_workload(vec![topology_warmup(snapshot_ids)])), 0);
         let workload = prepare_workload(topology_batches(snapshot_ids));
 
@@ -224,7 +229,6 @@ fn measure_topology(iterations: u64, router_count: usize, worker_count: usize, s
         measured += started.elapsed();
         assert_eq!(rejection_count, 0);
 
-        black_box(contime.used_memory());
         let report = contime.shutdown();
         assert_eq!(report.routers.len(), router_count);
         assert_eq!(report.workers.len(), worker_count);

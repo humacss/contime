@@ -1,6 +1,6 @@
 use ahash::AHashMap;
 
-use crate::types::{NotificationId, ReplayUpdate, SnapshotSlot};
+use crate::types::{NotificationId, ReplayUpdate, StoreSlot};
 use crate::SnapshotListener;
 
 struct NotificationCollection<T, L> {
@@ -30,12 +30,12 @@ where
         Self { entries: Vec::new(), free: Vec::new(), touched: Vec::new(), active: 0 }
     }
 
-    pub(crate) fn register<S, K, C, R>(
+    pub(crate) fn register<S>(
         &mut self,
         time: T,
         mut snapshot_ids: Vec<u128>,
         listener: L,
-        snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>,
+        snapshots: &mut AHashMap<u128, StoreSlot<S>>,
     ) -> Option<NotificationId> {
         snapshot_ids.sort_unstable();
         snapshot_ids.dedup();
@@ -45,7 +45,7 @@ where
 
         let notification_id = self.insert(NotificationCollection { watched_time: time, listener, pending_snapshot_ids: Vec::new() });
         for snapshot_id in snapshot_ids {
-            snapshots.entry(snapshot_id).or_insert_with(SnapshotSlot::metadata_only).notification_ids.push(notification_id);
+            snapshots.entry(snapshot_id).or_insert_with(StoreSlot::metadata_only).notification_ids.push(notification_id);
         }
         Some(notification_id)
     }
@@ -64,7 +64,7 @@ where
         }
     }
 
-    pub(crate) fn record<S, K, C, R>(&mut self, update: ReplayUpdate<T>, snapshots: &mut AHashMap<u128, SnapshotSlot<S, K, C, R>>) {
+    pub(crate) fn record<S>(&mut self, update: ReplayUpdate<T>, snapshots: &mut AHashMap<u128, StoreSlot<S>>) {
         if self.active == 0 {
             return;
         }
@@ -116,7 +116,7 @@ mod tests {
     use crossbeam_channel::{unbounded, Sender};
 
     use super::NotificationCollections;
-    use crate::types::{ReplayUpdate, SnapshotSlot};
+    use crate::types::{ReplayUpdate, StoreSlot};
     use crate::SnapshotListener;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,7 +138,7 @@ mod tests {
         }
     }
 
-    type Snapshots = AHashMap<u128, SnapshotSlot<Vec<u8>, Vec<u8>, (), ()>>;
+    type Snapshots = AHashMap<u128, StoreSlot<Vec<u8>>>;
 
     #[test]
     fn registration_creates_one_collection_on_unique_metadata_only_slots() {
@@ -150,7 +150,7 @@ mod tests {
 
         assert_eq!(receiver.recv().unwrap(), Message::Registered { time: 55, snapshot_ids: vec![3, 5, 8] });
         assert_eq!(snapshots.len(), 3);
-        assert!(snapshots.values().all(|slot| slot.events.is_none()));
+        assert!(snapshots.values().all(|slot| slot.store.is_none()));
         assert!(snapshots.values().all(|slot| slot.notification_ids == vec![notification_id]));
     }
 
