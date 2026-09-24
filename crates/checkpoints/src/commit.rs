@@ -25,6 +25,20 @@ impl<S: Snapshot, H> Commit<'_, S, H> {
         *self.checkpoint_index = self.store.checkpoints.len() - 1;
     }
 
+    /// Moves forward through existing slots, then replaces the current slot.
+    /// Older slots remain available for later physical cleanup.
+    pub fn forward_checkpoint(&mut self) {
+        while self
+            .store
+            .checkpoints
+            .get(*self.checkpoint_index + 1)
+            .is_some_and(|next| next.snapshot.time() <= self.checkpoint.snapshot.time())
+        {
+            *self.checkpoint_index += 1;
+        }
+        self.replace_checkpoint(*self.checkpoint_index);
+    }
+
     /// Records the inclusive valid-through boundary after contiguous replay.
     pub fn set_dirty(&mut self, time: S::Time) {
         self.store.dirty = time;
@@ -49,20 +63,8 @@ pub(crate) fn commit<S: Snapshot, H, R>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::testing::{TestSnapshot, Time};
     use std::hint::black_box;
-    type Time = u64;
-    #[derive(Clone)]
-    struct State(Time);
-
-    impl Snapshot for State {
-        type Time = Time;
-        fn time(&self) -> &Time {
-            &self.0
-        }
-        fn set_time(&mut self, time: Time) {
-            self.0 = time;
-        }
-    }
 
     #[rstest::rstest]
     #[case::replace(false, 0, 1)]
@@ -73,8 +75,8 @@ mod tests {
         let expected_horizon: Time = 5;
         let expected_events = [1, 2];
 
-        let mut store = Store::new(expected_events, State(0), 2);
-        let working = Checkpoint { snapshot: State(expected_time), history_event_count: 1 };
+        let mut store = Store::new(expected_events, TestSnapshot { time: 0, sum: 0 }, 2);
+        let working = Checkpoint { snapshot: TestSnapshot { time: expected_time, sum: 0 }, history_event_count: 1 };
         let mut index = 0;
 
         let actual_index = commit(&mut store, &working, &mut index, |access| {
@@ -105,8 +107,8 @@ mod tests {
         let expected_index = 0;
         let expected_len = 1;
 
-        let mut store = Store::new((), State(expected_time), 2);
-        let working = Checkpoint { snapshot: State(10), history_event_count: 1 };
+        let mut store = Store::new((), TestSnapshot { time: expected_time, sum: 0 }, 2);
+        let working = Checkpoint { snapshot: TestSnapshot { time: 10, sum: 0 }, history_event_count: 1 };
         let mut index = expected_index;
 
         commit(&mut store, &working, &mut index, |_| {});
@@ -125,9 +127,11 @@ mod tests {
         let expected_index = 1;
         let expected_count = 3;
 
-        let mut store = Store::new((), State(0), 2);
-        store.checkpoints.extend([10, 20].map(|time| Checkpoint { snapshot: State(time), history_event_count: time / 10 }));
-        let working = Checkpoint { snapshot: State(15), history_event_count: expected_count };
+        let mut store = Store::new((), TestSnapshot { time: 0, sum: 0 }, 2);
+        store
+            .checkpoints
+            .extend([10, 20].map(|time| Checkpoint { snapshot: TestSnapshot { time, sum: 0 }, history_event_count: time / 10 }));
+        let working = Checkpoint { snapshot: TestSnapshot { time: 15, sum: 0 }, history_event_count: expected_count };
         let mut index = 0;
 
         commit(&mut store, &working, &mut index, |access| access.replace_checkpoint(expected_index));
@@ -139,11 +143,40 @@ mod tests {
         assert_eq!(actual_count, expected_count);
     }
 
+    #[rstest::rstest]
+    #[case::same_slot(5, 0, &[5, 10, 20, 30])]
+    #[case::next_slot(15, 1, &[0, 15, 20, 30])]
+    #[case::several_slots(25, 2, &[0, 10, 25, 30])]
+    #[case::past_tip(40, 3, &[0, 10, 20, 40])]
+    fn forwarding_reuses_slots_from_the_current_index(
+        #[case] target: Time,
+        #[case] expected_index: usize,
+        #[case] expected_times: &[Time],
+    ) {
+        let expected_dirty = 0;
+        let expected_horizon = 0;
+
+        let mut store = Store::new((), TestSnapshot { time: 0, sum: 0 }, 100);
+        store
+            .checkpoints
+            .extend([10, 20, 30].map(|time| Checkpoint { snapshot: TestSnapshot { time, sum: 0 }, history_event_count: time }));
+        let working = Checkpoint { snapshot: TestSnapshot { time: target, sum: 7 }, history_event_count: 3 };
+        let mut index = 0;
+
+        commit(&mut store, &working, &mut index, |access| access.forward_checkpoint());
+        let actual_times = store.checkpoints.iter().map(|checkpoint| checkpoint.snapshot.time).collect::<Vec<_>>();
+
+        assert_eq!(actual_times, expected_times);
+        assert_eq!(index, expected_index);
+        assert_eq!(store.dirty, expected_dirty);
+        assert_eq!(store.horizon, expected_horizon);
+    }
+
     #[test]
     #[ignore = "inline Criterion benchmark"]
     fn benchmark_commit_unit() {
-        let mut store = Store::new((), State(0), 100);
-        let working = Checkpoint { snapshot: State(10), history_event_count: 100 };
+        let mut store = Store::new((), TestSnapshot { time: 0, sum: 0 }, 100);
+        let working = Checkpoint { snapshot: TestSnapshot { time: 10, sum: 0 }, history_event_count: 100 };
         let mut index = 0;
         let mut criterion = criterion::Criterion::default()
             .warm_up_time(std::time::Duration::from_millis(200))

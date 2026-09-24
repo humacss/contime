@@ -79,39 +79,12 @@ mod tests {
     use super::*;
     use std::hint::black_box;
 
-    type Time = u64;
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct State(Time);
-    struct Input(Time);
-    struct Events(Vec<Input>);
+    use crate::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
 
-    impl Snapshot for State {
-        type Time = Time;
-        fn time(&self) -> &Time {
-            &self.0
-        }
-        fn set_time(&mut self, time: Time) {
-            self.0 = time;
-        }
-    }
-    impl Event for Input {
-        type Time = Time;
-        fn time(&self) -> Time {
-            self.0
-        }
-    }
-    impl EventStore for Events {
-        type Time = Time;
-        type Event = Input;
-        type Iter<'a> = std::slice::Iter<'a, Input>;
-        fn iter_after(&self, boundary: Option<&Time>) -> Self::Iter<'_> {
-            let from = boundary.map_or(0, |time| self.0.partition_point(|event| event.0 <= *time));
-            self.0[from..].iter()
-        }
-    }
     // Synthetic application results keep these tests independent of apply.rs.
-    fn apply_stub<'a>(checkpoint: &mut Checkpoint<State>, events: impl Iterator<Item = &'a Input>) -> Vec<Time> {
-        let times = events.map(|event| event.0).collect::<Vec<_>>();
+    fn apply_stub<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a TestEvent>) -> Vec<Time> {
+        let mut times = Vec::new();
+        <TestEvent as crate::Apply<Checkpoint<TestSnapshot>>>::apply(checkpoint, events.inspect(|event| times.push(event.0)), &());
         if let Some(time) = times.last() {
             checkpoint.snapshot.set_time(*time);
             checkpoint.history_event_count += times.len() as u64;
@@ -127,7 +100,7 @@ mod tests {
 
         let start: Time = 0;
         let interval = 2;
-        let mut store = Store::new(Events(Vec::new()), State(start), interval);
+        let mut store = Store::new(TestEventStore(Vec::new()), TestSnapshot { time: start, sum: 0 }, interval);
         let mut playback = store.play(&start).unwrap();
         let mut calls = 0;
 
@@ -154,8 +127,8 @@ mod tests {
 
         let initial_time: Time = 0;
         let stored_time: Time = 50;
-        let mut store = Store::new(Events(Vec::new()), State(initial_time), interval);
-        store.checkpoints.push_back(Checkpoint { snapshot: State(stored_time), history_event_count: stored_time });
+        let mut store = Store::new(TestEventStore(Vec::new()), TestSnapshot { time: initial_time, sum: 0 }, interval);
+        store.checkpoints.push_back(Checkpoint { snapshot: TestSnapshot { time: stored_time, sum: 0 }, history_event_count: stored_time });
 
         let playback = Playback::new(&mut store, index);
         let actual_time = *playback.checkpoint.snapshot.time();
@@ -182,7 +155,7 @@ mod tests {
         let expected_stored_count = 0;
 
         let initial_time: Time = 0;
-        let mut store = Store::new(Events(Vec::new()), State(initial_time), interval);
+        let mut store = Store::new(TestEventStore(Vec::new()), TestSnapshot { time: initial_time, sum: 0 }, interval);
         let mut playback = Playback::new(&mut store, 0);
         playback.checkpoint.history_event_count = applied_count;
 
@@ -205,8 +178,8 @@ mod tests {
         let expected_dirty: Time = 0;
 
         let initial_time: Time = 0;
-        let events = Events(vec![Input(0), Input(10), Input(10), Input(20), Input(30)]);
-        let mut store = Store::new(events, State(initial_time), interval);
+        let events = TestEventStore(vec![TestEvent(0, 1), TestEvent(10, 1), TestEvent(10, 1), TestEvent(20, 1), TestEvent(30, 1)]);
+        let mut store = Store::new(events, TestSnapshot { time: initial_time, sum: 0 }, interval);
 
         let mut playback = store.play(&initial_time).unwrap();
         let (checkpoint, events) = playback.begin();
@@ -240,8 +213,8 @@ mod tests {
         let start: Time = 0;
         let cutoff: Time = 0;
         let interval = 2;
-        let events = Events(vec![Input(0), Input(10), Input(10), Input(20)]);
-        let mut store = Store::new(events, State(start), interval);
+        let events = TestEventStore(vec![TestEvent(0, 1), TestEvent(10, 1), TestEvent(10, 1), TestEvent(20, 1)]);
+        let mut store = Store::new(events, TestSnapshot { time: start, sum: 0 }, interval);
 
         let mut playback = store.play(&start).unwrap();
         let (checkpoint, events) = playback.begin();
@@ -265,7 +238,7 @@ mod tests {
 
         let initial_time: Time = 0;
         let interval = 1;
-        let mut store = Store::new(Events(vec![Input(10)]), State(initial_time), interval);
+        let mut store = Store::new(TestEventStore(vec![TestEvent(10, 1)]), TestSnapshot { time: initial_time, sum: 0 }, interval);
 
         {
             let mut playback = store.play(&initial_time).unwrap();
@@ -286,7 +259,11 @@ mod tests {
 
         let start: Time = 0;
         let interval = 2;
-        let mut store = Store::new(Events(vec![Input(10), Input(20), Input(30)]), State(start), interval);
+        let mut store = Store::new(
+            TestEventStore(vec![TestEvent(10, 1), TestEvent(20, 1), TestEvent(30, 1)]),
+            TestSnapshot { time: start, sum: 0 },
+            interval,
+        );
 
         let mut playback = store.play(&start).unwrap();
         playback.begin().1.for_each(drop);
@@ -306,7 +283,8 @@ mod tests {
         let initial_time: Time = 0;
         let horizon: Time = 30;
         let interval = 2;
-        let mut store = Store::new(Events(vec![Input(10), Input(20)]), State(initial_time), interval);
+        let mut store =
+            Store::new(TestEventStore(vec![TestEvent(10, 1), TestEvent(20, 1)]), TestSnapshot { time: initial_time, sum: 0 }, interval);
         store.horizon = horizon;
         let mut playback = Playback::new(&mut store, 0);
 
@@ -323,7 +301,7 @@ mod tests {
         let expected_dirty = expected_time;
 
         let interval = 2;
-        let mut store = Store::new(Events(vec![]), State(expected_time), interval);
+        let mut store = Store::new(TestEventStore(vec![]), TestSnapshot { time: expected_time, sum: 0 }, interval);
 
         let mut playback = store.play(&expected_time).unwrap();
         playback.commit(|_| {});
@@ -345,8 +323,8 @@ mod tests {
 
         let initial_time: Time = 0;
         let interval = expected_events;
-        let events = Events((1..=200).map(Input).collect());
-        let mut store = Store::new(events, State(initial_time), interval);
+        let events = TestEventStore((1..=200).map(|time| TestEvent(time, time)).collect());
+        let mut store = Store::new(events, TestSnapshot { time: initial_time, sum: 0 }, interval);
         let mut playback = Playback::new(&mut store, 0);
 
         let (checkpoint, events) = playback.begin();
@@ -363,8 +341,8 @@ mod tests {
     fn benchmark_playback_unit() {
         let initial_time: Time = 0;
         let interval = 100;
-        let events = Events((1..=200).map(Input).collect());
-        let mut store = Store::new(events, State(initial_time), interval);
+        let events = TestEventStore((1..=200).map(|time| TestEvent(time, time)).collect());
+        let mut store = Store::new(events, TestSnapshot { time: initial_time, sum: 0 }, interval);
         let mut criterion = criterion::Criterion::default()
             .warm_up_time(std::time::Duration::from_millis(200))
             .measurement_time(std::time::Duration::from_secs(1))
@@ -378,7 +356,7 @@ mod tests {
         criterion.bench_function("checkpoints/unit/playback/begin_100_events", |b| {
             b.iter(|| {
                 let (checkpoint, events) = black_box(&mut playback).begin();
-                let sum = events.map(|event| black_box(event.0)).sum::<Time>();
+                let sum = events.map(|event| black_box(event.1)).sum::<Time>();
                 black_box((checkpoint.history_event_count, sum));
             });
         });

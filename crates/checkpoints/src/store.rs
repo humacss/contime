@@ -34,6 +34,13 @@ impl<S: Snapshot, H> Store<S, H> {
             return Err(NoCheckpoint);
         }
         let boundary = start.min(&self.dirty);
+        // Forwarded state remains valid even when replay's dirty boundary is older.
+        let retained = self.checkpoints.partition_point(|checkpoint| checkpoint.snapshot.time() < &self.horizon);
+        if let Some(index) = retained.checked_sub(1) {
+            if self.checkpoints[index].snapshot.time() > boundary {
+                return Ok(Playback::new(self, index));
+            }
+        }
         let end = self.checkpoints.partition_point(|checkpoint| {
             checkpoint.snapshot.time() <= boundary && (start != &self.horizon || checkpoint.snapshot.time() < start)
         });
@@ -52,44 +59,29 @@ mod tests {
     use super::*;
     use std::hint::black_box;
 
-    type Time = u64;
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct State(Time);
-    #[derive(Default)]
-    struct Events {
-        values: Vec<u64>,
-    }
+    use crate::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
 
-    impl Snapshot for State {
-        type Time = Time;
-        fn time(&self) -> &Time {
-            &self.0
-        }
-        fn set_time(&mut self, time: Time) {
-            self.0 = time;
-        }
-    }
     #[rstest::rstest]
     #[case::zero_time(0, 0)]
     #[case::nonzero_time(10, 3)]
     fn happy(#[case] expected_time: Time, #[case] expected_interval: u64) {
-        let expected_events = vec![1, 2, 3];
+        let expected_events = vec![TestEvent(1, 1), TestEvent(2, 2), TestEvent(3, 3)];
         let expected_checkpoints = 1;
         let expected_count = 0;
 
-        let events = Events { values: expected_events.clone() };
-        let snapshot = State(expected_time);
+        let events = TestEventStore(expected_events.clone());
+        let snapshot = TestSnapshot { time: expected_time, sum: 0 };
 
         let mut store = Store::new(events, snapshot, expected_interval);
         let actual_snapshot = store.play(&expected_time).unwrap().checkpoint.snapshot;
-        let actual_events = &store.events.values;
+        let actual_events = &store.events.0;
         let actual_checkpoints = store.checkpoints.len();
         let actual_count = store.checkpoints[0].history_event_count;
         let actual_interval = store.checkpoint_interval;
         let actual_dirty = store.dirty;
         let actual_horizon = store.horizon;
 
-        assert_eq!(actual_snapshot, State(expected_time));
+        assert_eq!(actual_snapshot, TestSnapshot { time: expected_time, sum: 0 });
         assert_eq!(actual_events, &expected_events);
         assert_eq!(actual_checkpoints, expected_checkpoints);
         assert_eq!(actual_count, expected_count);
@@ -106,7 +98,7 @@ mod tests {
 
         let horizon: Time = 10;
         let interval = 1;
-        let mut store = Store::new(Events::default(), State(horizon), interval);
+        let mut store = Store::new(TestEventStore::default(), TestSnapshot { time: horizon, sum: 0 }, interval);
         if empty {
             store.checkpoints.clear();
         }
@@ -125,7 +117,7 @@ mod tests {
 
         let horizon: Time = 10;
         let interval = 1;
-        let mut store = Store::new(Events::default(), State(expected_checkpoint_time), interval);
+        let mut store = Store::new(TestEventStore::default(), TestSnapshot { time: expected_checkpoint_time, sum: 0 }, interval);
         store.horizon = horizon;
 
         let actual_allowed = store.play(&requested).is_ok();
@@ -139,8 +131,8 @@ mod tests {
         let expected_time: Time = 9;
 
         let horizon: Time = 10;
-        let mut store = Store::new(Events::default(), State(0), 1);
-        store.checkpoints.extend([9, 10, 20].map(|time| Checkpoint { snapshot: State(time), history_event_count: time }));
+        let mut store = Store::new(TestEventStore::default(), TestSnapshot { time: 0, sum: 0 }, 1);
+        store.checkpoints.extend([9, 10, 20].map(|time| Checkpoint { snapshot: TestSnapshot { time, sum: 0 }, history_event_count: time }));
         store.horizon = horizon;
         store.dirty = 20;
 
@@ -159,8 +151,10 @@ mod tests {
 
         let interval = 2;
         let initial_time: Time = 0;
-        let mut store = Store::new(Events::default(), State(initial_time), interval);
-        store.checkpoints.extend([10, 20, 30].map(|time| Checkpoint { snapshot: State(time), history_event_count: time / 10 }));
+        let mut store = Store::new(TestEventStore::default(), TestSnapshot { time: initial_time, sum: 0 }, interval);
+        store
+            .checkpoints
+            .extend([10, 20, 30].map(|time| Checkpoint { snapshot: TestSnapshot { time, sum: 0 }, history_event_count: time / 10 }));
         store.dirty = dirty;
 
         let playback = store.play(&start).unwrap();
@@ -175,9 +169,10 @@ mod tests {
         let start: Time = 10;
         let interval = 100;
         let checkpoint_count = 1024;
-        let mut populated = Store::new(Events::default(), State(start), interval);
+        let mut populated = Store::new(TestEventStore::default(), TestSnapshot { time: start, sum: 0 }, interval);
         populated.checkpoints.extend(
-            (1..checkpoint_count).map(|index| Checkpoint { snapshot: State(start + index), history_event_count: index * interval }),
+            (1..checkpoint_count)
+                .map(|index| Checkpoint { snapshot: TestSnapshot { time: start + index, sum: 0 }, history_event_count: index * interval }),
         );
         let target = start + checkpoint_count - 1;
         populated.dirty = target;
@@ -187,7 +182,11 @@ mod tests {
             .sample_size(30);
         criterion.bench_function("checkpoints/unit/store/new_and_drop", |b| {
             b.iter(|| {
-                black_box(Store::new(black_box(Events::default()), black_box(State(start)), black_box(interval)));
+                black_box(Store::new(
+                    black_box(TestEventStore::default()),
+                    black_box(TestSnapshot { time: start, sum: 0 }),
+                    black_box(interval),
+                ));
             });
         });
         criterion.bench_function("checkpoints/unit/store/play_1024_checkpoints", |b| {

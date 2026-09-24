@@ -29,44 +29,7 @@ mod tests {
     use super::*;
     use std::hint::black_box;
 
-    type Time = u64;
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    struct State {
-        time: Time,
-        sum: u64,
-    }
-    struct Input(Time, u64);
-    struct Events(Vec<Input>);
-
-    impl Snapshot for State {
-        type Time = Time;
-        fn time(&self) -> &Time {
-            &self.time
-        }
-        fn set_time(&mut self, time: Time) {
-            self.time = time;
-        }
-    }
-    impl Event for Input {
-        type Time = Time;
-        fn time(&self) -> Time {
-            self.0
-        }
-    }
-    impl EventStore for Events {
-        type Time = Time;
-        type Event = Input;
-        type Iter<'a> = std::slice::Iter<'a, Input>;
-        fn iter_after(&self, boundary: Option<&Time>) -> Self::Iter<'_> {
-            let start = boundary.map_or(0, |time| self.0.partition_point(|event| event.0 <= *time));
-            self.0[start..].iter()
-        }
-    }
-    impl Apply<Checkpoint<State>> for Input {
-        fn apply<'a>(checkpoint: &mut Checkpoint<State>, events: impl Iterator<Item = &'a Self>, _: &()) {
-            checkpoint.snapshot.sum += events.map(|event| event.1).sum::<u64>();
-        }
-    }
+    use crate::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
 
     #[rstest::rstest]
     #[case::before_events(5, 0, 0)]
@@ -74,13 +37,13 @@ mod tests {
     #[case::between_events(25, 20, 6)]
     #[case::past_events(100, 30, 10)]
     fn happy(#[case] target: Time, #[case] expected_time: Time, #[case] expected_sum: u64) {
-        let expected = State { time: expected_time, sum: expected_sum };
-        let expected_stored = State { time: 0, sum: 0 };
+        let expected = TestSnapshot { time: expected_time, sum: expected_sum };
+        let expected_stored = TestSnapshot { time: 0, sum: 0 };
         let expected_checkpoint_count = 1;
         let expected_event_count = 0;
         let expected_boundary: Time = 0;
 
-        let events = Events(vec![Input(10, 1), Input(20, 2), Input(20, 3), Input(30, 4)]);
+        let events = TestEventStore(vec![TestEvent(10, 1), TestEvent(20, 2), TestEvent(20, 3), TestEvent(30, 4)]);
         let interval = 1;
         let mut store = Store::new(events, expected_stored.clone(), interval);
 
@@ -97,10 +60,10 @@ mod tests {
 
     #[test]
     fn empty_history_returns_the_initial_state() {
-        let expected = State { time: 10, sum: 7 };
+        let expected = TestSnapshot { time: 10, sum: 7 };
 
         let target: Time = 20;
-        let mut store = Store::new(Events(Vec::new()), expected.clone(), 1);
+        let mut store = Store::new(TestEventStore(Vec::new()), expected.clone(), 1);
 
         let actual = query_at(&mut store, &(), target).unwrap();
 
@@ -113,7 +76,7 @@ mod tests {
 
         let horizon: Time = 10;
         let target = horizon - 1;
-        let mut store = Store::new(Events(Vec::new()), State { time: horizon, sum: 0 }, 1);
+        let mut store = Store::new(TestEventStore(Vec::new()), TestSnapshot { time: horizon, sum: 0 }, 1);
 
         let actual = query_at(&mut store, &(), target);
 
@@ -129,14 +92,19 @@ mod tests {
             .sample_size(30);
         for event_count in [1000, 10_000] {
             for interval in [10, 100] {
-                let events = Events((1..=event_count).map(|time| Input(time, 1)).collect());
-                let mut store = Store::new(events, State { time: 0, sum: 0 }, interval);
                 let name = format!("checkpoints/query/{event_count}_events_{}_intervals", event_count / interval);
                 criterion.bench_function(&name, |b| {
-                    b.iter(|| {
-                        let result = query_at(black_box(&mut store), black_box(&()), black_box(event_count)).unwrap();
-                        black_box(result);
-                    });
+                    b.iter_batched_ref(
+                        || {
+                            let events = TestEventStore((1..=event_count).map(|time| TestEvent(time, 1)).collect());
+                            Store::new(events, TestSnapshot { time: 0, sum: 0 }, interval)
+                        },
+                        |store| {
+                            let result = query_at(black_box(store), black_box(&()), black_box(event_count)).unwrap();
+                            black_box(result);
+                        },
+                        criterion::BatchSize::SmallInput,
+                    );
                 });
             }
         }
