@@ -13,6 +13,7 @@ pub struct EventBatch<'a, 'e, T, E> {
     pub snapshot_id: u128,
     pub time: T,
     pub events: &'a mut dyn Iterator<Item = &'e E>,
+    pub lookahead: BatchLookahead<'a, T>,
 }
 
 /// One effective event batch selected from a canonical timestamp bucket.
@@ -169,15 +170,19 @@ where
     S: ApplyEvents<I> + Snapshot<Time = I::Time>,
     W: ApplyWrapper<S, I>,
 {
-    fn apply<'a>(state: &mut Checkpoint<S>, events: impl Iterator<Item = &'a Self>, context: &Application<'_, W>)
-    where
+    fn apply<'a>(
+        state: &mut Checkpoint<S>,
+        events: impl Iterator<Item = &'a Self>,
+        lookahead: BatchLookahead<'_, I::Time>,
+        context: &Application<'_, W>,
+    ) where
         Self: 'a,
     {
         let mut events = events.peekable();
         let Some(time) = events.peek().map(|event| event.inner.time()) else { return };
         let mut payloads = events.map(|event| event.inner.as_ref());
         let count = state.history_event_count;
-        let batch = EventBatch { snapshot_id: context.snapshot_id, time, events: &mut payloads };
+        let batch = EventBatch { snapshot_id: context.snapshot_id, time, events: &mut payloads, lookahead };
         if context.live {
             let mut inner = ApplyInner::new(&mut state.snapshot, count);
             context.wrapper.borrow_mut().replay_event_batch(batch, &mut inner);
@@ -220,8 +225,9 @@ mod wrapper_tests {
     struct FilterEven;
     impl ApplyWrapper<TestSnapshot, TestEvent> for FilterEven {
         fn apply_event_batch(&mut self, batch: EventBatch<'_, '_, Time, TestEvent>, inner: &mut ApplyInner<'_, TestSnapshot>) {
+            let lookahead = batch.lookahead;
             let mut events = batch.events.filter(|event| event.0 % 2 == 0);
-            inner.apply_event_batch(EventBatch { snapshot_id: batch.snapshot_id, time: batch.time, events: &mut events });
+            inner.apply_event_batch(EventBatch { snapshot_id: batch.snapshot_id, time: batch.time, events: &mut events, lookahead });
         }
     }
     struct SkipInner;
@@ -238,7 +244,12 @@ mod wrapper_tests {
         let events = [TestEvent(1), TestEvent(2), TestEvent(3)];
         let mut snapshot = TestSnapshot::default();
 
-        apply_batch(&mut snapshot, EventBatch { snapshot_id: 1, time: expected_time, events: &mut events.iter() }, 7, &mut ());
+        apply_batch(
+            &mut snapshot,
+            EventBatch { snapshot_id: 1, time: expected_time, events: &mut events.iter(), lookahead: BatchLookahead::unavailable() },
+            7,
+            &mut (),
+        );
 
         assert_eq!(snapshot.sum, expected_sum);
         assert_eq!(snapshot.time, expected_time);
@@ -253,7 +264,12 @@ mod wrapper_tests {
         let events = [TestEvent(1), TestEvent(2), TestEvent(3), TestEvent(4)];
         let mut snapshot = TestSnapshot::default();
 
-        apply_batch(&mut snapshot, EventBatch { snapshot_id: 1, time: Time(10), events: &mut events.iter() }, 7, &mut FilterEven);
+        apply_batch(
+            &mut snapshot,
+            EventBatch { snapshot_id: 1, time: Time(10), events: &mut events.iter(), lookahead: BatchLookahead::unavailable() },
+            7,
+            &mut FilterEven,
+        );
 
         assert_eq!(snapshot.sum, expected_sum);
         assert_eq!(snapshot.history_counts, expected_counts);
@@ -271,7 +287,7 @@ mod wrapper_tests {
         let mut inner = ApplyInner::new(&mut snapshot, expected_count);
 
         let actual_count = inner.apply_event_batch_with(
-            EventBatch { snapshot_id: 1, time: expected_time, events: &mut events.iter() },
+            EventBatch { snapshot_id: 1, time: expected_time, events: &mut events.iter(), lookahead: BatchLookahead::unavailable() },
             |snapshot, batch| {
                 snapshot.sum += batch.events.map(|event| event.0 * multiplier).sum::<i64>();
             },
@@ -292,7 +308,7 @@ mod wrapper_tests {
         let mut inner = ApplyInner::new(&mut snapshot, expected_count);
 
         inner.apply_event_batch_with::<TestEvent>(
-            EventBatch { snapshot_id: 1, time: expected_time, events: &mut std::iter::empty() },
+            EventBatch { snapshot_id: 1, time: expected_time, events: &mut std::iter::empty(), lookahead: BatchLookahead::unavailable() },
             |_, _| panic!("empty effective batch must not call the consumer"),
         );
 
@@ -308,7 +324,12 @@ mod wrapper_tests {
         let events = [TestEvent(1)];
         let mut snapshot = TestSnapshot::default();
 
-        apply_batch(&mut snapshot, EventBatch { snapshot_id: 1, time: Time(10), events: &mut events.iter() }, 0, &mut SkipInner);
+        apply_batch(
+            &mut snapshot,
+            EventBatch { snapshot_id: 1, time: Time(10), events: &mut events.iter(), lookahead: BatchLookahead::unavailable() },
+            0,
+            &mut SkipInner,
+        );
     }
 
     #[test]
@@ -321,7 +342,12 @@ mod wrapper_tests {
                 let mut snapshot = TestSnapshot::default();
                 apply_batch(
                     &mut snapshot,
-                    EventBatch { snapshot_id: 1, time: Time(10), events: &mut std::hint::black_box(&events).iter() },
+                    EventBatch {
+                        snapshot_id: 1,
+                        time: Time(10),
+                        events: &mut std::hint::black_box(&events).iter(),
+                        lookahead: BatchLookahead::unavailable(),
+                    },
                     0,
                     &mut (),
                 );

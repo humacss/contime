@@ -9,6 +9,7 @@ pub struct Playback<'a, S: Snapshot, H> {
     pub(super) store: &'a mut Store<S, H>,
     pub(super) interval_start_count: u64,
     pub(super) checkpoint_index: usize,
+    next_event_time: std::cell::RefCell<Option<Option<S::Time>>>,
 }
 
 impl<'a, S: Snapshot, H> Playback<'a, S, H> {
@@ -24,7 +25,7 @@ impl<'a, S: Snapshot, H> Playback<'a, S, H> {
         } else {
             checkpoint.history_event_count
         };
-        Self { checkpoint, store, interval_start_count, checkpoint_index: index }
+        Self { checkpoint, store, interval_start_count, checkpoint_index: index, next_event_time: std::cell::RefCell::new(None) }
     }
 }
 
@@ -32,8 +33,22 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> Playback<'_, S, H> {
     /// Borrow the working checkpoint and the remaining whole-timestamp interval.
     /// Reborrowing resumes from recorded application progress, not iterator position.
     pub fn begin(&mut self) -> (&mut Checkpoint<S>, impl Iterator<Item = &H::Event>) {
-        let events = interval_events(&self.store.events, &self.checkpoint, self.interval_start_count, self.store.checkpoint_interval);
+        let events = interval_events(&self.store.events, &self.checkpoint, self.interval_start_count, self.store.checkpoint_interval, None);
         (&mut self.checkpoint, events)
+    }
+
+    pub(crate) fn begin_with_lookahead(
+        &mut self,
+    ) -> (&mut Checkpoint<S>, impl Iterator<Item = &H::Event>, crate::BatchLookahead<'_, S::Time>) {
+        self.next_event_time.replace(None);
+        let events = interval_events(
+            &self.store.events,
+            &self.checkpoint,
+            self.interval_start_count,
+            self.store.checkpoint_interval,
+            Some(&self.next_event_time),
+        );
+        (&mut self.checkpoint, events, crate::BatchLookahead::new(&self.next_event_time))
     }
     /// Delegates storage changes and prepares the next interval.
     /// A no-op policy leaves retained state unchanged.
@@ -52,6 +67,7 @@ fn interval_events<'a, S: Snapshot, H: EventStore<Time = S::Time>>(
     checkpoint: &Checkpoint<S>,
     interval_start_count: u64,
     interval: u64,
+    next_event_time: Option<&'a std::cell::RefCell<Option<Option<S::Time>>>>,
 ) -> impl Iterator<Item = &'a H::Event>
 where
     S::Time: 'a,
@@ -63,9 +79,17 @@ where
     let mut count = 0u64;
     let mut last_time = None;
     std::iter::from_fn(move || {
-        let next = events.peek()?;
+        let Some(next) = events.peek() else {
+            if let Some(next_event_time) = next_event_time {
+                next_event_time.replace(Some(None));
+            }
+            return None;
+        };
         let time = next.time();
         if interval != 0 && count >= remaining && last_time.as_ref() != Some(&time) {
+            if let Some(next_event_time) = next_event_time {
+                next_event_time.replace(Some(Some(time)));
+            }
             return None;
         }
         last_time = Some(time);
@@ -84,7 +108,12 @@ mod tests {
     // Synthetic application results keep these tests independent of apply.rs.
     fn apply_stub<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a TestEvent>) -> Vec<Time> {
         let mut times = Vec::new();
-        <TestEvent as crate::Apply<Checkpoint<TestSnapshot>>>::apply(checkpoint, events.inspect(|event| times.push(event.0)), &());
+        <TestEvent as crate::Apply<Checkpoint<TestSnapshot>>>::apply(
+            checkpoint,
+            events.inspect(|event| times.push(event.0)),
+            crate::BatchLookahead::unavailable(),
+            &(),
+        );
         if let Some(time) = times.last() {
             checkpoint.snapshot.set_time(*time);
             checkpoint.history_event_count += times.len() as u64;

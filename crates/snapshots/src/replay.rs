@@ -10,12 +10,12 @@ where
     let mut playback = store.play(&time)?;
     loop {
         {
-            let (checkpoint, events) = playback.begin();
+            let (checkpoint, events, lookahead) = playback.begin_with_lookahead();
             let mut events = events.take_while(|event| event.time() <= time).peekable();
             if events.peek().is_none() {
                 break;
             }
-            crate::apply::apply(checkpoint, events, context);
+            crate::apply::apply_with_lookahead(checkpoint, events, lookahead, context);
         }
         retain(&mut playback);
     }

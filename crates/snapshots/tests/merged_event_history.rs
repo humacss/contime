@@ -61,8 +61,12 @@ impl Snapshot for TestSnapshot {
     }
 }
 impl Apply<Checkpoint<TestSnapshot>, i32> for TestEvent {
-    fn apply<'a>(state: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, context: &i32)
-    where
+    fn apply<'a>(
+        state: &mut Checkpoint<TestSnapshot>,
+        events: impl Iterator<Item = &'a Self>,
+        _: contime_snapshots::BatchLookahead<'_, Time>,
+        context: &i32,
+    ) where
         Self: 'a,
     {
         state.snapshot.0 += events.map(|event| event.1).sum::<i32>() + context;

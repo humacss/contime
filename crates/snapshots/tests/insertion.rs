@@ -58,7 +58,12 @@ impl InsertEventStore for TestEventStore {
     }
 }
 impl Apply<Checkpoint<TestSnapshot>, Cell<usize>> for TestEvent {
-    fn apply<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, calls: &Cell<usize>) {
+    fn apply<'a>(
+        checkpoint: &mut Checkpoint<TestSnapshot>,
+        events: impl Iterator<Item = &'a Self>,
+        _: contime_snapshots::BatchLookahead<'_, Time>,
+        calls: &Cell<usize>,
+    ) {
         calls.set(calls.get() + 1);
         checkpoint.snapshot.sum += events.map(|event| event.value).sum::<u64>();
     }

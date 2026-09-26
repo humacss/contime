@@ -76,10 +76,53 @@ pub trait Event {
     fn time(&self) -> Self::Time;
 }
 
+/// Access to the timestamp following the current complete event batch.
+///
+/// The value is available after the current batch iterator has been consumed.
+/// `None` means there is no later event in the current replay range.
+pub struct BatchLookahead<'a, T> {
+    next_event_time: Option<&'a std::cell::RefCell<Option<Option<T>>>>,
+    fallback: Option<&'a std::cell::RefCell<Option<Option<T>>>>,
+}
+
+impl<T> Clone for BatchLookahead<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for BatchLookahead<'_, T> {}
+
+impl<'a, T> BatchLookahead<'a, T> {
+    pub(crate) const fn new(next_event_time: &'a std::cell::RefCell<Option<Option<T>>>) -> Self {
+        Self { next_event_time: Some(next_event_time), fallback: None }
+    }
+
+    /// Creates lookahead for a manually assembled batch with no following time.
+    pub const fn unavailable() -> Self {
+        Self { next_event_time: None, fallback: None }
+    }
+
+    pub(crate) const fn with_fallback(next_event_time: &'a std::cell::RefCell<Option<Option<T>>>, fallback: Self) -> Self {
+        Self { next_event_time: Some(next_event_time), fallback: fallback.next_event_time }
+    }
+
+    pub fn next_event_time(self) -> Option<T>
+    where
+        T: Clone,
+    {
+        let next_event_time = self.next_event_time?;
+        match next_event_time.borrow().as_ref().expect("the current event batch must be consumed before reading its lookahead").clone() {
+            Some(time) => Some(time),
+            None => self.fallback.and_then(|fallback| fallback.borrow().as_ref().cloned().flatten()),
+        }
+    }
+}
+
 /// Consumer-defined application of one complete timestamp batch.
 /// Mutation and any application hooks belong entirely to this implementation.
 pub trait Apply<S, C = ()>: Event + Sized {
-    fn apply<'a>(snapshot: &mut S, events: impl Iterator<Item = &'a Self>, context: &C)
+    fn apply<'a>(snapshot: &mut S, events: impl Iterator<Item = &'a Self>, lookahead: BatchLookahead<'_, Self::Time>, context: &C)
     where
         Self: 'a;
 }
@@ -87,7 +130,7 @@ pub trait Apply<S, C = ()>: Event + Sized {
 /// Shared fixtures for unit tests and application benchmarks only.
 #[cfg(test)]
 pub(crate) mod testing {
-    use super::{Apply, Checkpoint, Event, EventStore, Snapshot, Timestamp};
+    use super::{Apply, BatchLookahead, Checkpoint, Event, EventStore, Snapshot, Timestamp};
 
     pub type Time = u64;
 
@@ -140,13 +183,23 @@ pub(crate) mod testing {
     }
 
     impl Apply<Checkpoint<TestSnapshot>> for TestEvent {
-        fn apply<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, _: &()) {
+        fn apply<'a>(
+            checkpoint: &mut Checkpoint<TestSnapshot>,
+            events: impl Iterator<Item = &'a Self>,
+            _: BatchLookahead<'_, Time>,
+            _: &(),
+        ) {
             checkpoint.snapshot.sum += events.map(|event| event.1).sum::<u64>();
         }
     }
 
     impl Apply<Checkpoint<TestSnapshot>, u64> for TestEvent {
-        fn apply<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, context: &u64) {
+        fn apply<'a>(
+            checkpoint: &mut Checkpoint<TestSnapshot>,
+            events: impl Iterator<Item = &'a Self>,
+            _: BatchLookahead<'_, Time>,
+            context: &u64,
+        ) {
             checkpoint.snapshot.sum += events.map(|event| event.1).sum::<u64>() + context;
         }
     }
@@ -164,8 +217,8 @@ pub(crate) mod testing {
         let mut contextual = initial;
         let context = 10u64;
 
-        TestEvent::apply(&mut plain, events.iter(), &());
-        TestEvent::apply(&mut contextual, events.iter(), &context);
+        TestEvent::apply(&mut plain, events.iter(), BatchLookahead::unavailable(), &());
+        TestEvent::apply(&mut contextual, events.iter(), BatchLookahead::unavailable(), &context);
 
         assert_eq!(plain.snapshot.sum, expected_sum);
         assert_eq!(contextual.snapshot.sum, expected_context_sum);

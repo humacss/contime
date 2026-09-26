@@ -52,7 +52,12 @@ impl EventStore for TestEventStore {
     }
 }
 impl Apply<Checkpoint<TestSnapshot>> for TestEvent {
-    fn apply<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, _: &()) {
+    fn apply<'a>(
+        checkpoint: &mut Checkpoint<TestSnapshot>,
+        events: impl Iterator<Item = &'a Self>,
+        _: contime_snapshots::BatchLookahead<'_, Time>,
+        _: &(),
+    ) {
         checkpoint.snapshot.sum += events.map(|event| event.1).sum::<u64>();
     }
 }
