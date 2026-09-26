@@ -44,7 +44,12 @@ impl EventStore for TestEventStore {
     }
 }
 impl Apply<Checkpoint<TestSnapshot>, Context> for TestEvent {
-    fn apply<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, context: &Context) {
+    fn apply<'a>(
+        checkpoint: &mut Checkpoint<TestSnapshot>,
+        events: impl Iterator<Item = &'a Self>,
+        _: contime_snapshots::BatchLookahead<'_, Time>,
+        context: &Context,
+    ) {
         let mut count = 0;
         let mut time = 0;
         for event in events {

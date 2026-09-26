@@ -153,8 +153,9 @@ mod tests {
     impl ApplyWrapper<TestSnapshot, TestEvent> for Context {
         fn replay_event_batch(&mut self, batch: EventBatch<'_, '_, Time, TestEvent>, inner: &mut ApplyInner<'_, TestSnapshot>) {
             self.effects.push(batch.time);
+            let lookahead = batch.lookahead;
             let mut events = batch.events.take(self.limit.unwrap_or(usize::MAX));
-            inner.apply_event_batch(EventBatch { snapshot_id: batch.snapshot_id, time: batch.time, events: &mut events });
+            inner.apply_event_batch(EventBatch { snapshot_id: batch.snapshot_id, time: batch.time, events: &mut events, lookahead });
         }
         fn retain_snapshot(&mut self, snapshot: &mut TestSnapshot, time: &Time) {
             snapshot.compacted += std::mem::take(&mut snapshot.recent);
@@ -164,6 +165,31 @@ mod tests {
     type Adapter = CheckpointStorage<TestEvent, TestSnapshot, Context>;
     fn event(id: u128, time: i64, value: i64) -> SharedEvent<TestEvent> {
         crate::input::prepare_inputs(vec![TestEvent { id, time: Time(time), value }]).pop().unwrap()
+    }
+
+    #[derive(Default)]
+    struct LookaheadContext(Vec<Option<Time>>);
+
+    impl ApplyWrapper<TestSnapshot, TestEvent> for LookaheadContext {
+        fn replay_event_batch(&mut self, batch: EventBatch<'_, '_, Time, TestEvent>, inner: &mut ApplyInner<'_, TestSnapshot>) {
+            let lookahead = batch.lookahead;
+            inner.apply_event_batch(batch);
+            self.0.push(lookahead.next_event_time());
+        }
+    }
+
+    #[test]
+    fn replay_wrapper_observes_the_next_canonical_timestamp() {
+        type LookaheadAdapter = CheckpointStorage<TestEvent, TestSnapshot, LookaheadContext>;
+
+        let mut store = LookaheadAdapter::create(7, &CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 1 } }, &Time(0));
+        let mut context = LookaheadContext::default();
+        store.insert(event(1, 10, 1), &Time(0));
+        store.insert(event(2, 20, 2), &Time(0));
+
+        store.process_until(&Time(20), &mut context);
+
+        assert_eq!(context.0, vec![Some(Time(20)), None]);
     }
 
     #[test]

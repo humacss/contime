@@ -1,16 +1,31 @@
 //! Applies an ordered borrowed iterator in complete timestamp batches.
-use crate::{Apply, Checkpoint, Event, Snapshot};
+use crate::{Apply, BatchLookahead, Checkpoint, Event, Snapshot};
 
 pub(crate) fn apply<'a, S: Snapshot, E: Apply<Checkpoint<S>, C, Time = S::Time> + 'a, C>(
     checkpoint: &mut Checkpoint<S>,
     events: impl Iterator<Item = &'a E>,
     context: &C,
 ) {
+    apply_with_lookahead(checkpoint, events, BatchLookahead::unavailable(), context);
+}
+
+pub(crate) fn apply_with_lookahead<'a, S: Snapshot, E: Apply<Checkpoint<S>, C, Time = S::Time> + 'a, C>(
+    checkpoint: &mut Checkpoint<S>,
+    events: impl Iterator<Item = &'a E>,
+    after_events: BatchLookahead<'_, E::Time>,
+    context: &C,
+) {
     let mut events = events.fuse().peekable();
     while let Some(event) = events.peek() {
         let batch_time = event.time();
         let mut batch_count = 0u64;
-        E::apply(checkpoint, timestamp_batch(&mut events, &batch_time, &mut batch_count), context);
+        let next_event_time = std::cell::RefCell::new(None);
+        E::apply(
+            checkpoint,
+            timestamp_batch(&mut events, &batch_time, &mut batch_count, &next_event_time),
+            BatchLookahead::with_fallback(&next_event_time, after_events),
+            context,
+        );
         checkpoint.history_event_count = checkpoint.history_event_count.saturating_add(batch_count);
         checkpoint.snapshot.set_time(batch_time);
     }
@@ -21,10 +36,23 @@ fn timestamp_batch<'a: 'b, 'b, E: Event + 'a>(
     events: &'b mut std::iter::Peekable<impl Iterator<Item = &'a E> + 'b>,
     time: &'b E::Time,
     count: &'b mut u64,
+    next_event_time: &'b std::cell::RefCell<Option<Option<E::Time>>>,
 ) -> impl Iterator<Item = &'a E> + 'b {
     TimestampBatch {
-        inner: std::iter::from_fn(move || events.next_if(|event| event.time() == *time))
-            .inspect(move |_| *count = count.saturating_add(1)),
+        inner: std::iter::from_fn(move || {
+            let Some(event) = events.peek() else {
+                next_event_time.replace(Some(None));
+                return None;
+            };
+            let event_time = event.time();
+            if event_time != *time {
+                next_event_time.replace(Some(Some(event_time)));
+                return None;
+            }
+            *count = count.saturating_add(1);
+            events.next()
+        })
+        .fuse(),
     }
 }
 
@@ -54,13 +82,18 @@ mod tests {
     use super::*;
 
     use crate::types::testing::{TestEvent, TestSnapshot, Time};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const CONTEXT: u64 = 10;
     struct PanickingTestEvent(Time);
 
     impl Apply<Checkpoint<TestSnapshot>, usize> for TestEvent {
-        fn apply<'a>(state: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, limit: &usize)
-        where
+        fn apply<'a>(
+            state: &mut Checkpoint<TestSnapshot>,
+            events: impl Iterator<Item = &'a Self>,
+            _: BatchLookahead<'_, Time>,
+            limit: &usize,
+        ) where
             Self: 'a,
         {
             state.snapshot.sum += events.take(*limit).map(|event| event.1).sum::<u64>();
@@ -75,7 +108,7 @@ mod tests {
     }
 
     impl Apply<Checkpoint<TestSnapshot>, u64> for PanickingTestEvent {
-        fn apply<'a>(state: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, _: &u64)
+        fn apply<'a>(state: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, _: BatchLookahead<'_, Time>, _: &u64)
         where
             Self: 'a,
         {
@@ -155,6 +188,45 @@ mod tests {
         assert_eq!(actual_sum, expected_sum);
         assert_eq!(actual_count, expected_count);
         assert_eq!(actual_time, expected_time);
+    }
+
+    struct CountingEvent {
+        time: Time,
+        time_reads: std::sync::Arc<AtomicUsize>,
+    }
+
+    impl Event for CountingEvent {
+        type Time = Time;
+
+        fn time(&self) -> Time {
+            self.time_reads.fetch_add(1, Ordering::Relaxed);
+            self.time
+        }
+    }
+
+    impl Apply<Checkpoint<TestSnapshot>> for CountingEvent {
+        fn apply<'a>(
+            _: &mut Checkpoint<TestSnapshot>,
+            events: impl Iterator<Item = &'a Self>,
+            lookahead: BatchLookahead<'_, Time>,
+            _: &(),
+        ) where
+            Self: 'a,
+        {
+            assert_eq!(events.count(), 1);
+            let _ = lookahead.next_event_time();
+        }
+    }
+
+    #[test]
+    fn timestamp_batch_reads_each_boundary_once() {
+        let time_reads = std::sync::Arc::new(AtomicUsize::new(0));
+        let events = [10, 20, 30].map(|time| CountingEvent { time, time_reads: time_reads.clone() });
+        let mut state = Checkpoint { snapshot: TestSnapshot { time: 0, sum: 0 }, history_event_count: 0 };
+
+        apply(&mut state, events.iter(), &());
+
+        assert_eq!(time_reads.load(Ordering::Relaxed), 8);
     }
 
     #[test]

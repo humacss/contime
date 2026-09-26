@@ -15,7 +15,7 @@ mod types;
 
 pub use api::SnapshotStore;
 pub use forward::ForwardError;
-pub use types::{Apply, Checkpoint, Event, EventStore, Insert, InsertEventStore, NoCheckpoint, Snapshot, Timestamp};
+pub use types::{Apply, BatchLookahead, Checkpoint, Event, EventStore, Insert, InsertEventStore, NoCheckpoint, Snapshot, Timestamp};
 
 pub(crate) use commit::Commit;
 pub(crate) use playback::Playback;
