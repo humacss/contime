@@ -12,6 +12,7 @@ contime-api = { path = "../api" }
 contime-checkpoints = { package = "contime-snapshots", path = "../snapshots" }
 contime-events = { path = "../events" }
 contime-lanes = { path = "../lanes" }
+contime-progress = { path = "../progress" }
 contime-router = { path = "../router" }
 contime-runtime = { path = "../runtime" }
 contime-worker = { path = "../worker" }

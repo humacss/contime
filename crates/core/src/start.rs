@@ -11,6 +11,18 @@ where
     W: ApplyWrapper<S, I> + Clone + Send + 'static,
 {
     pub fn start(config: ConTimeConfig<I::Time>, wrapper: W) -> Result<Self, contime_runtime::StartError> {
+        Self::start_with_progress(config, wrapper, ())
+    }
+
+    /// Installs a non-pruning policy in the existing admission coordinator.
+    /// Its cutoff is capped at the processing target. Incomplete observations
+    /// retry at `pruning_interval`; completed observations sleep until admission
+    /// or advancement changes. The default `start` installs no observer.
+    pub fn start_with_progress<P: crate::ProgressPolicy<I::Time>>(
+        config: ConTimeConfig<I::Time>,
+        wrapper: W,
+        policy: P,
+    ) -> Result<Self, contime_runtime::StartError> {
         let (input, incoming) = crossbeam_channel::unbounded();
         let incoming = std::sync::Arc::new(incoming);
         let (error_sender, errors) = crossbeam_channel::unbounded();
@@ -61,9 +73,12 @@ where
                 output,
                 controls,
                 registrations,
-                config.history_retention,
-                config.worker_count,
-                config.pruning_interval,
+                crate::coordinator::Settings {
+                    retention: config.history_retention,
+                    workers: config.worker_count,
+                    interval: config.pruning_interval,
+                },
+                policy,
             );
         }) {
             Ok(coordinator) => coordinator,

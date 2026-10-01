@@ -205,12 +205,8 @@ mod tests {
     }
 
     impl Apply<Checkpoint<TestSnapshot>> for CountingEvent {
-        fn apply<'a>(
-            _: &mut Checkpoint<TestSnapshot>,
-            events: impl Iterator<Item = &'a Self>,
-            lookahead: BatchLookahead<'_, Time>,
-            _: &(),
-        ) where
+        fn apply<'a>(_: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a Self>, lookahead: BatchLookahead<'_, Time>, _: &())
+        where
             Self: 'a,
         {
             assert_eq!(events.count(), 1);
