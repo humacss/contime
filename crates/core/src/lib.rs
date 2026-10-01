@@ -31,5 +31,6 @@ pub use types::{
 pub use contime_api::{ApiError, ApplyResponse, RejectionMessage};
 pub mod checkpoints;
 pub use contime_lanes as lanes;
+pub use contime_progress::{ProgressObservation, ProgressPolicy};
 pub use contime_router::Placement;
 pub use idle::IdleError;

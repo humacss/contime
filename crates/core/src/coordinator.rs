@@ -1,4 +1,4 @@
-//! Serializes admission with conservative, FIFO-fenced pruning rounds.
+//! Serializes admission, pruning and observation through shared fenced rounds.
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -6,17 +6,23 @@ use contime_worker::AdvanceTime;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::frontier::Frontier;
-use crate::{Advance, Input, RejectionMessage, RejectionReason, RouterBatch, RouterMessage};
+use crate::{Advance, Input, ProgressObservation, ProgressPolicy, RejectionMessage, RejectionReason, RouterBatch, RouterMessage};
 
-pub(crate) fn run<I: Input, S>(
+pub(crate) struct Settings<T> {
+    pub retention: T,
+    pub workers: usize,
+    pub interval: Duration,
+}
+
+pub(crate) fn run<I: Input, S, P: ProgressPolicy<I::Time>>(
     input: Arc<Receiver<RouterMessage<I, S>>>,
     output: Sender<RouterMessage<I, S>>,
     controls: Vec<Sender<contime_router::Flush>>,
     registrations: Receiver<Sender<bool>>,
-    retention: I::Time,
-    workers: usize,
-    pruning_interval: Duration,
+    settings: Settings<I::Time>,
+    mut policy: P,
 ) {
+    let Settings { retention, workers, interval: pruning_interval } = settings;
     let mut frontier = Frontier::new(workers);
     let mut target = I::Time::default();
     let (observed, observations) = crossbeam_channel::unbounded();
@@ -28,14 +34,29 @@ pub(crate) fn run<I: Input, S>(
     let mut pruned = vec![I::Time::default(); workers];
     let mut completed_horizon = I::Time::default();
     let mut horizon_listeners: Vec<Sender<I::Time>> = Vec::new();
+    let mut observation_pending = true;
+    let mut observing = None;
     loop {
         let pruning = frontier.requested() > frontier.safe();
-        if pruning && !frontier.measuring() && resolving.is_none() && Instant::now() >= next_round {
+        let observation_limit = if observation_pending && !frontier.measuring() && resolving.is_none() {
+            let limit = policy.cutoff(&target).map(|limit| limit.min(target.clone()));
+            if limit.is_none() {
+                observation_pending = false;
+            }
+            limit
+        } else {
+            None
+        };
+        let measuring_needed = pruning || observation_limit.is_some();
+        if measuring_needed && !frontier.measuring() && resolving.is_none() && Instant::now() >= next_round {
             if !working {
                 working = true;
                 listeners.retain(|listener| listener.send(true).is_ok());
             }
-            if let Some(round) = frontier.begin() {
+            let round = if observation_limit.is_some() { frontier.begin_observing(observation_limit.clone()) } else { frontier.begin() };
+            if let Some(round) = round {
+                observing = observation_limit;
+                observation_pending = false;
                 awaiting_marker = Some(round);
                 if output.send(RouterMessage::Fence { round, observed: observed.clone() }).is_err() {
                     return;
@@ -43,12 +64,17 @@ pub(crate) fn run<I: Input, S>(
                 next_round = Instant::now() + pruning_interval;
             }
         }
-        let busy = pruning || resolving.is_some() || !input.is_empty() || !observations.is_empty();
+        let busy = measuring_needed
+            || frontier.measuring()
+            || observation_pending
+            || resolving.is_some()
+            || !input.is_empty()
+            || !observations.is_empty();
         if working != busy {
             working = busy;
             listeners.retain(|listener| listener.send(working).is_ok());
         }
-        let timer = if pruning && !frontier.measuring() && resolving.is_none() {
+        let timer = if measuring_needed && !frontier.measuring() && resolving.is_none() {
             crossbeam_channel::after(next_round.saturating_duration_since(Instant::now()))
         } else {
             crossbeam_channel::never()
@@ -124,18 +150,30 @@ pub(crate) fn run<I: Input, S>(
                 }
                 None
             }
-            RouterMessage::Apply(batch) => admit(batch, None, &mut frontier),
-            RouterMessage::Internal { source, batch } => admit(batch, Some(source), &mut frontier),
+            RouterMessage::Apply(batch) => {
+                let admitted = admit(batch, None, &mut frontier);
+                observation_pending |= admitted.is_some();
+                admitted
+            }
+            RouterMessage::Internal { source, batch } => {
+                let admitted = admit(batch, Some(source), &mut frontier);
+                observation_pending |= admitted.is_some();
+                admitted
+            }
             RouterMessage::Advance(mut advance) => {
                 target = target.max(advance.time);
+                observation_pending = true;
                 frontier.request(target.saturating_sub(&retention));
                 advance.time = target.clone();
                 Some(RouterMessage::Advance(advance))
             }
             RouterMessage::Report { round, worker, minimum } => {
-                let measuring = frontier.measuring();
-                frontier.report(round, worker, minimum);
-                if measuring && !frontier.measuring() {
+                if let Some(before) = frontier.report(round, worker, minimum) {
+                    if let Some(cutoff) = observing.take() {
+                        let before = before.min(cutoff.clone());
+                        observation_pending |= before < cutoff;
+                        policy.observed(ProgressObservation { round, cutoff, before });
+                    }
                     let (completion, completed) = crossbeam_channel::unbounded();
                     resolving = Some(completed);
                     Some(RouterMessage::Resolve { round, prune: Advance { time: frontier.safe().clone(), completion } })
@@ -147,6 +185,9 @@ pub(crate) fn run<I: Input, S>(
             other => Some(other),
         };
         if let Some(message) = forwarded {
+            if matches!(&message, RouterMessage::Apply(_)) {
+                policy.invalidated();
+            }
             if output.send(message).is_err() {
                 return;
             }
@@ -181,8 +222,8 @@ pub(crate) fn admit<I: Input, S>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::testing::Time;
     use crate::CompletionHandle;
+    use crate::types::testing::Time;
 
     struct Event(Time);
 
@@ -195,7 +236,7 @@ mod tests {
     }
     impl Input for Event {
         fn event_id(&self) -> u128 {
-            self.0 .0 as u128
+            self.0.0 as u128
         }
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
             emit(1);
@@ -204,6 +245,56 @@ mod tests {
 
     fn batch(time: Time, sender: &Sender<RejectionMessage<RejectionReason>>) -> RouterBatch<Event> {
         RouterBatch { inputs: crate::input::prepare_inputs(vec![Event(time)]), completion: CompletionHandle { sender: sender.clone() } }
+    }
+
+    #[test]
+    fn admission_invalidates_cached_progress_before_forwarding() {
+        struct Observe(Sender<()>);
+        impl ProgressPolicy<Time> for Observe {
+            fn cutoff(&mut self, _: &Time) -> Option<Time> {
+                None
+            }
+            fn invalidated(&mut self) {
+                self.0.send(()).unwrap();
+            }
+            fn observed(&mut self, _: ProgressObservation<Time>) {
+                unreachable!()
+            }
+        }
+        let (input, incoming) = crossbeam_channel::unbounded();
+        let (output, routed) = crossbeam_channel::unbounded();
+        let (_registration, registrations) = crossbeam_channel::unbounded();
+        let (invalidated, invalidations) = crossbeam_channel::unbounded();
+        let handle = std::thread::spawn(move || {
+            run::<Event, (), _>(
+                Arc::new(incoming),
+                output,
+                vec![],
+                registrations,
+                Settings { retention: Time(1000), workers: 1, interval: Duration::ZERO },
+                Observe(invalidated),
+            )
+        });
+        let (errors, rejected) = crossbeam_channel::unbounded();
+        input.send(RouterMessage::Apply(batch(Time(80), &errors))).unwrap();
+        assert!(matches!(routed.recv_timeout(Duration::from_secs(2)).unwrap(), RouterMessage::Apply(_)));
+        let external = invalidations.try_recv();
+        input.send(RouterMessage::Internal { source: Time(80), batch: batch(Time(80), &errors) }).unwrap();
+        assert!(matches!(routed.recv_timeout(Duration::from_secs(2)).unwrap(), RouterMessage::Apply(_)));
+        let internal = invalidations.try_recv();
+        input.send(RouterMessage::Internal { source: Time(80), batch: batch(Time(79), &errors) }).unwrap();
+        assert_eq!(rejected.recv_timeout(Duration::from_secs(2)).unwrap().reason, RejectionReason::BeforeSourceTime);
+        input
+            .send(RouterMessage::Apply(RouterBatch {
+                inputs: crate::input::prepare_inputs(vec![]),
+                completion: CompletionHandle { sender: errors },
+            }))
+            .unwrap();
+        input.send(RouterMessage::Shutdown).unwrap();
+        handle.join().unwrap();
+        assert_eq!(external, Ok(()), "external admission must invalidate before routing");
+        assert_eq!(internal, Ok(()), "feedback admission must invalidate before routing");
+        assert!(invalidations.is_empty(), "empty and rejected batches change no progress");
     }
 
     #[test]
@@ -231,7 +322,14 @@ mod tests {
             let (control, controls) = crossbeam_channel::unbounded();
             let (_registration, registrations) = crossbeam_channel::unbounded();
             let handle = std::thread::spawn(move || {
-                run::<Event, ()>(Arc::new(incoming), output, vec![control], registrations, Time(0), 1, interval)
+                run::<Event, (), _>(
+                    Arc::new(incoming),
+                    output,
+                    vec![control],
+                    registrations,
+                    Settings { retention: Time(0), workers: 1, interval },
+                    (),
+                )
             });
             let (completion, _) = crossbeam_channel::unbounded();
             input.send(RouterMessage::Advance(Advance { time: Time(100), completion })).unwrap();
@@ -290,7 +388,14 @@ mod tests {
         let (control, controls) = crossbeam_channel::unbounded();
         let (_registration, registrations) = crossbeam_channel::unbounded();
         let handle = std::thread::spawn(move || {
-            run::<Event, ()>(Arc::new(incoming), output, vec![control], registrations, Time(0), 2, Duration::from_millis(100))
+            run::<Event, (), _>(
+                Arc::new(incoming),
+                output,
+                vec![control],
+                registrations,
+                Settings { retention: Time(0), workers: 2, interval: Duration::from_millis(100) },
+                (),
+            )
         });
         let (completion, _) = crossbeam_channel::unbounded();
         input.send(RouterMessage::Advance(Advance { time: Time(100), completion })).unwrap();
@@ -325,7 +430,14 @@ mod tests {
         let (output, _routed) = crossbeam_channel::unbounded();
         let (_registration, registrations) = crossbeam_channel::unbounded();
         let handle = std::thread::spawn(move || {
-            run::<Event, ()>(Arc::new(incoming), output, vec![], registrations, Time(0), 2, Duration::from_millis(100))
+            run::<Event, (), _>(
+                Arc::new(incoming),
+                output,
+                vec![],
+                registrations,
+                Settings { retention: Time(0), workers: 2, interval: Duration::from_millis(100) },
+                (),
+            )
         });
         let (updates, horizons) = crossbeam_channel::unbounded();
         input.send(RouterMessage::SubscribePrunedHorizon(updates)).unwrap();

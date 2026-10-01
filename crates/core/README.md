@@ -132,6 +132,58 @@ The separate `tests/replay_frontier.rs` retains threaded end-to-end coverage.
 
 ## Horizon advancement
 
+The pruning frontier uses `contime-progress::MeasurementRound` for bounded
+participant-report collection. Core retains admission rules, router fencing,
+worker resolution, and its monotonic safe-to-prune boundary. The extracted
+measurement has no authority to prune or reject events; a second observation
+policy can reuse it without equating progress with pruning.
+
+### Injected progress policy
+
+`ConTime::start_with_progress(config, wrapper, policy)` installs a
+`ProgressPolicy<Time>` in the existing admission coordinator. `start` still
+installs no observer and preserves its existing public API.
+
+The policy supplies `cutoff(advanced)` and receives
+`observed(ProgressObservation { round, cutoff, before })`. Core caps the cutoff
+at the processing target. `before` is an exclusive local observation, not a
+monotonic commitment, a pruning permission, or proof of remote delivery.
+Later accepted input, including internal feedback, may create earlier work.
+Before routing a nonempty admitted batch, Core calls `policy.invalidated()` so
+consumers can discard cached observations before insertion is acknowledged.
+The default callback does nothing. It is called once per batch, not per event;
+empty or wholly rejected batches do not invalidate. Subsequent observations
+account for the admission using the existing round constraints. Inputs queued
+outside Core still require accounting by the caller.
+
+Observation and pruning share the same numbered router-fence/worker-report
+round. The round measures to the larger cutoff, but pruning remains capped at
+the retention boundary captured when that round started. Observers receive
+only their own capped result. Admission during a round constrains its result
+to the existing safe-to-prune boundary, as in the original pruning protocol.
+
+Startup, admission and advancement make observation eligible. Incomplete
+measurements retry without another advance; completed ones sleep until another
+admission or advancement. Both policies share `pruning_interval` as the minimum
+spacing between measurement rounds. There is no periodic idle polling or new
+thread. A future-only event beyond the observation cutoff does not require
+advancement to complete that observation.
+
+The existing worker resolution message resumes a round with the authorized
+prune boundary. When that boundary has not changed, resumption does not prune.
+No separate worker coordinator or queue tracker is installed.
+
+Callbacks must be short and nonblocking: they run on the admission coordinator
+and must not synchronously query or wait on the same Core. Consumers should
+forward results through a channel or update their own observation state.
+Changing only consumer-side configuration does not wake an idle coordinator;
+the policy is reevaluated on the lifecycle changes listed above.
+
+`tests/progress.rs` covers retained late input, feedback before an older report,
+empty intervals, blocked processing, cutoff clamping and cross-worker feedback.
+Stream group membership, delivery fencing and distributed commitment are still
+the responsibility of Engine/Stream; no such transport is implemented here.
+
 `advance_to` asynchronously raises the processing target and requests retention
 of `history_retention` worth of time. The admission coordinator rejects new
 external input before the requested horizon. Router fences and worker reports
