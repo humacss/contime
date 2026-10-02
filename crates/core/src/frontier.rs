@@ -1,6 +1,14 @@
 use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 
-use contime_progress::MeasurementRound;
+use contime_progress::{CoverageConstraint, MeasurementRound};
+
+pub(crate) type AdmissionObservation<T> = Arc<Mutex<CoverageConstraint<T, u128>>>;
+
+struct ObservationRound<T> {
+    measurement: MeasurementRound<T>,
+    admissions: Vec<AdmissionObservation<T>>,
+}
 
 /// Coordinator-owned conservative boundary. A round accounts for work admitted
 /// during measurement as well as each worker's earliest possible publication.
@@ -10,13 +18,22 @@ pub(crate) struct Frontier<T> {
     workers: NonZeroUsize,
     sequence: u64,
     round: Option<MeasurementRound<T>>,
+    observation: Option<ObservationRound<T>>,
     round_prune_limit: T,
 }
 
 impl<T: Clone + Default + Ord> Frontier<T> {
     pub(crate) fn new(workers: usize) -> Self {
         let workers = NonZeroUsize::new(workers).expect("at least one worker");
-        Self { safe: T::default(), requested: T::default(), workers, sequence: 0, round: None, round_prune_limit: T::default() }
+        Self {
+            safe: T::default(),
+            requested: T::default(),
+            workers,
+            sequence: 0,
+            round: None,
+            observation: None,
+            round_prune_limit: T::default(),
+        }
     }
 
     pub(crate) fn safe(&self) -> &T {
@@ -45,26 +62,51 @@ impl<T: Clone + Default + Ord> Frontier<T> {
         }
         self.sequence = self.sequence.checked_add(1).expect("measurement round overflow");
         self.round_prune_limit = self.requested.clone();
-        let limit = observation_limit.map_or_else(|| self.requested.clone(), |limit| limit.max(self.requested.clone()));
+        let limit = observation_limit.as_ref().map_or_else(|| self.requested.clone(), |limit| limit.clone().max(self.requested.clone()));
         self.round = Some(MeasurementRound::new(self.sequence, limit, self.workers));
+        self.observation = observation_limit.map(|limit| ObservationRound {
+            measurement: MeasurementRound::new(self.sequence, limit, self.workers),
+            admissions: Vec::new(),
+        });
         Some(self.sequence)
     }
 
+    #[cfg(test)]
     pub(crate) fn admitted(&mut self, _time: &T) {
+        self.admitted_to(|| vec![u128::MAX]);
+    }
+
+    pub(crate) fn admitted_to(&mut self, routes: impl FnOnce() -> Vec<u128>) -> Option<AdmissionObservation<T>> {
+        // Keep the original pruning constraint, regardless of route coverage.
         if let Some(round) = &mut self.round {
-            // An insertion can reconstruct a prefix earlier than its own time.
-            // Only a subsequent worker measurement can bound that replay.
             round.constrain(self.safe.clone());
         }
+        let observation = self.observation.as_mut()?;
+        let admission = Arc::new(Mutex::new(CoverageConstraint::new(self.safe.clone(), routes())));
+        observation.admissions.push(admission.clone());
+        Some(admission)
     }
 
     pub(crate) fn report(&mut self, id: u64, worker: usize, minimum: Option<T>) -> Option<T> {
-        let completed = self.round.as_mut()?.report(id, worker, minimum)?;
+        let completed = self.round.as_mut()?.report(id, worker, minimum.clone());
+        let observed = self.observation.as_mut().and_then(|observation| observation.measurement.report(id, worker, minimum));
+        let completed = completed?;
+        // Freeze admission bounds on the last report. Until then a worker may
+        // replace an uncovered route's fallback with its actual replay bound.
+        let observed = observed.map(|mut before| {
+            for admission in &self.observation.as_ref().unwrap().admissions {
+                if let Some(boundary) = admission.lock().expect("admission observation poisoned").boundary() {
+                    before = before.min(boundary);
+                }
+            }
+            before
+        });
         self.round = None;
+        self.observation = None;
         // A wider observation never authorizes wider pruning. Capture the prune
         // limit when the round begins, even if advancement changes mid-round.
         self.safe = self.safe.clone().max(completed.clone().min(self.round_prune_limit.clone()));
-        Some(completed)
+        Some(observed.unwrap_or(completed))
     }
 }
 

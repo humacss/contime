@@ -87,6 +87,110 @@ fn route(batch: RouterBatch<TestEvent>) -> WorkerMessage<TestEvent, TestSnapshot
 }
 
 #[rstest::rstest]
+#[case::fresh_history(false, false, 1, 80)]
+#[case::uncovered_delivery(false, true, 1, 20)]
+#[case::already_reported_worker(false, false, 0, 80)]
+#[case::older_replay(true, false, 1, 30)]
+#[case::older_replay_after_worker_report(true, false, 0, 30)]
+fn future_admission_must_not_reset_observation_to_pruning_boundary(
+    #[case] older_history: bool,
+    #[case] delay_delivery: bool,
+    #[case] target_worker: usize,
+    #[case] expected_observation: u64,
+) {
+    let messages = never();
+    let registrations = never();
+    let (reported, reports) = unbounded();
+    let (published, publications) = unbounded();
+    let mut workers: Vec<TestWorker<'_>> = (0..2)
+        .map(|id| {
+            let reported = reported.clone();
+            TestWorker::new(
+                &messages,
+                &registrations,
+                CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 100 } },
+                Publish { outputs: published.clone() },
+                Some(Coordination {
+                    router_count: 1,
+                    report: Box::new(move |round, minimum| reported.send((round, id, minimum)).unwrap()),
+                    pruned: Box::new(|_| {}),
+                }),
+            )
+        })
+        .collect();
+    let mut frontier = Frontier::new(2);
+    for worker in &mut workers {
+        worker.handle(WorkerMessage::Advance(advance(Time(100))));
+    }
+    if older_history {
+        workers[target_worker].handle(apply(vec![TestEvent { id: 2, time: Time(30) }, TestEvent { id: 3, time: Time(100) }]));
+        assert!(workers[target_worker].step());
+        assert!(!workers[target_worker].step());
+        assert_eq!(publications.try_iter().collect::<Vec<_>>(), vec![(Time(30), 1), (Time(100), 2)]);
+    }
+
+    frontier.request(Time(20));
+    let round = frontier.begin().unwrap();
+    for worker in &mut workers {
+        worker.handle(WorkerMessage::Fence { round, router: 0 });
+    }
+    for _ in 0..2 {
+        let (reported_round, id, minimum) = reports.try_recv().unwrap();
+        assert_eq!(minimum, None);
+        frontier.report(reported_round, id, minimum);
+    }
+    assert_eq!(*frontier.safe(), Time(20));
+    for worker in &mut workers {
+        worker.handle(WorkerMessage::Resolve { round, prune: advance(Time(20)) });
+        assert!(worker.prune_step());
+        assert!(!worker.prune_step());
+    }
+
+    // One worker reports before admission. The inserted event's timestamp alone
+    // cannot prove whether delivery or earlier checkpoint replay is pending.
+    let round = frontier.begin_observing(Some(Time(80))).unwrap();
+    workers[0].handle(WorkerMessage::Fence { round, router: 0 });
+    let (reported_round, id, minimum) = reports.try_recv().unwrap();
+    assert_eq!(minimum, None);
+    assert_eq!(frontier.report(reported_round, id, minimum), None);
+
+    let (rejected, rejections) = unbounded();
+    let batch =
+        RouterBatch { inputs: prepare_inputs(vec![TestEvent { id: 1, time: Time(90) }]), completion: CompletionHandle::new(rejected) };
+    let Some(RouterMessage::Apply(batch)) = admit::<_, TestSnapshot>(batch, None, &mut frontier) else {
+        panic!("future event must be admitted");
+    };
+    let mut delivery = Some(route(batch));
+    if !delay_delivery {
+        workers[target_worker].handle(delivery.take().unwrap());
+    }
+    workers[1].handle(WorkerMessage::Fence { round, router: 0 });
+    let (reported_round, id, minimum) = reports.try_recv().unwrap();
+    let expected_minimum = if delay_delivery || target_worker == 0 { None } else { Some(Time(if older_history { 30 } else { 90 })) };
+    assert_eq!(minimum, expected_minimum);
+    let observation = frontier.report(reported_round, id, minimum);
+
+    for worker in &mut workers {
+        worker.handle(WorkerMessage::Resolve { round, prune: advance(*frontier.safe()) });
+        assert!(!worker.prune_step());
+    }
+    if let Some(delivery) = delivery {
+        workers[target_worker].handle(delivery);
+    }
+    assert!(workers[target_worker].step());
+    assert!(!workers[target_worker].step());
+    let expected_outputs = if older_history { vec![(Time(30), 1), (Time(90), 2), (Time(100), 3)] } else { vec![(Time(90), 1)] };
+    assert_eq!(publications.try_iter().collect::<Vec<_>>(), expected_outputs);
+    assert!(rejections.is_empty());
+    assert_eq!(*frontier.safe(), Time(20), "observation must not widen pruning");
+    assert_eq!(
+        observation,
+        Some(Time(expected_observation)),
+        "observation must account for actual replay and uncovered delivery independently of pruning"
+    );
+}
+
+#[rstest::rstest]
 #[case::sparse_checkpoint(1, 100, 90, 80, 100)]
 #[case::unbounded_checkpoint(1, 0, 90, 80, 100)]
 #[case::same_timestamp(1, 100, 100, 80, 100)]

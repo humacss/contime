@@ -37,6 +37,7 @@ where
     I: Input,
 {
     pub(crate) inner: Arc<I>,
+    pub(crate) observation: Option<crate::frontier::AdmissionObservation<I::Time>>,
 }
 
 /// A core-owned reason returned at the public apply boundary.

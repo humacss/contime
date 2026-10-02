@@ -200,7 +200,7 @@ pub(crate) fn admit<I: Input, S>(
     source: Option<I::Time>,
     frontier: &mut Frontier<I::Time>,
 ) -> Option<RouterMessage<I, S>> {
-    batch.inputs.retain(|input| {
+    batch.inputs.retain_mut(|input| {
         let time = input.time();
         let reason = match &source {
             Some(source) if time < *source => Some(RejectionReason::BeforeSourceTime),
@@ -212,7 +212,11 @@ pub(crate) fn admit<I: Input, S>(
             let _ = batch.completion.sender.send(RejectionMessage { event_id: input.event_id(), reason });
             false
         } else {
-            frontier.admitted(&time);
+            input.observation = frontier.admitted_to(|| {
+                let mut routes = Vec::new();
+                input.snapshot_ids(&mut |id| routes.push(id));
+                routes
+            });
             true
         }
     });
@@ -222,8 +226,8 @@ pub(crate) fn admit<I: Input, S>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CompletionHandle;
     use crate::types::testing::Time;
+    use crate::CompletionHandle;
 
     struct Event(Time);
 
@@ -236,7 +240,7 @@ mod tests {
     }
     impl Input for Event {
         fn event_id(&self) -> u128 {
-            self.0.0 as u128
+            self.0 .0 as u128
         }
         fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
             emit(1);
