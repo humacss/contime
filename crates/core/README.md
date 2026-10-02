@@ -159,8 +159,15 @@ outside Core still require accounting by the caller.
 Observation and pruning share the same numbered router-fence/worker-report
 round. The round measures to the larger cutoff, but pruning remains capped at
 the retention boundary captured when that round started. Observers receive
-only their own capped result. Admission during a round constrains its result
+only their own capped result. Admission during a round still constrains pruning
 to the existing safe-to-prune boundary, as in the original pruning protocol.
+Observation uses a separate reduction over the same fenced worker reports.
+Each in-flight admission holds that conservative bound until all its target
+snapshot stores report the actual replay bound after insertion. Covered routes
+can then constrain observation by actual replay instead of the pruning boundary;
+uncovered routes retain the fallback. Event timestamps alone never discharge
+these constraints. This tracking is removed before events enter retained history
+and is allocated only for admissions during an active observation round.
 
 Startup, admission and advancement make observation eligible. Incomplete
 measurements retry without another advance; completed ones sleep until another

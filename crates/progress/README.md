@@ -13,6 +13,13 @@ Missing reports never count as completion.
 caller discovers additional work. Core uses its previously committed safe
 boundary here when an admission can reconstruct an older checkpoint prefix.
 
+`CoverageConstraint` accounts for one admission's affected route keys. Until
+every route is covered, its bound includes the caller's conservative fallback.
+Once covered, only the reported actual work bounds remain. Unknown and duplicate
+keys cannot discharge other routes. This pure reducer owns no delivery, locking,
+or pruning policy. Core uses it for observation only; pruning keeps its original
+irreversible admission constraint.
+
 Results are exclusive boundaries and preserve the caller's timestamp ordering,
 including substeps. Observations in separate rounds need not increase; the
 caller owns a monotonic committed frontier and decides when it is safe to move.
@@ -36,8 +43,9 @@ its requested/safe timestamps, round sequencing and monotonic pruning policy.
 The existing router fences and worker callbacks remain unchanged. Core's
 `start_with_progress` also accepts this crate's `ProgressPolicy`, selecting a
 separate observation cutoff and response without increasing the prune target.
-Both consumers share one serialized measurement round, rather than pausing the
-same workers through competing coordinators.
+Both consumers share one serialized fence/report cycle with separate reductions,
+rather than pausing the same workers through competing coordinators. Observation
+also includes admission coverage reported by target stores after insertion.
 
 `ProgressObservation` carries the round ID, requested cutoff (as capped by the
 host) and measured exclusive boundary. Reports in successive rounds may fall

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::{Input, SharedEvent};
 
 pub(crate) fn prepare_inputs<I: Input>(inputs: Vec<I>) -> Vec<SharedEvent<I>> {
-    inputs.into_iter().map(|input| SharedEvent { inner: Arc::new(input) }).collect()
+    inputs.into_iter().map(|input| SharedEvent { inner: Arc::new(input), observation: None }).collect()
 }
 
 impl<I> Clone for SharedEvent<I>
@@ -14,7 +14,7 @@ where
     I: Input,
 {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone() }
+        Self { inner: self.inner.clone(), observation: self.observation.clone() }
     }
 }
 
