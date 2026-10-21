@@ -4,8 +4,8 @@
 
 use std::time::Duration;
 
-use contime_core::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
-use contime_core::{ConTime, ConTimeConfig, Input, Placement};
+use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
+use contime::{ConTime, ConTimeConfig, Input, Placement};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);

@@ -1,16 +1,16 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use contime_core::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
+use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
 
-use contime_core::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason};
+use contime::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(i64);
 
-impl contime_core::checkpoints::Timestamp for Time {
+impl contime::checkpoints::Timestamp for Time {
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
@@ -38,7 +38,7 @@ struct BenchInput {
 
 const _: [(); 64] = [(); std::mem::size_of::<BenchInput>()];
 
-impl contime_checkpoints::Event for BenchInput {
+impl contime::checkpoints::Event for BenchInput {
     type Time = Time;
 
     fn time(&self) -> Self::Time {
@@ -181,7 +181,7 @@ fn snapshot_ids_for_workers(worker_count: usize, ids_per_worker: usize) -> Vec<V
         worker_receivers.push(receiver);
     }
 
-    contime_router::route(contime_core::Placement::default(), input_receiver, &worker_senders).unwrap();
+    contime_router::route(contime::Placement::default(), input_receiver, &worker_senders).unwrap();
     worker_receivers
         .into_iter()
         .map(|receiver| {

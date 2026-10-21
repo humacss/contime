@@ -18,7 +18,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::types::testing::Time;
+    use crate::testing::Time;
     use std::hint::black_box;
     use std::time::{Duration, Instant};
 
@@ -30,7 +30,7 @@ mod tests {
 
     struct TestInput;
 
-    impl contime_checkpoints::Event for TestInput {
+    impl crate::checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {

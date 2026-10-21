@@ -21,13 +21,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::types::testing::Time;
+    use crate::testing::Time;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
     use crate::checkpoints::{ApplyBatch as CheckpointBatch, ApplyEvents as CheckpointApply, CheckpointConfig, Snapshot};
-    use contime_lanes::{ApplyBatch as LaneBatch, ApplyEvents as LaneApply, ApplyLanes, FilterLanes, Lanes, RawBatch};
+    use crate::lanes::{ApplyBatch as LaneBatch, ApplyEvents as LaneApply, ApplyLanes, FilterLanes, Lanes, RawBatch};
 
     use crate::{ConTime, ConTimeConfig, Input};
 
@@ -37,7 +37,7 @@ mod tests {
         observed: Arc<AtomicUsize>,
     }
 
-    impl contime_checkpoints::Event for TestInput {
+    impl crate::checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {
@@ -102,13 +102,13 @@ mod tests {
 
         fn apply_events(&mut self, batch: CheckpointBatch<'_, '_, Self::Time, TestInput>) {
             let events = batch.events.collect::<Vec<_>>();
-            let filtered = contime_lanes::project::<TestLanes, _, _>(RawBatch {
+            let filtered = crate::lanes::project::<TestLanes, _, _>(RawBatch {
                 snapshot_id: batch.snapshot_id,
                 time: batch.time,
                 history_event_count: batch.history_event_count,
                 events: &events,
             });
-            contime_lanes::apply::<_, _, TestLanes, TestLanes, _>(self, &contime_lanes::PassThrough, filtered);
+            crate::lanes::apply::<_, _, TestLanes, TestLanes, _>(self, &crate::lanes::PassThrough, filtered);
         }
     }
 

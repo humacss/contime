@@ -6,8 +6,15 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 enum Message {
-    Snapshots { snapshot_ids: Vec<u128>, response: Sender<Vec<Box<u64>>> },
-    Events { response: Sender<Vec<u64>> },
+    // Match the public query contract, including ownership of boxed snapshots.
+    #[allow(clippy::vec_box)]
+    Snapshots {
+        snapshot_ids: Vec<u128>,
+        response: Sender<Vec<Box<u64>>>,
+    },
+    Events {
+        response: Sender<Vec<u64>>,
+    },
 }
 
 impl SnapshotQueryOutput<u64, u64> for Message {

@@ -3,7 +3,7 @@
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
-use contime_core::{checkpoints::*, ConTime, ConTimeConfig, Input, Placement, RejectionReason};
+use contime::{checkpoints::*, ConTime, ConTimeConfig, Input, Placement, RejectionReason};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 const SOURCE: u128 = 1;
@@ -32,7 +32,7 @@ struct TestEvent {
     destinations: Vec<u128>,
     value: u64,
 }
-impl contime_checkpoints::Event for TestEvent {
+impl contime::checkpoints::Event for TestEvent {
     type Time = Time;
     fn time(&self) -> Time {
         self.time

@@ -99,12 +99,12 @@ impl<I: Input, S, W> ConTime<I, S, W> {
 mod tests {
     use super::*;
     use crate::checkpoints::{ApplyBatch, ApplyEvents, Snapshot};
-    use crate::types::testing::Time;
+    use crate::testing::Time;
 
     #[derive(Clone, Default)]
     struct Value(Time);
 
-    impl contime_checkpoints::Event for Value {
+    impl crate::checkpoints::Event for Value {
         type Time = Time;
 
         fn time(&self) -> Time {

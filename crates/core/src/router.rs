@@ -6,6 +6,18 @@ impl<I, S> RouterProcess<I, S>
 where
     I: Input,
 {
+    /// Registers idle observers for this router.
+    pub fn with_activity(mut self, activity: Receiver<Sender<bool>>) -> Self {
+        self.activity = activity;
+        self
+    }
+
+    /// Connects fenced flush requests from the admission coordinator.
+    pub fn with_controls(mut self, controls: Receiver<contime_router::Flush>) -> Self {
+        self.controls = controls;
+        self
+    }
+
     pub fn new(placement: contime_router::Placement) -> Self {
         Self { placement, activity: crossbeam_channel::never(), controls: crossbeam_channel::never(), input: std::marker::PhantomData }
     }

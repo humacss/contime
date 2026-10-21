@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use contime_core::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
-use contime_core::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, SnapshotListenerMessage};
+use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
+use contime::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, SnapshotListenerMessage};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver};
@@ -10,7 +10,7 @@ use crossbeam_channel::{unbounded, Receiver};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);
 
-impl contime_core::checkpoints::Timestamp for Time {
+impl contime::checkpoints::Timestamp for Time {
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
@@ -30,7 +30,7 @@ struct BenchEvent {
     snapshot_id: u128,
 }
 
-impl contime_checkpoints::Event for BenchEvent {
+impl contime::checkpoints::Event for BenchEvent {
     type Time = Time;
 
     fn time(&self) -> Self::Time {

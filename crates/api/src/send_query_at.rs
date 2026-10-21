@@ -25,6 +25,8 @@ mod tests {
     struct QueryOutput {
         time: u64,
         snapshot_ids: Vec<u128>,
+        // Match the public query contract, which transfers boxed snapshots.
+        #[allow(clippy::vec_box)]
         response: Sender<Vec<Box<u64>>>,
     }
 

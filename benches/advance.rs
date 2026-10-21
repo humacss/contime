@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use contime_core::{checkpoints, ConTime, ConTimeConfig, Input};
+use contime::{checkpoints, ConTime, ConTimeConfig, Input};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
@@ -25,7 +25,7 @@ struct BenchEvent {
     snapshot_id: u128,
 }
 
-impl contime_checkpoints::Event for BenchEvent {
+impl contime::checkpoints::Event for BenchEvent {
     type Time = Time;
 
     fn time(&self) -> Time {

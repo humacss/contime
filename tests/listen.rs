@@ -1,15 +1,15 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use contime_core::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
-use contime_core::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, SnapshotListenerMessage};
+use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
+use contime::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, SnapshotListenerMessage};
 
 use crossbeam_channel::unbounded;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);
 
-impl contime_core::checkpoints::Timestamp for Time {
+impl contime::checkpoints::Timestamp for Time {
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
@@ -27,7 +27,7 @@ struct TestEvent {
     time: Time,
 }
 
-impl contime_checkpoints::Event for TestEvent {
+impl contime::checkpoints::Event for TestEvent {
     type Time = Time;
 
     fn time(&self) -> Self::Time {

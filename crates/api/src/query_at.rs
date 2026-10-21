@@ -61,6 +61,8 @@ mod tests {
 
     struct StubDeps {
         received: RefCell<Vec<(u64, Vec<u128>)>>,
+        // Match the public query contract, which transfers boxed snapshots.
+        #[allow(clippy::vec_box)]
         responses: Vec<Vec<Box<u64>>>,
     }
 

@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use contime_core::{checkpoints::*, ConTime, ConTimeConfig, Input, Placement, ProgressObservation, ProgressPolicy};
+use contime::{checkpoints::*, ConTime, ConTimeConfig, Input, Placement, ProgressObservation, ProgressPolicy};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -24,7 +24,7 @@ struct Event {
     id: u128,
     snapshot: u128,
 }
-impl contime_checkpoints::Event for Event {
+impl contime::checkpoints::Event for Event {
     type Time = Time;
     fn time(&self) -> Time {
         self.time

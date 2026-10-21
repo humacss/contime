@@ -61,7 +61,7 @@ where
             (Some((ordered_key, _ordered_event)), Some((late_key, _late_event))) if ordered_key < *late_key => {
                 self.ordered.next().map(|(key, event)| (key, event))
             }
-            (Some(_), Some(_)) | (None, Some(_)) => self.late.next().map(|(key, event)| (key, event)),
+            (Some(_), Some(_)) | (None, Some(_)) => self.late.next(),
             (Some(_), None) => self.ordered.next().map(|(key, event)| (key, event)),
             (None, None) => None,
         }
@@ -80,7 +80,7 @@ where
             (Some((ordered_key, _ordered_event)), Some((late_key, _late_event))) if ordered_key < *late_key => {
                 self.ordered.next().map(|(key, event)| (key, event))
             }
-            (Some(_), Some(_)) | (None, Some(_)) => self.late.next().map(|(key, event)| (key, event)),
+            (Some(_), Some(_)) | (None, Some(_)) => self.late.next(),
             (Some(_), None) => self.ordered.next().map(|(key, event)| (key, event)),
             (None, None) => None,
         }

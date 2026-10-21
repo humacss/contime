@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use contime_core::{checkpoints, ConTime, ConTimeConfig, Input};
+use contime::{checkpoints, ConTime, ConTimeConfig, Input};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);
@@ -24,7 +24,7 @@ struct TestEvent {
     snapshot_id: u128,
 }
 
-impl contime_checkpoints::Event for TestEvent {
+impl contime::checkpoints::Event for TestEvent {
     type Time = Time;
 
     fn time(&self) -> Time {
@@ -175,7 +175,7 @@ fn idle_wait_includes_after_apply_and_does_not_block_empty_queries() {
     core.send_query_at(Time(10), [], query_tx).unwrap();
     let query = query_rx.recv_timeout(Duration::from_secs(2));
     release.send(()).unwrap();
-    assert_eq!(completed, Err(contime_core::IdleError::Timeout));
+    assert_eq!(completed, Err(contime::IdleError::Timeout));
     assert!(matches!(query, Err(crossbeam_channel::RecvTimeoutError::Disconnected)));
     core.wait_until_idle(Duration::from_secs(2)).unwrap();
     core.shutdown();

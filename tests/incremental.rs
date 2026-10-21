@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use contime_core::{checkpoints::*, ConTime, ConTimeConfig, IdleError, Input, Placement, RejectionReason};
+use contime::{checkpoints::*, ConTime, ConTimeConfig, IdleError, Input, Placement, RejectionReason};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -26,7 +26,7 @@ struct Event {
     snapshots: Vec<u128>,
 }
 
-impl contime_checkpoints::Event for Event {
+impl contime::checkpoints::Event for Event {
     type Time = Time;
 
     fn time(&self) -> Time {

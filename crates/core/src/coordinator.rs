@@ -8,13 +8,16 @@ use crossbeam_channel::{Receiver, Sender};
 use crate::frontier::Frontier;
 use crate::{Advance, Input, ProgressObservation, ProgressPolicy, RejectionMessage, RejectionReason, RouterBatch, RouterMessage};
 
-pub(crate) struct Settings<T> {
+/// Configuration for the admission coordinator run by the owning orchestrator.
+pub struct Settings<T> {
     pub retention: T,
     pub workers: usize,
     pub interval: Duration,
 }
 
-pub(crate) fn run<I: Input, S, P: ProgressPolicy<I::Time>>(
+/// Runs admission and progress coordination on the calling thread.
+/// The orchestrator supplies router controls, worker reports, and activity registrations.
+pub fn run<I: Input, S, P: ProgressPolicy<I::Time>>(
     input: Arc<Receiver<RouterMessage<I, S>>>,
     output: Sender<RouterMessage<I, S>>,
     controls: Vec<Sender<contime_router::Flush>>,

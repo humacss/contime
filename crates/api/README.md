@@ -3,9 +3,9 @@
 `contime-api` isolates the work performed at ConTime's public input boundary.
 It does not know what receives or processes its output.
 
-The existing root `contime` crate does not use this crate yet, and this crate
-is not registered as a workspace member. The API crate is fully isolated: it
-depends only on Crossbeam and defines its own generic rejection contract.
+The root `contime` crate uses these helpers to submit Core protocol messages.
+This workspace member depends only on Crossbeam and defines its own generic
+rejection contract.
 
 ## Responsibilities
 

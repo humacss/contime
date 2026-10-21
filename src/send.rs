@@ -1,7 +1,8 @@
 use crossbeam_channel::Sender;
 
-use crate::input::prepare_inputs;
+use crate::SharedEvent;
 use crate::{ApiError, ConTime, Input, RejectionMessage, RejectionReason, RouterMessage};
+use contime_api::ApplyOutput;
 
 impl<I, S, W> ConTime<I, S, W>
 where
@@ -22,12 +23,9 @@ where
     /// enqueued before that application returns and cannot precede its time.
     /// Unlike external input, these records use the proven safe boundary.
     pub fn apply_internal(&self, source: I::Time, inputs: impl IntoIterator<Item = I>) -> Result<(), ApiError> {
-        let inputs = prepare_inputs(inputs.into_iter().collect());
+        let inputs = inputs.into_iter().collect::<Vec<_>>().into_iter().map(SharedEvent::from).collect();
         self.input
-            .send(RouterMessage::Internal {
-                source,
-                batch: crate::RouterBatch { inputs, completion: crate::CompletionHandle { sender: self.error_sender.clone() } },
-            })
+            .send(RouterMessage::Internal { source, batch: crate::RouterBatch::create(inputs, self.error_sender.clone()) })
             .map_err(|_| ApiError::OutputChannelClosed)
     }
 }
@@ -41,13 +39,13 @@ where
     I: Input,
 {
     let inputs = inputs.into_iter().collect::<Vec<_>>();
-    let inputs = prepare_inputs(inputs);
+    let inputs = inputs.into_iter().map(SharedEvent::from).collect::<Vec<_>>();
     contime_api::send::<RouterMessage<I, S>, _, _, _, _>(output, inputs, rejection_sender)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::types::testing::Time;
+    use crate::testing::Time;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -65,7 +63,7 @@ mod tests {
         value: usize,
     }
 
-    impl contime_checkpoints::Event for TestInput {
+    impl crate::checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {

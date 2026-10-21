@@ -36,7 +36,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::types::testing::Time;
+    use crate::testing::Time;
     use std::time::Duration;
 
     use crate::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
@@ -51,7 +51,7 @@ mod tests {
         value: u64,
     }
 
-    impl contime_checkpoints::Event for TestEvent {
+    impl crate::checkpoints::Event for TestEvent {
         type Time = Time;
 
         fn time(&self) -> Self::Time {

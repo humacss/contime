@@ -13,6 +13,18 @@ where
     I: Input,
     S: Snapshot,
 {
+    /// Registers idle observers for this worker.
+    pub fn with_activity(mut self, activity: Receiver<crossbeam_channel::Sender<bool>>) -> Self {
+        self.activity = activity;
+        self
+    }
+
+    /// Connects fenced progress and completed-pruning reports.
+    pub fn with_coordination(mut self, coordination: contime_worker::Coordination<I::Time>) -> Self {
+        self.coordination = Some(coordination);
+        self
+    }
+
     pub fn new(worker: contime_worker::WorkerConfig, checkpoints: CheckpointConfig, history_retention: I::Time, wrapper: W) -> Self {
         Self {
             worker,

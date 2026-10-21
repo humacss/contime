@@ -2,7 +2,7 @@
 
 `contime` is an in-memory Rust workspace that builds queryable continuous-time state from unreliable event streams.
 
-It handles delayed, duplicated, and out-of-order events, and distributes independent snapshot histories across workers. The complete engine lives in [`contime-core`](crates/core/README.md); the other crates provide its individual parts.
+It handles delayed, duplicated, and out-of-order events, and distributes independent snapshot histories across workers. The root `contime` crate assembles the running engine. [`contime-core`](crates/core/README.md) connects its protocol and storage contracts; the other crates provide the individual parts.
 
 ## Continuous Time?
 
@@ -56,7 +56,7 @@ Processing and retention are separate. `advance_to` moves the processing target 
 
 ## Using `contime`
 
-Depend on `contime-core` for the complete pipeline. There is no root `contime` package or legacy derive/lane API.
+Depend on `contime` for the running pipeline. The root owns configuration, startup, submission, queries, progress subscriptions, idle checks, and shutdown. Core retains admission rules and the adapters connecting the individual subsystems.
 
 1. Define your time type, event inputs, and snapshot state.
 2. Implement Core's input routing and checkpoint application contracts.
@@ -64,13 +64,13 @@ Depend on `contime-core` for the complete pipeline. There is no root `contime` p
 4. Submit inputs, advance processing as needed, and query historical state.
 5. Shut down the owned topology when finished.
 
-The [`ordered_values` example](crates/core/examples/ordered_values.rs) shows how a late event changes historical queries without custom sorting:
+The [`ordered_values` example](examples/ordered_values.rs) shows how a late event changes historical queries without custom sorting:
 
 ```bash
-cargo run -p contime-core --example ordered_values
+cargo run -p contime --example ordered_values
 ```
 
-Core provides asynchronous submission and response receivers alongside convenience query methods. Successful submission means that work was admitted to the pipeline. Request-scoped completion channels, idle waits, replay listeners, and progress observations provide different completion boundaries; choose the one your integration needs. Rejections are reported separately from submission failures.
+ConTime provides asynchronous submission and response receivers alongside convenience query methods. Successful submission means that work was queued for admission. Request-scoped completion channels, idle waits, replay listeners, and progress observations provide different completion boundaries; choose the one your integration needs. Rejections are reported separately from submission failures.
 
 Snapshot replay listeners observe relevant replay. `subscribe_pruned_horizon` reports completed pruning horizons. `ProgressPolicy` receives local processing observations; these observations do not establish delivery or durable persistence in an external system.
 
@@ -80,7 +80,8 @@ Higher-level consumers can supply typed lanes, invalidation rules, reactors, ser
 
 | Crate | Responsibility |
 | --- | --- |
-| [`contime-core`](crates/core/README.md) | Complete apply, query, processing, and pruning composition |
+| `contime` (root) | Public engine handle, configuration, startup, operations, and shutdown |
+| [`contime-core`](crates/core/README.md) | Admission protocol, messages, and router/worker storage adapters |
 | [`contime-api`](crates/api/README.md) | Input batching and request boundaries |
 | [`contime-router`](crates/router/README.md) | Deterministic routing to worker-owned histories |
 | [`contime-runtime`](crates/runtime/README.md) | Thread topology, channels, and shutdown |
@@ -98,16 +99,16 @@ Higher-level consumers can supply typed lanes, invalidation rules, reactors, ser
 - Queries earlier than retained history cannot reconstruct discarded events.
 - Checkpoints clone snapshot state, so large snapshots can be expensive.
 - Submission and advancement across workers do not provide transactional rollback. Integrations that need stronger ordering must supply it at their own boundary.
-- The API is still evolving. Core exposes the current contracts directly; application-specific macros belong in consumers.
+- The API is still evolving. The root re-exports the current input and application contracts; application-specific macros belong in consumers.
 
 ## Verification
 
 ```bash
 cargo test --workspace
-cargo run -p contime-core --example ordered_values
+cargo run -p contime --example ordered_values
 ```
 
-See the crate READMEs for focused tests and benchmarks. Historical designs and measurements live under `docs/`; they describe the implementation at their recorded dates.
+See the [running pipeline guide](docs/running-contime.md) and crate READMEs for completion boundaries, focused tests, and benchmarks. Historical designs and measurements live under `docs/`; they describe the implementation at their recorded dates.
 
 ## License
 

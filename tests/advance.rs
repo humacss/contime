@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use contime_core::{checkpoints, ConTime, ConTimeConfig, Input, RejectionReason};
+use contime::{checkpoints, ConTime, ConTimeConfig, Input, RejectionReason};
 
 use crossbeam_channel::{unbounded, TryRecvError};
 
@@ -26,7 +26,7 @@ struct TestEvent {
     snapshot_id: u128,
 }
 
-impl contime_checkpoints::Event for TestEvent {
+impl contime::checkpoints::Event for TestEvent {
     type Time = Time;
 
     fn time(&self) -> Time {

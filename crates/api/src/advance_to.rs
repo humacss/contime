@@ -97,7 +97,7 @@ mod tests {
     fn benchmark_synchronous_advance() {
         let mut criterion = Criterion::default();
         criterion.bench_function("api/advance_to/immediate_completion", |bencher| {
-            bencher.iter(|| black_box(advance_with_deps(&Immediate, black_box(50)).unwrap()));
+            bencher.iter(|| advance_with_deps(&Immediate, black_box(50)).unwrap());
         });
         criterion.final_summary();
     }

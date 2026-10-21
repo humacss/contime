@@ -6,9 +6,8 @@ Crossbeam channels, exposes one shared opaque router input boundary, and joins t
 topology during shutdown.
 
 The crate does not depend on `contime` or any other ConTime subcrate. It
-declares local `Router` and `Worker` traits, and an eventual root orchestrator
-will adapt concrete API, router, worker, event, checkpoint, and lane
-implementations to those contracts.
+declares local `Router` and `Worker` traits. The root `contime` orchestrator
+supplies Core process adapters that implement those contracts.
 
 ## Topology
 

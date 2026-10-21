@@ -152,5 +152,7 @@ pub trait RouteInput {
     type SnapshotListen;
     type Advance;
 
+    // Keep each operation payload explicit at the protocol boundary.
+    #[allow(clippy::type_complexity)]
     fn into_kind(self) -> RouteInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::SnapshotListen, Self::Advance>;
 }

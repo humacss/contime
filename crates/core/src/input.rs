@@ -5,8 +5,15 @@ use std::sync::Arc;
 
 use crate::{Input, SharedEvent};
 
+#[cfg(test)]
 pub(crate) fn prepare_inputs<I: Input>(inputs: Vec<I>) -> Vec<SharedEvent<I>> {
-    inputs.into_iter().map(|input| SharedEvent { inner: Arc::new(input), observation: None }).collect()
+    inputs.into_iter().map(SharedEvent::from).collect()
+}
+
+impl<I: Input> From<I> for SharedEvent<I> {
+    fn from(input: I) -> Self {
+        Self { inner: Arc::new(input), observation: None }
+    }
 }
 
 impl<I> Clone for SharedEvent<I>

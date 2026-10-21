@@ -35,21 +35,19 @@ where
         };
         let routers = (0..config.router_count)
             .map(|_| {
-                let mut router = RouterProcess::<I, S>::new(config.placement);
-                router.activity = activity();
+                let router = RouterProcess::<I, S>::new(config.placement).with_activity(activity());
                 let (sender, receiver) = crossbeam_channel::unbounded();
                 controls.push(sender);
-                router.controls = receiver;
-                router
+                router.with_controls(receiver)
             })
             .collect();
         let workers = (0..config.worker_count)
             .map(|index| {
-                let mut worker = WorkerProcess::new(config.worker, config.checkpoints, config.history_retention.clone(), wrapper.clone());
-                worker.activity = activity();
+                let worker = WorkerProcess::new(config.worker, config.checkpoints, config.history_retention.clone(), wrapper.clone())
+                    .with_activity(activity());
                 let reports = input.clone();
                 let pruned = input.clone();
-                worker.coordination = Some(contime_worker::Coordination {
+                worker.with_coordination(contime_worker::Coordination {
                     router_count: config.router_count,
                     report: Box::new(move |round, minimum| {
                         let _ = reports.send(crate::RouterMessage::Report { round, worker: index, minimum });
@@ -57,8 +55,7 @@ where
                     pruned: Box::new(move |horizon| {
                         let _ = pruned.send(crate::RouterMessage::Pruned { worker: index, horizon });
                     }),
-                });
-                worker
+                })
             })
             .collect();
         let runtime = contime_runtime::Runtime::start(routers, workers)?;
@@ -68,12 +65,12 @@ where
         let registrations = activity();
         let output = runtime.input().clone();
         let coordinator = match std::thread::Builder::new().name("contime-admission".into()).spawn(move || {
-            crate::coordinator::run(
+            contime_core::coordinate(
                 incoming,
                 output,
                 controls,
                 registrations,
-                crate::coordinator::Settings {
+                contime_core::CoordinatorSettings {
                     retention: config.history_retention,
                     workers: config.worker_count,
                     interval: config.pruning_interval,
@@ -93,7 +90,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::types::testing::Time;
+    use crate::testing::Time;
     use std::hint::black_box;
     use std::time::Duration;
 
@@ -105,7 +102,7 @@ mod tests {
 
     struct TestInput;
 
-    impl contime_checkpoints::Event for TestInput {
+    impl crate::checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {
