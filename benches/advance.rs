@@ -85,7 +85,7 @@ impl Workload {
     }
 }
 
-fn config(router_count: usize, worker_count: usize, dirty: bool) -> ConTimeConfig<Time> {
+fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
@@ -93,12 +93,6 @@ fn config(router_count: usize, worker_count: usize, dirty: bool) -> ConTimeConfi
         pruning_interval: std::time::Duration::ZERO,
 
         history_retention: Time(10),
-        worker: contime_worker::WorkerConfig {
-            maximum_dirty_age: Duration::from_secs(60),
-            replays_per_receive: if dirty { 0 } else { 1_000 },
-            deadline_compaction_minimum: 2_048,
-            deadline_compaction_multiplier: 2,
-        },
         checkpoints: checkpoints::CheckpointConfig { interval: 2 },
     }
 }
@@ -121,7 +115,7 @@ fn events(workload: Workload) -> Vec<BenchEvent> {
 
 fn measure_once(router_count: usize, worker_count: usize, workload: Workload) -> Duration {
     let dirty = matches!(workload, Workload::Dirty);
-    let contime = ConTime::<BenchEvent, BenchSnapshot, ()>::start(config(router_count, worker_count, dirty), ()).unwrap();
+    let contime = ConTime::<BenchEvent, BenchSnapshot, ()>::start(config(router_count, worker_count), ()).unwrap();
     contime.apply(events(workload)).unwrap();
     if !dirty {
         // Materialize clean fixtures without moving the retained horizon.

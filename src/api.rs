@@ -6,14 +6,18 @@ use std::sync::Arc;
 /// Complete apply-and-query process configuration.
 #[derive(Clone, Debug)]
 pub struct ConTimeConfig<T> {
+    /// Number of router threads; startup rejects zero.
     pub router_count: usize,
+    /// Number of history-owning worker threads; startup rejects zero.
     pub worker_count: usize,
+    /// Deterministic snapshot-to-worker placement shared by all operations.
     pub placement: contime_router::Placement,
-    /// Minimum wall-clock spacing between safe-pruning measurement rounds.
+    /// Minimum wall-clock spacing between shared pruning and observation rounds.
     /// Zero starts the next required round immediately; safety fences still apply.
     pub pruning_interval: std::time::Duration,
+    /// Time retained behind the requested processing target, subject to safe pruning.
     pub history_retention: T,
-    pub worker: contime_worker::WorkerConfig,
+    /// Checkpoint spacing within each history.
     pub checkpoints: crate::checkpoints::CheckpointConfig,
 }
 

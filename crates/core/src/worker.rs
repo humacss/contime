@@ -25,17 +25,8 @@ where
         self
     }
 
-    pub fn new(worker: contime_worker::WorkerConfig, checkpoints: CheckpointConfig, history_retention: I::Time, wrapper: W) -> Self {
-        Self {
-            worker,
-            checkpoints,
-            history_retention,
-
-            wrapper,
-            activity: crossbeam_channel::never(),
-            coordination: None,
-            types: PhantomData,
-        }
+    pub fn new(checkpoints: CheckpointConfig, wrapper: W) -> Self {
+        Self { checkpoints, wrapper, activity: crossbeam_channel::never(), coordination: None, types: PhantomData }
     }
 }
 
@@ -52,9 +43,7 @@ where
         let checkpoint_config = CheckpointStorageConfig { checkpoints: self.checkpoints };
         contime_worker::work_messages::<WorkerMessage<I, S>, CheckpointStorage<I, S, W>>(
             input,
-            self.worker,
             checkpoint_config,
-            self.history_retention,
             self.wrapper,
             self.activity,
             self.coordination,
@@ -69,7 +58,6 @@ mod tests {
     use std::hint::black_box;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::time::Duration;
 
     use crate::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
     use contime_api::RejectionMessage;
@@ -141,17 +129,7 @@ mod tests {
     }
 
     fn process(observed: Arc<AtomicUsize>) -> WorkerProcess<TestInput, TestSnapshot, RecordingWrapper> {
-        WorkerProcess::new(
-            contime_worker::WorkerConfig {
-                maximum_dirty_age: Duration::from_micros(100),
-                replays_per_receive: 1,
-                deadline_compaction_minimum: 1_024,
-                deadline_compaction_multiplier: 2,
-            },
-            CheckpointConfig { interval: 100 },
-            Time(0),
-            RecordingWrapper(observed),
-        )
+        WorkerProcess::new(CheckpointConfig { interval: 100 }, RecordingWrapper(observed))
     }
 
     fn batch(count: u128) -> (WorkerBatch<TestInput>, crossbeam_channel::Receiver<RejectionMessage<RejectionReason>>) {

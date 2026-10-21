@@ -1,4 +1,4 @@
-//! Apply-only runtime topology independent of ConTime domain crates.
+//! Thread and channel lifecycle for opaque router and worker processes.
 
 mod runtime;
 mod shutdown;

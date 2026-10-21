@@ -1,18 +1,14 @@
 //! Worker-local replay orchestration independent of ConTime's API, router,
 //! replay implementation, and thread ownership.
 
-#[cfg(test)]
-mod advance;
-mod checkpoints;
-mod events;
 mod listen;
 mod query;
 mod types;
 mod work;
 
 pub use types::{
-    AdvanceInput, AdvanceOutput, AdvanceTime, ApplyBatch, ApplyInput, Checkpoints, Completion, Coordination, EventInsert, EventQueryInput,
-    EventQueryResponse, Events, IncrementalCheckpoints, QueryCheckpoints, QueryEvents, RouteInput, RoutedInput, SnapshotListenInput,
-    SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput, WorkInputKind, WorkerConfig,
+    AdvanceInput, AdvanceTime, ApplyBatch, ApplyInput, Completion, Coordination, EventInsert, EventQueryInput, EventQueryResponse,
+    RouteInput, RoutedInput, SnapshotListenInput, SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput,
+    WorkInputKind,
 };
-pub use work::{work, work_messages, MessageWorker};
+pub use work::{work_messages, MessageWorker};

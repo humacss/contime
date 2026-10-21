@@ -40,7 +40,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::hint::black_box;
-    use std::time::Duration;
 
     use ahash::AHashMap;
     use criterion::Criterion;
@@ -48,7 +47,7 @@ mod tests {
 
     use crate::{
         work_messages, AdvanceInput, ApplyBatch, EventInsert, EventQueryInput, RoutedInput, SnapshotListenInput, SnapshotListener,
-        SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind, WorkerConfig,
+        SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind,
     };
 
     #[derive(Clone)]
@@ -209,15 +208,6 @@ mod tests {
         }
     }
 
-    fn config() -> WorkerConfig {
-        WorkerConfig {
-            maximum_dirty_age: Duration::from_micros(100),
-            replays_per_receive: 0,
-            deadline_compaction_minimum: 1_024,
-            deadline_compaction_multiplier: 2,
-        }
-    }
-
     struct PruningStore(TestStore);
 
     struct PruningContext {
@@ -292,7 +282,7 @@ mod tests {
             .unwrap();
         input.send(Message::Prune(Advance { time: 1, completion: prune_completion })).unwrap();
         drop(input);
-        work_messages::<_, PruningStore>(receiver, config(), (), 0, context, crossbeam_channel::never(), Some(coordination));
+        work_messages::<_, PruningStore>(receiver, (), context, crossbeam_channel::never(), Some(coordination));
         assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
         let actual = observations.try_iter().collect::<Vec<_>>();
         assert_eq!(actual, ["prune", "query", "prune", "prune", "completed"]);
@@ -316,7 +306,7 @@ mod tests {
         }
         drop(completion);
         drop(input);
-        work_messages::<_, PruningStore>(receiver, config(), (), 0, context, crossbeam_channel::never(), None);
+        work_messages::<_, PruningStore>(receiver, (), context, crossbeam_channel::never(), None);
         assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
         assert_eq!(observations.try_iter().collect::<Vec<_>>(), ["prune", "query", "prune", "prune", "prune", "prune", "prune"]);
     }
@@ -330,7 +320,7 @@ mod tests {
         input.send(Message::Apply(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }], completion })).unwrap();
         drop(input);
 
-        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(observed.try_iter().collect::<Vec<_>>(), vec![ListenerMessage::Registered { time: 10, snapshot_ids: vec![7] }]);
         assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
@@ -359,7 +349,7 @@ mod tests {
         input.send(Message::Prune(Advance { time: 1, completion })).unwrap();
         drop(input);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            work_messages::<_, PruningStore>(receiver, config(), (), 0, context, crossbeam_channel::never(), Some(coordination));
+            work_messages::<_, PruningStore>(receiver, (), context, crossbeam_channel::never(), Some(coordination));
         }));
         assert!(result.is_err());
         assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
@@ -429,7 +419,7 @@ mod tests {
             .unwrap();
         input.send(Message::Snapshots(SnapshotQuery { response: unbounded().0 })).unwrap();
         drop(input);
-        work_messages::<_, BusyReadStore>(receiver, config(), (), 0, context, registrations, None);
+        work_messages::<_, BusyReadStore>(receiver, (), context, registrations, None);
         assert!(replay_after_queries.lock().unwrap()[0] < 20, "replay waited for every replenished query");
     }
 
@@ -453,7 +443,7 @@ mod tests {
         input.send(Message::Events(EventQuery { response: event_response })).unwrap();
         drop(input);
 
-        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(*snapshots.recv().unwrap()[0], TestSnapshot { snapshot_id: 7, count: 3 });
         assert_eq!(events.recv().unwrap().into_iter().map(|event| event.0).collect::<Vec<_>>(), vec![1, 2]);
@@ -466,7 +456,7 @@ mod tests {
         input.send(Message::Advance(Advance { time: 20, completion })).unwrap();
         drop(input);
 
-        work_messages::<_, TestStore>(receiver, config(), (), 10, (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
     }
@@ -481,7 +471,7 @@ mod tests {
         input.send(Message::Apply(ApplyBatch { inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }], completion })).unwrap();
         drop(input);
 
-        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(
             observed.try_iter().collect::<Vec<_>>(),
@@ -510,7 +500,7 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(observed.recv().unwrap(), ListenerMessage::Registered { time: 10, snapshot_ids: snapshot_ids.clone() });
         for snapshot_id in snapshot_ids {
@@ -520,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_steps_ignore_the_old_replay_budget() {
+    fn snapshot_steps_flush_one_replay_notification_per_snapshot() {
         let (input, receiver) = unbounded();
         let (notifications, observed) = unbounded();
         input.send(Message::Listen(Listen { time: 10, snapshot_ids: vec![1, 2, 3], listener: TestListener(notifications) })).unwrap();
@@ -533,10 +523,8 @@ mod tests {
             }))
             .unwrap();
         drop(input);
-        let mut worker_config = config();
-        worker_config.replays_per_receive = 1;
 
-        work_messages::<_, TestStore>(receiver, worker_config, (), 0, (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, (), (), crossbeam_channel::never(), None);
 
         assert!(matches!(observed.recv().unwrap(), ListenerMessage::Registered { .. }));
         for snapshot_id in [1, 2, 3] {
@@ -568,7 +556,7 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, (), (), crossbeam_channel::never(), None);
 
         assert!(matches!(observed.recv().unwrap(), ListenerMessage::Registered { .. }));
         assert_eq!(observed.recv().unwrap(), ListenerMessage::Replayed { time: 10, snapshot_ids: vec![7] });
@@ -598,7 +586,7 @@ mod tests {
             .unwrap();
         drop(input);
 
-        work_messages::<_, TestStore>(receiver, config(), (), 0, (), crossbeam_channel::never(), None);
+        work_messages::<_, TestStore>(receiver, (), (), crossbeam_channel::never(), None);
 
         assert_eq!(*snapshots.recv().unwrap()[0], TestSnapshot { snapshot_id: 7, count: 1 });
     }

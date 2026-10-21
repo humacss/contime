@@ -86,12 +86,6 @@ fn main() -> Result<(), String> {
         placement: Placement::default(),
         pruning_interval: Duration::from_millis(100),
         history_retention: Time(100),
-        worker: contime_worker::WorkerConfig {
-            maximum_dirty_age: Duration::from_micros(100),
-            replays_per_receive: 1,
-            deadline_compaction_minimum: 1_024,
-            deadline_compaction_multiplier: 2,
-        },
         checkpoints: CheckpointConfig { interval: 2 },
     };
     let core = ConTime::<ReceiveValue, OrderedValues, ()>::start(config, ()).map_err(|error| format!("{error:?}"))?;

@@ -204,9 +204,7 @@ where
     I: Input,
     S: contime_checkpoints::Snapshot,
 {
-    pub(crate) worker: contime_worker::WorkerConfig,
     pub(crate) checkpoints: crate::checkpoints::CheckpointConfig,
-    pub(crate) history_retention: I::Time,
 
     pub(crate) wrapper: W,
     pub(crate) activity: Receiver<Sender<bool>>,

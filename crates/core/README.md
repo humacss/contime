@@ -28,7 +28,8 @@ in their respective specialized crates.
 The root constructs `RouterProcess` and `WorkerProcess` through `new`, connects
 activity observers through `with_activity`, router flush requests through
 `with_controls`, and worker progress callbacks through `with_coordination`.
-Process fields remain private. `SharedEvent::from` wraps an owned input; existing
+`WorkerProcess::new(checkpoints, wrapper)` receives only settings its store uses;
+retention stays with the admission coordinator. Process fields remain private. `SharedEvent::from` wraps an owned input; existing
 API output traits construct protocol batches without exposing their fields.
 
 `coordinate` runs the admission loop on the calling thread with

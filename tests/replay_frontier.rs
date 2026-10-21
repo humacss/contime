@@ -117,12 +117,6 @@ fn config(routers: usize, workers: usize, interval: u64, retention: u64) -> ConT
         history_retention: Time(retention),
         pruning_interval: Duration::ZERO,
         checkpoints: CheckpointConfig { interval },
-        worker: contime_worker::WorkerConfig {
-            maximum_dirty_age: Duration::from_millis(1),
-            replays_per_receive: 1,
-            deadline_compaction_minimum: 1_024,
-            deadline_compaction_multiplier: 2,
-        },
     }
 }
 fn event(id: u128, time: u64) -> TestEvent {

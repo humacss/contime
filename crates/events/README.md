@@ -4,11 +4,11 @@
 threads, channels, snapshots, checkpoints, worker scheduling, memory limits,
 or ConTime orchestration.
 
-The crate is not connected to the root `contime` crate or any other ConTime
-subcrate. A future orchestrator may adapt this crate's independent API to the
-worker boundary.
+Core adapts this workspace member into each snapshot history and connects it
+to checkpoint storage. The event store itself remains independent of those
+crates and knows nothing about their execution topology.
 
-## Initial scope
+## Responsibilities
 
 - Accept any event ownership representation selected by the consumer.
 - Deduplicate retained events by event ID, independently of timestamp.
@@ -24,7 +24,7 @@ The store also owns a monotonic history horizon. Events strictly before it are
 rejected before duplicate detection, while events exactly at it remain valid.
 `prune_before` removes obsolete late-tree and ordered-prefix entries and
 forgets their IDs, allowing those IDs to be reused by retained-time events.
-Memory accounting and checkpoint materialization remain outside this crate.
+Checkpoint materialization belongs to the snapshot store.
 
 ## Public boundary
 
@@ -32,7 +32,7 @@ Consumers implement the local `Event` trait by providing an ordered time and a
 `u128` event ID. The time type's `Default` value is its zero timestamp.
 `EventHistory<E>` stores `E` directly as its consumer-selected ownership type
 and is the per-snapshot state object. It does not store a snapshot
-ID; the eventual worker owns the mapping from snapshot IDs to histories.
+ID; the worker owns the mapping from snapshot IDs to histories.
 
 `EventHistory::clone_between` returns owned clones in canonical
 `(time, event_id)` order over the half-open interval `[from, to)`. The merged

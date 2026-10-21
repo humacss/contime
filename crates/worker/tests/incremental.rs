@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use contime_worker::{
     work_messages, AdvanceInput, ApplyBatch, Coordination, EventInsert, EventQueryInput, RoutedInput, SnapshotListenInput,
-    SnapshotListener, SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind, WorkerConfig,
+    SnapshotListener, SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind,
 };
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -157,14 +157,6 @@ impl WorkInput for Message {
         }
     }
 }
-fn config() -> WorkerConfig {
-    WorkerConfig {
-        maximum_dirty_age: Duration::ZERO,
-        replays_per_receive: 0,
-        deadline_compaction_minimum: 0,
-        deadline_compaction_multiplier: 0,
-    }
-}
 fn apply(input: &Sender<Message>, values: &[(u128, u128, u64)]) -> Receiver<Vec<u128>> {
     let (completion, done) = unbounded();
     let inputs = values.iter().map(|&(snapshot_id, id, time)| RoutedInput { snapshot_id, input: Event { id, time } }).collect();
@@ -184,7 +176,7 @@ fn spawn(
     registrations: Receiver<Sender<bool>>,
     coordination: Option<Coordination<u64>>,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || work_messages::<_, TestStore>(input, config(), (), 0, Context { steps, gate }, registrations, coordination))
+    std::thread::spawn(move || work_messages::<_, TestStore>(input, (), Context { steps, gate }, registrations, coordination))
 }
 
 #[test]

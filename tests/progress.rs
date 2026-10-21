@@ -88,12 +88,6 @@ fn settings() -> ConTimeConfig<Time> {
         placement: Placement::default(),
         history_retention: Time(1000),
         pruning_interval: Duration::from_millis(1),
-        worker: contime_worker::WorkerConfig {
-            maximum_dirty_age: Duration::from_millis(1),
-            replays_per_receive: 1,
-            deadline_compaction_minimum: 1024,
-            deadline_compaction_multiplier: 2,
-        },
         checkpoints: CheckpointConfig { interval: 1 },
     }
 }

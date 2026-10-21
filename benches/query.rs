@@ -81,12 +81,6 @@ fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<Time> {
         pruning_interval: std::time::Duration::from_millis(100),
 
         history_retention: Time(2_000),
-        worker: contime_worker::WorkerConfig {
-            maximum_dirty_age: Duration::from_micros(100),
-            replays_per_receive: 1,
-            deadline_compaction_minimum: 1_024,
-            deadline_compaction_multiplier: 2,
-        },
         checkpoints: CheckpointConfig { interval: 100 },
     }
 }

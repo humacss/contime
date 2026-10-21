@@ -30,8 +30,8 @@ where
     }
 }
 
-/// Sends inputs and waits until all downstream copies have either finished or
-/// reported a rejection.
+/// Sends inputs and collects rejections until all downstream request handles close.
+/// Whether closure includes replay is defined by the downstream adapter.
 pub fn apply<O, I, R, Input, Inputs>(output: &Sender<O>, inputs: Inputs) -> Result<ApplyResponse<R>, ApiError>
 where
     Inputs: IntoIterator<Item = Input>,

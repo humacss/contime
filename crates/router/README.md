@@ -18,9 +18,10 @@ Core serializes subsequent rounds against that completion.
 `contime-router` receives complete input batches, deterministically maps each
 snapshot route to a worker, and sends one final batch per affected worker.
 
-The crate is currently isolated: the root `contime` crate does not use it, and
-it is not a workspace member. It has no dependency on `contime` or
-`contime-api`.
+The root orchestrator uses this workspace member through Core's `RouterProcess`
+adapter. The router itself has no dependency on `contime` or `contime-api`.
+`route_messages` serves the running engine; the independent `route` helper
+uses the same dispatch kernel for apply-only routing.
 
 ## Responsibilities
 

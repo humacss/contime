@@ -7,7 +7,6 @@ use std::time::Duration;
 use contime_worker::{
     work_messages, AdvanceInput, ApplyBatch, Completion, EventInsert, EventQueryInput, EventQueryResponse, RoutedInput,
     SnapshotListenInput, SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput, WorkInputKind,
-    WorkerConfig,
 };
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -243,13 +242,7 @@ fn fixture(scenario: Scenario) -> Fixture {
     }
 }
 fn run(fixture: Fixture) -> Rc<Observed> {
-    let config = WorkerConfig {
-        maximum_dirty_age: Duration::ZERO,
-        replays_per_receive: 0,
-        deadline_compaction_minimum: 0,
-        deadline_compaction_multiplier: 0,
-    };
-    work_messages::<_, TestStore>(fixture.receiver, config, fixture.observed.clone(), 0, fixture.context, crossbeam_channel::never(), None);
+    work_messages::<_, TestStore>(fixture.receiver, fixture.observed.clone(), fixture.context, crossbeam_channel::never(), None);
     black_box(fixture.observed)
 }
 fn verify(scenario: Scenario) {

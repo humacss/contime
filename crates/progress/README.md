@@ -40,8 +40,8 @@ minimum of stale runtime observations.
 
 Core's pruning `Frontier` delegates measurement to this crate while retaining
 its requested/safe timestamps, round sequencing and monotonic pruning policy.
-The existing router fences and worker callbacks remain unchanged. Core's
-`start_with_progress` also accepts this crate's `ProgressPolicy`, selecting a
+The existing router fences and worker callbacks remain unchanged. The root's
+`ConTime::start_with_progress` accepts this crate's `ProgressPolicy`, selecting a
 separate observation cutoff and response without increasing the prune target.
 Both consumers share one serialized fence/report cycle with separate reductions,
 rather than pausing the same workers through competing coordinators. Observation
@@ -63,6 +63,6 @@ cargo +1.95.0 test --offline --manifest-path crates/progress/Cargo.toml
 cargo +1.95.0 test --offline --manifest-path crates/core/Cargo.toml
 ```
 
-Seven public-API tests cover missing and stale reports, duplicate completion,
+Public-API tests cover missing and stale reports, duplicate completion,
 cutoffs, pending work, concurrent-admission constraints, complete timestamps,
 and independent pruning/observation consumers of the same implementation.

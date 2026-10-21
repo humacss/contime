@@ -71,10 +71,6 @@ impl checkpoints::ApplyEvents<TestEvent> for TestSnapshot {
 }
 
 fn config(router_count: usize, worker_count: usize, retention: u64) -> ConTimeConfig<Time> {
-    config_with_replays(router_count, worker_count, retention, 1)
-}
-
-fn config_with_replays(router_count: usize, worker_count: usize, retention: u64, replays_per_receive: usize) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
@@ -82,12 +78,6 @@ fn config_with_replays(router_count: usize, worker_count: usize, retention: u64,
         pruning_interval: std::time::Duration::from_millis(100),
 
         history_retention: Time(retention),
-        worker: contime_worker::WorkerConfig {
-            maximum_dirty_age: Duration::from_micros(100),
-            replays_per_receive,
-            deadline_compaction_minimum: 1_024,
-            deadline_compaction_multiplier: 2,
-        },
         checkpoints: checkpoints::CheckpointConfig { interval: 2 },
     }
 }
@@ -190,7 +180,7 @@ fn advance_admission_closes_and_old_queries_return_no_snapshot() {
 
 #[test]
 fn advance_forces_dirty_pre_horizon_replay_before_pruning() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config_with_replays(1, 1, 10, 0), ()).unwrap();
+    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
     let (completion, applied) = unbounded();
     contime.send([event(1, 5, 7)], completion).unwrap();
 
@@ -204,7 +194,7 @@ fn advance_forces_dirty_pre_horizon_replay_before_pruning() {
 
 #[test]
 fn event_at_the_horizon_remains_available_after_immediate_replay() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config_with_replays(1, 1, 10, 0), ()).unwrap();
+    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
     let (completion, applied) = unbounded();
     contime.send([event(1, 10, 7)], completion).unwrap();
 

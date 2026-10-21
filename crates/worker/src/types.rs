@@ -1,21 +1,3 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::time::Duration;
-
-/// Legacy worker configuration, retained for API compatibility.
-/// Message workers always drain ready messages before one timestamp step.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WorkerConfig {
-    /// Maximum time changed events may wait before their snapshot is replayed.
-    pub maximum_dirty_age: Duration,
-    /// Maximum non-overdue snapshots replayed after each received batch.
-    pub replays_per_receive: usize,
-    /// Deadline entries tolerated before relative compaction is considered.
-    pub deadline_compaction_minimum: usize,
-    /// Maximum deadline entries per active snapshot before compaction.
-    pub deadline_compaction_multiplier: usize,
-}
-
 /// One event route already assigned to this worker.
 #[derive(Debug)]
 pub struct RoutedInput<I> {
@@ -91,7 +73,7 @@ pub struct ReplayUpdate<T> {
     pub affected_from: T,
 }
 
-/// Timestamp arithmetic required for worker-local horizon advancement.
+/// Timestamp ordering and retention arithmetic shared with admission coordination.
 pub trait AdvanceTime: Clone + Default + Ord {
     fn saturating_sub(&self, retention: &Self) -> Self;
 }
@@ -117,76 +99,12 @@ pub trait AdvanceInput {
     fn into_parts(self) -> (Self::Time, Self::Completion);
 }
 
-pub trait AdvanceOutput<T, C>: Sized {
-    fn advance(time: T, completion: C) -> Self;
-}
-
-/// Canonical per-snapshot event storage owned by a worker.
-pub trait Events<I>: Sized {
-    type Config;
-    type Rejection;
-    type Time: AdvanceTime;
-
-    fn create(snapshot_id: u128, config: &Self::Config, horizon: &Self::Time) -> Self;
-
-    fn insert(&mut self, input: I) -> EventInsert<Self::Rejection>;
-
-    fn dirty_time(&self) -> &Self::Time;
-
-    fn prune_before(&mut self, horizon: &Self::Time);
-}
-
-/// Read-only event-history access required by worker queries.
-pub trait QueryEvents<I> {
-    type Time: Clone + Ord;
-
-    fn clone_between(&self, from: &Self::Time, to: &Self::Time) -> Vec<I>
-    where
-        I: Clone;
-}
-
-/// Materialized per-snapshot checkpoint storage.
-///
-/// Checkpoint updates can inspect canonical events but cannot modify them.
-pub trait Checkpoints<S>: Sized {
-    type Config;
-    type Context;
-    type Time: AdvanceTime;
-
-    fn create(snapshot_id: u128, config: &Self::Config) -> Self;
-
-    fn update(&mut self, events: &mut S, context: &mut Self::Context) -> Self::Time;
-
-    fn advance_before(&mut self, events: &S, context: &mut Self::Context, horizon: &Self::Time);
-}
-
-/// Checkpoint continuation for timestamp-at-a-time message workers.
-pub trait IncrementalCheckpoints<S>: Checkpoints<S> {
-    /// Invalidates affected state and transfers history dirtiness to scheduling.
-    fn invalidate(&mut self, events: &mut S);
-
-    /// The earliest complete timestamp not represented by valid checkpoints.
-    fn next_time(&self, events: &S) -> Option<Self::Time>;
-
-    /// Applies at most one complete timestamp bucket through the target.
-    fn step(&mut self, events: &S, context: &mut Self::Context, target: &Self::Time);
-}
-
 /// Reports safe-pruning measurements and successfully completed pruning passes.
 pub struct Coordination<T> {
     pub router_count: usize,
     pub report: Box<dyn FnMut(u64, Option<T>) + Send>,
     /// Called only after every history and retention hook in a pass finishes.
     pub pruned: Box<dyn FnMut(T) + Send>,
-}
-
-/// Read-only checkpoint reconstruction required by worker queries.
-pub trait QueryCheckpoints<E> {
-    type Context;
-    type Time: Clone + Ord;
-    type Snapshot;
-
-    fn query_at(&self, events: &E, context: &mut Self::Context, time: Self::Time) -> Option<Box<Self::Snapshot>>;
 }
 
 pub trait SnapshotQueryInput {
@@ -272,85 +190,11 @@ pub trait WorkInput {
     fn into_kind(self) -> WorkInputKind<Self::Apply, Self::SnapshotQuery, Self::EventQuery, Self::SnapshotListen, Self::Advance>;
 }
 
-pub(crate) type Request<C, R> = Rc<RefCell<PendingRequest<C, R>>>;
-
 /// One generational index into worker-local notification collection storage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct NotificationId {
     pub(crate) index: usize,
     pub(crate) generation: u64,
-}
-
-pub(crate) struct SnapshotSlot<S, K, C, R> {
-    pub(crate) events: Option<S>,
-    pub(crate) checkpoints: Option<K>,
-    pub(crate) dirty: bool,
-    pub(crate) waiters: Vec<Request<C, R>>,
-}
-
-impl<S, K, C, R> SnapshotSlot<S, K, C, R> {
-    pub(crate) const fn metadata_only() -> Self {
-        Self { events: None, checkpoints: None, dirty: false, waiters: Vec::new() }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_events(events: S) -> Self {
-        Self { events: Some(events), checkpoints: None, dirty: false, waiters: Vec::new() }
-    }
-}
-
-pub(crate) struct PendingRequest<C, R> {
-    pub(crate) completion: Option<C>,
-    pub(crate) pending_snapshots: usize,
-    pub(crate) rejections: Vec<R>,
-}
-
-pub(crate) fn new_request<C, R>(completion: C) -> Request<C, R> {
-    Rc::new(RefCell::new(PendingRequest { completion: Some(completion), pending_snapshots: 0, rejections: Vec::new() }))
-}
-
-pub(crate) fn register_waiter<S, K, C, R>(slot: &mut SnapshotSlot<S, K, C, R>, request: &Request<C, R>) {
-    // A worker inserts every route for one request contiguously. If this
-    // request already waits on the snapshot, it is therefore the last waiter.
-    if slot.waiters.last().is_some_and(|waiter| Rc::ptr_eq(waiter, request)) {
-        return;
-    }
-
-    request.borrow_mut().pending_snapshots += 1;
-    slot.waiters.push(Rc::clone(request));
-}
-
-pub(crate) fn complete_snapshot<C, R>(request: Request<C, R>)
-where
-    C: Completion<R>,
-{
-    request.borrow_mut().pending_snapshots -= 1;
-    finish_if_ready(&request);
-}
-
-pub(crate) fn finish_if_ready<C, R>(request: &Request<C, R>)
-where
-    C: Completion<R>,
-{
-    let completed = {
-        let mut request = request.borrow_mut();
-        if request.pending_snapshots != 0 {
-            None
-        } else {
-            request.completion.take().map(|completion| {
-                let rejections = std::mem::take(&mut request.rejections);
-                (completion, rejections)
-            })
-        }
-    };
-
-    if let Some((completion, rejections)) = completed {
-        if rejections.is_empty() {
-            drop(completion);
-        } else {
-            completion.reject(rejections);
-        }
-    }
 }
 
 /// Storage operations needed by the timestamp-driven worker.
@@ -390,20 +234,5 @@ pub(crate) struct StoreSlot<S> {
 impl<S> StoreSlot<S> {
     pub(crate) fn metadata_only() -> Self {
         Self { store: None, notification_ids: Vec::new() }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::SnapshotSlot;
-
-    #[test]
-    fn metadata_only_snapshot_slots_do_not_initialize_history_or_checkpoints() {
-        let slot = SnapshotSlot::<Vec<u8>, Vec<u8>, (), ()>::metadata_only();
-
-        assert!(slot.events.is_none());
-        assert!(slot.checkpoints.is_none());
-        assert!(!slot.dirty);
-        assert!(slot.waiters.is_empty());
     }
 }

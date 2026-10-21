@@ -43,8 +43,7 @@ where
             .collect();
         let workers = (0..config.worker_count)
             .map(|index| {
-                let worker = WorkerProcess::new(config.worker, config.checkpoints, config.history_retention.clone(), wrapper.clone())
-                    .with_activity(activity());
+                let worker = WorkerProcess::new(config.checkpoints, wrapper.clone()).with_activity(activity());
                 let reports = input.clone();
                 let pruned = input.clone();
                 worker.with_coordination(contime_worker::Coordination {
@@ -148,12 +147,6 @@ mod tests {
             pruning_interval: std::time::Duration::from_millis(100),
 
             history_retention: Time(0),
-            worker: contime_worker::WorkerConfig {
-                maximum_dirty_age: Duration::from_micros(100),
-                replays_per_receive: 1,
-                deadline_compaction_minimum: 1_024,
-                deadline_compaction_multiplier: 2,
-            },
             checkpoints: CheckpointConfig { interval: 100 },
         }
     }

@@ -1,8 +1,8 @@
 //! API-side input forwarding and rejection collection for ConTime.
 //!
 //! The API forwards one batch per call to an opaque downstream receiver and
-//! uses rejection-channel closure to detect synchronous apply
-//! completion. Rejection reasons are generic, and the crate has no knowledge
+//! collects insertion rejections until request senders close. Replay completion
+//! is defined by the downstream adapter. Rejection reasons are generic, and the crate has no knowledge
 //! of downstream processing topology or the root `contime` crate.
 
 mod advance_to;

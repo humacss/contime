@@ -69,10 +69,6 @@ impl checkpoints::ApplyEvents<TestEvent> for TestSnapshot {
 }
 
 fn config(router_count: usize, worker_count: usize, retention: u64) -> ConTimeConfig<Time> {
-    config_with_replays(router_count, worker_count, retention, 1)
-}
-
-fn config_with_replays(router_count: usize, worker_count: usize, retention: u64, replays_per_receive: usize) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
@@ -80,12 +76,6 @@ fn config_with_replays(router_count: usize, worker_count: usize, retention: u64,
         pruning_interval: std::time::Duration::from_millis(100),
 
         history_retention: Time(retention),
-        worker: contime_worker::WorkerConfig {
-            maximum_dirty_age: Duration::from_micros(100),
-            replays_per_receive,
-            deadline_compaction_minimum: 1_024,
-            deadline_compaction_multiplier: 2,
-        },
         checkpoints: checkpoints::CheckpointConfig { interval: 2 },
     }
 }

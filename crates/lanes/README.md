@@ -4,8 +4,8 @@
 canonical events through snapshot-specific filter lanes and apply lanes.
 
 The crate intentionally has no dependency on ConTime or on its API, router,
-worker, events, or checkpoints subcrates. The eventual ConTime orchestrator
-will adapt those independently designed boundaries.
+worker, events, or snapshot subcrates. Core and the root `contime` crate
+re-export these contracts for consumer application adapters.
 
 ```text
 raw lanes -> snapshot filter lanes -> snapshot apply lanes -> snapshot

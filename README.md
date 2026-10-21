@@ -94,7 +94,7 @@ Higher-level consumers can supply typed lanes, invalidation rules, reactors, ser
 ## Current Constraints
 
 - ConTime is in-memory only. Persistence, replay from disk, and recovery belong in surrounding systems.
-- Retention prunes old events and checkpoints. There is no built-in memory counting, budget admission, or memory cap.
+- Retention prunes old events and checkpoints by time. There is no built-in memory cap.
 - Application logic must be deterministic. Stable event IDs and snapshot routing belong to the consumer.
 - Queries earlier than retained history cannot reconstruct discarded events.
 - Checkpoints clone snapshot state, so large snapshots can be expensive.
@@ -104,11 +104,13 @@ Higher-level consumers can supply typed lanes, invalidation rules, reactors, ser
 ## Verification
 
 ```bash
+cargo fmt --all -- --check
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p contime --example ordered_values
 ```
 
-See the [running pipeline guide](docs/running-contime.md) and crate READMEs for completion boundaries, focused tests, and benchmarks. Historical designs and measurements live under `docs/`; they describe the implementation at their recorded dates.
+See the [running pipeline guide](docs/running-contime.md) and crate READMEs for completion boundaries, focused tests, and benchmarks. The [documentation index](docs/README.md) separates current guides from historical designs and measurements.
 
 ## License
 

@@ -7,6 +7,11 @@ The root `contime` crate uses these helpers to submit Core protocol messages.
 This workspace member depends only on Crossbeam and defines its own generic
 rejection contract.
 
+The synchronous helpers here are independent functions. The root engine's
+`apply` and `advance_to` methods enqueue work asynchronously. In the composed
+pipeline, closing an apply rejection stream acknowledges insertion; it does
+not establish replay completion.
+
 ## Responsibilities
 
 `send` converts each input into the caller-selected input type, collects one
