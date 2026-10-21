@@ -26,7 +26,10 @@ where
 fn retain<S: Snapshot, H: EventStore<Time = S::Time>>(playback: &mut Playback<'_, S, H>) {
     let index = playback.checkpoint_index;
     let checkpoints = &playback.store.checkpoints;
+    // A checkpoint before the horizon is the retained history's baseline,
+    // even while physical pruning is deferred. Replay must not overwrite it.
     let replace_current = index > 0
+        && checkpoints[index].snapshot.time() >= &playback.store.horizon
         && (playback.store.checkpoint_interval == 0
             || checkpoints[index].history_event_count.saturating_sub(checkpoints[index - 1].history_event_count)
                 < playback.store.checkpoint_interval);

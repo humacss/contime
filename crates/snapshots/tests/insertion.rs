@@ -221,3 +221,57 @@ fn horizon_rejects_older_events_but_accepts_boundary(#[case] prune: bool) {
     assert_eq!(accepted, expected_accepted);
     assert_eq!(actual.sum, expected_sum);
 }
+
+#[rstest::rstest]
+#[case::unbounded(0)]
+#[case::complete_intervals(1)]
+#[case::partial_interval(2)]
+#[case::sparse_checkpoints(100)]
+fn deferred_pruning_preserves_retained_queries(#[case] interval: u64) {
+    let mut store = SnapshotStore::new(TestEventStore::default(), TestSnapshot::default(), interval);
+    let calls = Cell::new(0);
+    store.insert(TestEvent { id: 1, time: Time(10), value: 1 });
+    store.process_until(Time(10), &calls).unwrap();
+    store.forward(Time(20), &calls, |_, _, _| {}).unwrap();
+
+    for (id, time, value) in [(2, 30, 2), (3, 40, 4)] {
+        store.insert(TestEvent { id, time: Time(time), value });
+        store.process_until(Time(time), &calls).unwrap();
+    }
+    for (time, expected) in [(20, 1), (30, 3), (40, 7)] {
+        assert_eq!(store.query(Time(time), &calls).unwrap().sum, expected);
+    }
+
+    store.prune();
+    store.prune();
+
+    for (time, expected) in [(20, 1), (30, 3), (40, 7)] {
+        assert_eq!(store.query(Time(time), &calls).unwrap().sum, expected);
+    }
+}
+
+#[rstest::rstest]
+#[case::unbounded(0)]
+#[case::complete_intervals(1)]
+#[case::partial_interval(2)]
+#[case::sparse_checkpoints(100)]
+fn boundary_inputs_survive_replay_before_each_prune(#[case] interval: u64) {
+    let mut store = SnapshotStore::new(TestEventStore::default(), TestSnapshot::default(), interval);
+    let calls = Cell::new(0);
+    store.insert(TestEvent { id: 1, time: Time(10), value: 1 });
+    store.process_until(Time(10), &calls).unwrap();
+
+    for (horizon, boundary_id, boundary_value, later_id, later_time, later_value, boundary_sum, total) in
+        [(20, 2, 2, 3, 30, 4, 3, 7), (40, 4, 8, 5, 50, 16, 15, 31)]
+    {
+        store.forward(Time(horizon), &calls, |_, _, _| {}).unwrap();
+        store.insert(TestEvent { id: later_id, time: Time(later_time), value: later_value });
+        store.process_until(Time(later_time), &calls).unwrap();
+        store.insert(TestEvent { id: boundary_id, time: Time(horizon), value: boundary_value });
+        store.process_until(Time(later_time), &calls).unwrap();
+        store.prune();
+
+        assert_eq!(store.query(Time(horizon), &calls).unwrap().sum, boundary_sum);
+        assert_eq!(store.query(Time(later_time), &calls).unwrap().sum, total);
+    }
+}
