@@ -19,6 +19,13 @@ impl<I> fmt::Display for RuntimeSendError<I> {
 impl<I> std::error::Error for RuntimeSendError<I> where I: fmt::Debug {}
 
 impl<I, RE, WE> Runtime<I, RE, WE> {
+    /// Observes whether any owned router or worker thread has finished.
+    /// This reads join-handle status only: it sends no messages and does not
+    /// wait, join threads, inspect queues, or establish an idle barrier.
+    pub fn has_stopped_components(&self) -> bool {
+        self.routers.iter().any(std::thread::JoinHandle::is_finished) || self.workers.iter().any(std::thread::JoinHandle::is_finished)
+    }
+
     /// Read-only emptiness checks. A stopped queue returns false; these handles
     /// do not keep receivers connected and do not consume messages.
     pub fn queue_checks(&self) -> &[std::sync::Arc<dyn Fn() -> bool + Send + Sync>] {
@@ -87,6 +94,41 @@ mod tests {
         let report = runtime.shutdown();
         assert!(report.routers.iter().all(|outcome| matches!(outcome, crate::ThreadOutcome::Completed)));
         assert!(report.workers.iter().all(|outcome| matches!(outcome, crate::ThreadOutcome::Completed)));
+    }
+
+    #[test]
+    fn health_observes_running_components_without_sending_messages() {
+        let (release, finish) = crossbeam_channel::bounded::<()>(1);
+        let worker = std::thread::spawn(move || {
+            let _ = finish.recv();
+            Ok::<(), ()>(())
+        });
+        let (input, _incoming) = crossbeam_channel::unbounded();
+        let runtime = Runtime::<(), (), ()> { input, routers: Vec::new(), workers: vec![worker], queue_checks: Vec::new() };
+        assert!(!runtime.has_stopped_components());
+        release.send(()).unwrap();
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn health_detects_finished_router_and_worker_handles() {
+        for is_worker in [false, true] {
+            let completed = std::thread::spawn(|| Ok::<(), ()>(()));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !completed.is_finished() {
+                assert!(std::time::Instant::now() < deadline, "controlled component did not finish");
+                std::thread::yield_now();
+            }
+            let (input, _incoming) = crossbeam_channel::unbounded();
+            let mut runtime = Runtime::<(), (), ()> { input, routers: Vec::new(), workers: Vec::new(), queue_checks: Vec::new() };
+            if is_worker {
+                runtime.workers.push(completed);
+            } else {
+                runtime.routers.push(completed);
+            }
+            assert!(runtime.has_stopped_components());
+            runtime.shutdown();
+        }
     }
 
     #[test]

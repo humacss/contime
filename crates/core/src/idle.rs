@@ -38,6 +38,17 @@ impl std::fmt::Display for IdleError {
 impl std::error::Error for IdleError {}
 
 impl<I: Input, S, W> ConTime<I, S, W> {
+    /// Observes whether an admission, router, or worker thread has finished.
+    /// This sends no probes and does not wait for work, replay, or idle. As
+    /// with any health observation, components may stop after it returns.
+    pub fn check_health(&self) -> Result<(), IdleError> {
+        if self.coordinator.is_finished() || self.runtime.has_stopped_components() {
+            Err(IdleError::ComponentStopped)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Blocks the caller until work queues are empty and routers/workers idle.
     /// Stop submitting new work before calling to obtain a completion guarantee.
     /// Queued and active work are both observed, including router-to-worker
@@ -198,6 +209,19 @@ mod tests {
         drop(release);
         component.join().unwrap();
         core.shutdown();
+    }
+
+    #[test]
+    fn repeated_health_checks_never_enqueue_activity_registrations() {
+        let mut core = core();
+        let (subscribe, subscriptions) = unbounded::<crossbeam_channel::Sender<bool>>();
+        core.subscriptions.push(subscribe);
+        for _ in 0..100 {
+            assert_eq!(core.check_health(), Ok(()));
+        }
+        let queued = subscriptions.len();
+        core.shutdown();
+        assert_eq!(queued, 0, "health observation must not queue activity registrations");
     }
 
     #[test]
