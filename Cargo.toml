@@ -1,49 +1,13 @@
-[package]
-name = "contime"
-version = "0.1.0"
-edition = "2021"
-autobenches = false
-license = "MIT"
-description = "Continuous-time state engine for unreliable event streams with O(log N) historical queries"
-repository = "https://github.com/humacss/contime"
-documentation = "https://docs.rs/contime"
-readme = "README.md"
-categories = ["game-development", "concurrency"]
-keywords = ["time", "event-sourcing", "snapshot", "concurrency"]
-authors = ["humacss"]
-
-[dependencies]
-ahash = "0.8.12"
-crossbeam-channel = "0.5"
-contime_macros = { path = "contime_macros" }
-
-[dev-dependencies]
-flume = "0.12.0"
-rstest = "0.26.1"
-criterion = { version = "0.5", features = ["html_reports"] }
-pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
-trybuild = "1.0.112"
-
-[[bench]]
-name = "apply"
-harness = false
-
-[[bench]]
-name = "query"
-harness = false
-
-[[bench]]
-name = "flume"
-harness = false
-
-[[bench]]
-name = "channels"
-harness = false
-
-[[bench]]
-name = "router"
-harness = false
-
-[[bench]]
-name = "apply_boundaries"
-harness = false
+[workspace]
+resolver = "2"
+members = [
+    "crates/api",
+    "crates/core",
+    "crates/events",
+    "crates/lanes",
+    "crates/progress",
+    "crates/router",
+    "crates/runtime",
+    "crates/snapshots",
+    "crates/worker",
+]

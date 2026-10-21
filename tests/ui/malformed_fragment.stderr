@@ -1,5 +1,0 @@
-error: expected square brackets
- --> tests/ui/malformed_fragment.rs:8:21
-  |
-8 |         OnBroken => BrokenAt,
-  |                     ^^^^^^^^
