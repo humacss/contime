@@ -26,13 +26,17 @@ construction nor these calls spawn threads. A driver must preserve the normal
 priority: delivered messages, then pending pruning, then replay. This allows
 component tests to control message delivery without replacing worker logic.
 
-`work_messages` drains available messages, inserting complete incoming batches,
-then processes one snapshot to the next distinct pending timestamp or the
-advancement target, whichever is earlier. An ordered set groups pending work
-by timestamp; each snapshot has one entry. Equal-time entries needing that
-timestamp run before entries already complete through it, then by snapshot ID.
-After each step, the worker flushes replay notifications and returns to its
-message queue. There is no maximum processing range.
+`work_messages` drains the messages ready at the start of each receive batch,
+inserting complete incoming batches, then grants up to one replay step per
+received message. Each step processes one snapshot to the next distinct pending
+timestamp or the advancement target, whichever is earlier. An ordered set groups
+pending work by timestamp; each snapshot has one entry. Equal-time entries needing
+that timestamp run before entries already complete through it, then by snapshot ID.
+The worker flushes notifications after each step and checks for newly queued
+messages before starting another step. New messages join the next bounded receive
+batch, so queries remain serviceable and continuous query traffic cannot starve replay. Pruning still
+processes only one history before returning to the queue, preserving query service
+between retention hooks. There is no maximum processing range.
 
 Each message-worker snapshot owns one implementation of the worker's
 `SnapshotStore<I>` trait. Core supplies the adapter; the worker has no dependency

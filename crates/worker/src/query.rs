@@ -366,6 +366,73 @@ mod tests {
         assert_eq!(reports.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
     }
 
+    struct BusyReadStore(TestStore);
+
+    struct BusyReadContext {
+        input: Option<Sender<Message>>,
+        queries: usize,
+        replay_after_queries: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    }
+
+    impl SnapshotStore<TestEvent> for BusyReadStore {
+        type Config = ();
+        type Context = BusyReadContext;
+        type Time = u64;
+        type Snapshot = TestSnapshot;
+        type Rejection = ();
+
+        fn create(_: u128, _: &(), _: &u64) -> Self {
+            Self(TestStore::default())
+        }
+        fn insert(&mut self, event: TestEvent, horizon: &u64) -> EventInsert<()> {
+            self.0.insert(event, horizon)
+        }
+        fn event_time(input: &TestEvent) -> u64 {
+            input.0
+        }
+        fn earliest_replay_time(&self) -> Option<u64> {
+            self.0.earliest_replay_time()
+        }
+        fn process_until(&mut self, time: &u64, context: &mut BusyReadContext) {
+            context.replay_after_queries.lock().unwrap().push(context.queries);
+            self.0.process_until(time, &mut ());
+        }
+        fn query(&mut self, time: u64, context: &mut BusyReadContext) -> Option<Box<TestSnapshot>> {
+            context.queries += 1;
+            if context.queries < 20 {
+                let (response, _) = unbounded();
+                context.input.as_ref().unwrap().send(Message::Snapshots(SnapshotQuery { response })).unwrap();
+            } else {
+                context.input.take();
+            }
+            self.0.query(time, &mut ())
+        }
+        fn query_events(&self, from: &u64, to: &u64) -> Vec<TestEvent> {
+            self.0.query_events(from, to)
+        }
+        fn forward(&mut self, _: &u64, _: &mut BusyReadContext) {}
+        fn prune(&mut self) {}
+    }
+
+    #[test]
+    fn replenished_read_queue_does_not_starve_replay() {
+        let (input, receiver) = unbounded();
+        let registrations = crossbeam_channel::never();
+        let replay_after_queries = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+        let context = BusyReadContext { input: Some(input.clone()), queries: 0, replay_after_queries: replay_after_queries.clone() };
+        input.send(Message::Advance(Advance { time: 10, completion: unbounded().0 })).unwrap();
+        input
+            .send(Message::Apply(ApplyBatch {
+                inputs: vec![RoutedInput { snapshot_id: 7, input: TestEvent(1) }],
+                completion: unbounded().0,
+            }))
+            .unwrap();
+        input.send(Message::Snapshots(SnapshotQuery { response: unbounded().0 })).unwrap();
+        drop(input);
+        work_messages::<_, BusyReadStore>(receiver, config(), (), 0, context, registrations, None);
+        assert!(replay_after_queries.lock().unwrap()[0] < 20, "replay waited for every replenished query");
+    }
+
     #[test]
     fn one_worker_queue_serves_snapshot_and_event_queries_without_forced_replay() {
         let (input, receiver) = unbounded();

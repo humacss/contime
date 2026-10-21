@@ -198,8 +198,10 @@ where
         }
     }
 
-    /// Drains available work; returns why receiving stopped.
+    /// Drains each ready batch before giving scheduled work a processing turn.
     fn work_loop(&mut self) -> TryRecvError {
+        let mut batch_size = self.input.len().max(1);
+        let mut remaining = batch_size;
         loop {
             let message = match self.input.try_recv() {
                 Ok(message) => message,
@@ -211,6 +213,24 @@ where
                 }
             };
             self.handle(message);
+            remaining -= 1;
+            if remaining == 0 {
+                // Queries and other producers may replenish the queue forever.
+                // Preserve batching for already-ready messages without requiring
+                // the queue to become empty before replay or pruning can run.
+                for _ in 0..batch_size {
+                    if self.prune_step() || !self.step() {
+                        break;
+                    }
+                    // Replay callbacks may enqueue queries or late inputs.
+                    // Service them before starting another replay step.
+                    if !self.input.is_empty() {
+                        break;
+                    }
+                }
+                batch_size = self.input.len().max(1);
+                remaining = batch_size;
+            }
         }
     }
 
