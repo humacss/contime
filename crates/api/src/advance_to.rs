@@ -23,6 +23,14 @@ where
     }
 }
 
+/// Forwards `time` and blocks until all downstream completion senders close.
+///
+/// The downstream adapter defines what advancement completion means. Received
+/// unit messages are discarded; only sender closure finishes the wait.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if the request cannot be queued.
 pub fn advance_to<O, T>(output: &Sender<O>, time: T) -> Result<(), ApiError>
 where
     O: AdvanceOutput<T>,

@@ -25,6 +25,10 @@ where
         self
     }
 
+    /// Creates a worker adapter with checkpoint spacing and application hooks.
+    ///
+    /// The worker creates each history lazily on its first accepted input.
+    /// Progress coordination and activity observers are initially absent.
     pub fn new(checkpoints: CheckpointConfig, wrapper: W) -> Self {
         Self { checkpoints, wrapper, activity: crossbeam_channel::never(), coordination: None, types: PhantomData }
     }

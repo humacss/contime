@@ -2,7 +2,9 @@
 /// New admission may create work before `before` after this report is produced.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgressObservation<T> {
+    /// Host-assigned identity of the completed fenced measurement.
     pub round: u64,
+    /// Requested observation limit after the host caps it at its processing target.
     pub cutoff: T,
     /// Exclusive boundary, capped at `cutoff`.
     pub before: T,
@@ -26,6 +28,10 @@ pub trait ProgressPolicy<T>: Send + 'static {
     /// caller's responsibility. Empty and wholly rejected batches do not notify.
     fn invalidated(&mut self) {}
 
+    /// Receives one completed local measurement.
+    ///
+    /// This is an observation of accounted work, not a durable or distributed
+    /// delivery guarantee. Subsequent admissions can invalidate cached reports.
     fn observed(&mut self, report: ProgressObservation<T>);
 }
 

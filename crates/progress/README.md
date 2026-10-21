@@ -32,9 +32,9 @@ caller owns a monotonic committed frontier and decides when it is safe to move.
 - Resolve/resume participants even when no progress is possible.
 - Decide what to do with the result: prune, publish an observation, or wait.
 
-This crate alone does not implement a distributed completion protocol. A Stream
-adapter must include delivery and membership accounting, not just take the
-minimum of stale runtime observations.
+This crate alone does not implement a distributed completion protocol. An external distributed
+consumer must include delivery and membership accounting, not just take the
+minimum of stale local observations.
 
 ## Current reuse
 
@@ -49,7 +49,7 @@ also includes admission coverage reported by target stores after insertion.
 
 `ProgressObservation` carries the round ID, requested cutoff (as capped by the
 host) and measured exclusive boundary. Reports in successive rounds may fall
-back when newly admitted work requires earlier processing. Engine/Stream must
+back when newly admitted work requires earlier processing. External consumers must
 account for in-flight work before publishing a monotonic group-safe boundary.
 Policies that cache reports can implement the default `invalidated()` callback.
 Core invokes it before routing admitted batches, including internal feedback,

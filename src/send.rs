@@ -1,3 +1,5 @@
+//! Keep external admission and causal feedback submission boundaries explicit.
+
 use crossbeam_channel::Sender;
 
 use crate::SharedEvent;

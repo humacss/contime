@@ -32,6 +32,13 @@ where
 
 /// Sends inputs and collects rejections until all downstream request handles close.
 /// Whether closure includes replay is defined by the downstream adapter.
+/// Results are sorted by event ID and reason, with identical pairs deduplicated.
+/// Empty input returns an empty response without queueing work.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if forwarding fails. Rejected inputs
+/// are returned in the successful response rather than as this error.
 pub fn apply<O, I, R, Input, Inputs>(output: &Sender<O>, inputs: Inputs) -> Result<ApplyResponse<R>, ApiError>
 where
     Inputs: IntoIterator<Item = Input>,

@@ -1,5 +1,16 @@
 # contime-worker
 
+Use `SnapshotStore` to adapt history storage and `WorkInput` to adapt the
+message protocol. `work_messages` drives the calling thread; `MessageWorker`
+provides synchronous control without spawning threads. Public API rustdoc
+specifies adapter ownership and completion contracts.
+
+Snapshot queries include events at the requested time. Event-history queries
+use `[from, to)`, including the lower bound and excluding the upper; missing
+histories and empty results release response ownership without sending a result.
+Insertion completion precedes replay, while pruning completion follows every
+captured history’s forwarding and pruning hooks.
+
 `contime-worker` owns incremental replay scheduling and the blocking message
 receive loop. It depends on no other ConTime crate. Core supplies concrete
 messages and a `SnapshotStore` adapter; the root orchestrator owns the threads.
@@ -77,8 +88,7 @@ cargo bench -p contime-worker --bench messages
 The `messages` benchmark checks observable insertion, processing, query,
 notification, and pruning results with storage stubs before timing. It measures
 worker overhead rather than end-to-end history or checkpoint performance.
-Run timing suites serially. Earlier measurements, including the retired batch
-worker, are preserved in the [dated baseline record](../../docs/benchmarks/2026-09-24-worker-baselines.md).
+Run timing suites serially; results depend on the fixture and hardware.
 
 Source units are `work.rs` (receive loop and scheduler), `listen.rs` (replay
 notifications), `query.rs` (store queries), and `types.rs` (transport and storage

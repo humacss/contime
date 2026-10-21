@@ -3,7 +3,18 @@ use crossbeam_channel::Sender;
 use crate::Placement;
 use crate::{RouterError, SnapshotListenInput, SnapshotListenWorkerOutput};
 
-/// Partitions snapshot-listener registrations by owning worker.
+/// Partitions one timestamped listener collection by owning worker.
+///
+/// Each affected worker receives one nonempty ID partition, preserving relative
+/// order and duplicates. Time and listener are cloned for additional workers;
+/// the final partition takes the originals. Empty registrations send nothing.
+/// Registration acknowledgements and replay notifications belong to workers.
+///
+/// # Errors
+///
+/// Returns [`RouterError::NoWorkers`] for an empty topology. A disconnected
+/// worker yields [`RouterError::WorkerUnavailable`] without rolling back earlier
+/// partitions; unsent listener ownership is dropped.
 pub fn route_snapshot_listeners<R, W>(placement: Placement, registration: R, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
 where
     R: SnapshotListenInput,

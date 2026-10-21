@@ -1,3 +1,5 @@
+//! Read retained snapshots and event ranges without publishing effects.
+
 use crossbeam_channel::Sender;
 
 use crate::{ApiError, ConTime, Input, RouterMessage, SharedEvent};
@@ -6,6 +8,14 @@ impl<I, S, W> ConTime<I, S, W>
 where
     I: Input,
 {
+    /// Enqueues a read of the requested snapshots through `time`, inclusively.
+    ///
+    /// Results arrive in worker batches; their order is unspecified and missing
+    /// snapshot IDs are omitted. The request is finished when all response senders
+    /// close. Drop any caller-held sender clone to observe that closure. Drain a
+    /// bounded response channel concurrently to avoid blocking the worker.
+    /// This reconstructs available history without publishing effects or waiting
+    /// for other work to settle. Returns [`ApiError`] if submission fails.
     pub fn send_query_at(
         &self,
         time: I::Time,
@@ -15,10 +25,23 @@ where
         contime_api::send_query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids, response)
     }
 
+    /// Collects a snapshot query through `time`, including events exactly at it.
+    ///
+    /// Waits for this query's responses, not for global replay completion. Missing
+    /// IDs and times before retained history produce no snapshot; result order is
+    /// unspecified. For a settled-state assertion, stop producers and call
+    /// [`Self::wait_until_idle`] first. Returns [`ApiError`] if submission fails.
     pub fn query_at(&self, time: I::Time, snapshot_ids: impl IntoIterator<Item = u128>) -> Result<Vec<Box<S>>, ApiError> {
         contime_api::query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids)
     }
 
+    /// Enqueues a retained event-history read in the half-open range `[from, to)`.
+    ///
+    /// Shared event handles arrive in worker batches. A range with `from >= to`
+    /// is empty. Events already pruned cannot be returned. Drain bounded channels
+    /// concurrently and drop caller-held sender clones to observe completion by
+    /// closure. No processing target is advanced. Returns [`ApiError`] on enqueue
+    /// failure; successful enqueue alone does not mean insertion or replay settled.
     pub fn send_query_events_between(
         &self,
         snapshot_id: u128,
@@ -29,6 +52,12 @@ where
         contime_api::send_query_events_between::<RouterMessage<I, S>, _, _>(&self.input, snapshot_id, from, to, response)
     }
 
+    /// Collects retained events for one snapshot in the half-open range `[from, to)`.
+    ///
+    /// Events are ordered by timestamp then stable event ID within the history.
+    /// Missing histories and ranges with `from >= to` return an empty vector.
+    /// Returned handles share immutable input ownership; pruned events are absent.
+    /// Waits only for this read and returns [`ApiError`] if submission fails.
     pub fn query_events_between(&self, snapshot_id: u128, from: I::Time, to: I::Time) -> Result<Vec<SharedEvent<I>>, ApiError> {
         contime_api::query_events_between::<RouterMessage<I, S>, _, _>(&self.input, snapshot_id, from, to)
     }

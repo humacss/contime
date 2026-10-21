@@ -1,3 +1,5 @@
+//! Configuration and ownership of the public in-memory pipeline.
+
 use crate::{Input, RejectionReason, RouterMessage};
 use crossbeam_channel::{Receiver, Sender};
 use std::marker::PhantomData;

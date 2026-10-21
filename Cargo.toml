@@ -6,13 +6,20 @@ autobenches = false
 license = "MIT"
 description = "Continuous-time state from unreliable event streams"
 publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [dependencies]
-contime-api = { path = "crates/api" }
-contime-core = { path = "crates/core" }
-contime-router = { path = "crates/router" }
-contime-runtime = { path = "crates/runtime" }
-contime-worker = { path = "crates/worker" }
+contime-api = { path = "crates/api", version = "0.1.0" }
+contime-core = { path = "crates/core", version = "0.1.0" }
+contime-router = { path = "crates/router", version = "0.1.0" }
+contime-runtime = { path = "crates/runtime", version = "0.1.0" }
+contime-worker = { path = "crates/worker", version = "0.1.0" }
 crossbeam-channel = "0.5"
 
 [dev-dependencies]
@@ -48,3 +55,6 @@ members = [
     "crates/snapshots",
     "crates/worker",
 ]
+
+[package.metadata.docs.rs]
+all-features = true

@@ -25,6 +25,13 @@ where
 
 /// Sends an event-history query and collects results until all downstream
 /// response senders have closed.
+///
+/// Queries the half-open interval `[from, to)` and flattens result batches in
+/// receive order. This helper does not validate bounds, sort or deduplicate.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if forwarding fails.
 pub fn query_events_between<O, T, E>(output: &Sender<O>, snapshot_id: u128, from: T, to: T) -> Result<Vec<E>, ApiError>
 where
     O: EventQueryOutput<T, E>,

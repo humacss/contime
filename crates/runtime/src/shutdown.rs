@@ -3,7 +3,16 @@ use std::thread::JoinHandle;
 use crate::{Runtime, ShutdownReport, ThreadOutcome};
 
 impl<I, RE, WE> Runtime<I, RE, WE> {
-    /// Closes the apply path and joins every router and worker thread.
+    /// Drops the owned input sender and joins all routers, then all workers.
+    ///
+    /// Every thread is joined even if another returns an error or panics. The
+    /// report preserves supplied collection order separately for each stage.
+    /// Router-owned worker senders are normally released when routers return,
+    /// allowing worker inputs to drain and disconnect.
+    ///
+    /// This waits without a timeout or cancellation. Drop all external input
+    /// sender clones first, and ensure process implementations release channels
+    /// and return on disconnection; otherwise joining may block indefinitely.
     pub fn shutdown(mut self) -> ShutdownReport<RE, WE> {
         drop(self.input);
         let routers = join_all(std::mem::take(&mut self.routers));

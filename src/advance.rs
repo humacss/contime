@@ -1,3 +1,5 @@
+//! Request processing targets and observe completed retention horizons.
+
 use crossbeam_channel::Sender;
 
 use crate::{ApiError, ConTime, Input, RouterMessage};
@@ -21,7 +23,8 @@ where
     }
 
     /// Low-level target submission. Completion acknowledges target delivery,
-    /// not completed replay or safe pruning; use `wait_until_idle` for those.
+    /// not completed replay or pruning. Use [`Self::wait_until_idle`] for local
+    /// completion and [`Self::subscribe_pruned_horizon`] for completed retention.
     pub fn send_advance_to(&self, time: I::Time, completion: Sender<()>) -> Result<(), ApiError> {
         contime_api::send_advance_to::<RouterMessage<I, S>, _>(&self.input, time, completion)
     }

@@ -3,6 +3,14 @@ use crossbeam_channel::Sender;
 use crate::{ApiError, SnapshotListenOutput};
 
 /// Forwards one asynchronous snapshot-listener registration.
+///
+/// Empty IDs forward nothing and drop `notifications`. Success acknowledges
+/// enqueueing; the adapter defines registration completion and notifications.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if a nonempty registration cannot
+/// be queued.
 pub fn send_listen_snapshots<O, T, N, Ids>(output: &Sender<O>, time: T, snapshot_ids: Ids, notifications: Sender<N>) -> Result<(), ApiError>
 where
     O: SnapshotListenOutput<T, N>,

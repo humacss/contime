@@ -7,6 +7,7 @@ use crate::Runtime;
 /// An apply input returned when the shared router queue is unavailable.
 #[derive(Debug, Eq, PartialEq)]
 pub struct RuntimeSendError<I> {
+    /// Original unsent value, returned because every router receiver disconnected.
     pub input: I,
 }
 
@@ -26,18 +27,35 @@ impl<I, RE, WE> Runtime<I, RE, WE> {
         self.routers.iter().any(std::thread::JoinHandle::is_finished) || self.workers.iter().any(std::thread::JoinHandle::is_finished)
     }
 
-    /// Read-only emptiness checks. A stopped queue returns false; these handles
-    /// do not keep receivers connected and do not consume messages.
+    /// Read-only queue emptiness checks: shared router queue first, then each
+    /// worker queue in supplied worker order.
+    ///
+    /// Each check returns `false` after its runtime-owned receiver reference is
+    /// gone. Checks retain only weak references and never consume messages or
+    /// keep a queue connected. An empty queue does not establish processing idle;
+    /// a component may still be handling a message it already dequeued.
     pub fn queue_checks(&self) -> &[std::sync::Arc<dyn Fn() -> bool + Send + Sync>] {
         &self.queue_checks
     }
 
-    /// Borrows the shared input sender consumed by all routers.
+    /// Borrows the shared input sender consumed by competing routers.
+    ///
+    /// Clones may submit independently, but all external clones must be dropped
+    /// before shutdown can observe input disconnection.
     pub fn input(&self) -> &Sender<I> {
         &self.input
     }
 
-    /// Sends one opaque apply input to the shared router queue.
+    /// Transfers one opaque input to the unbounded shared router queue.
+    ///
+    /// Success acknowledges enqueueing only. The first available router takes
+    /// the message; dispatch and worker processing may still be pending.
+    ///
+    /// # Errors
+    ///
+    /// If every router receiver has disconnected, returns [`RuntimeSendError`]
+    /// containing the original input. A successful send is not evidence that a
+    /// router or worker will ultimately process the message successfully.
     pub fn send(&self, input: I) -> Result<(), RuntimeSendError<I>> {
         self.input.send(input).map_err(|error| RuntimeSendError { input: error.0 })
     }

@@ -6,6 +6,13 @@ autobenches = false
 license = "MIT"
 description = "Isolated deterministic input routing for ConTime"
 publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-router"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [dependencies]
 crossbeam-channel = "0.5"
@@ -25,3 +32,6 @@ harness = false
 [[bench]]
 name = "advance"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true

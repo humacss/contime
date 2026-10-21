@@ -1,4 +1,14 @@
 //! Iterator-based application hooks bridging Core consumers to snapshot playback.
+//!
+//! Implement [`ApplyEvents`] to construct snapshot state and apply deterministic
+//! event changes. An [`ApplyWrapper`] receives each complete canonical timestamp
+//! bucket as an [`EventBatch`], and must participate through [`ApplyInner`]. It can
+//! filter or partition that bucket into effective applications. Use the separate
+//! replay hook for effects that must be silent during historical queries, and the
+//! retention hook to compact application data as the history boundary advances.
+//!
+//! Snapshot storage contracts and algorithms are re-exported from
+//! `contime-snapshots`; [`CheckpointConfig`] controls the stores created by Core.
 pub use contime_checkpoints::*;
 
 /// Startup checkpoint spacing used when core creates each snapshot's store.
@@ -10,18 +20,25 @@ pub struct CheckpointConfig {
 
 /// One complete same-time event bucket.
 pub struct EventBatch<'a, 'e, T, E> {
+    /// Identity of the snapshot whose state receives this batch.
     pub snapshot_id: u128,
+    /// Shared timestamp of the events in this batch.
     pub time: T,
+    /// Canonically ordered events at `time`, before consumer filtering.
     pub events: &'a mut dyn Iterator<Item = &'e E>,
+    /// Playback knowledge about the next event batch or requested horizon.
     pub lookahead: BatchLookahead<'a, T>,
 }
 
 /// One effective event batch selected from a canonical timestamp bucket.
 pub struct ApplyBatch<'a, 'e, T, E> {
+    /// Identity of the snapshot whose state receives this batch.
     pub snapshot_id: u128,
+    /// Shared timestamp of the events in this batch.
     pub time: T,
     /// Cumulative raw history event count before this canonical timestamp batch.
     pub history_event_count: u64,
+    /// Effective events selected by the wrapper, preserving deterministic order.
     pub events: &'a mut dyn Iterator<Item = &'e E>,
 }
 
@@ -53,6 +70,11 @@ pub trait ApplyWrapper<S, E>
 where
     S: ApplyEvents<E>,
 {
+    /// Applies one canonical timestamp bucket during silent reconstruction.
+    ///
+    /// The default forwards the complete bucket once. Overrides may filter or
+    /// partition events but must call an inner application at least once, even
+    /// for an empty effective batch, so timestamp advancement is preserved.
     fn apply_event_batch(&mut self, batch: EventBatch<'_, '_, S::Time, E>, apply_inner: &mut ApplyInner<'_, S>) {
         apply_inner.apply_event_batch(batch);
     }
@@ -95,6 +117,7 @@ where
     /// Every effective partition receives the same preceding raw history
     /// count. Snapshot playback updates the canonical count after the wrapper
     /// returns. An empty effective batch still advances the snapshot timestamp.
+    /// Returns the preceding raw history count; it does not count filtered events.
     pub fn apply_event_batch<E>(&mut self, batch: EventBatch<'_, '_, S::Time, E>) -> u64
     where
         S: ApplyEvents<E>,
@@ -106,6 +129,7 @@ where
     /// execution context. The function must preserve deterministic snapshot
     /// results across live and reconstruction replay. Empty batches do not invoke
     /// it. Timestamp assignment and participation accounting remain owned here.
+    /// Returns the raw history count preceding the canonical batch.
     pub fn apply_event_batch_with<E>(
         &mut self,
         batch: EventBatch<'_, '_, S::Time, E>,

@@ -11,7 +11,11 @@ impl<E> EventHistory<E>
 where
     E: Event,
 {
-    /// Retains one event unless its ID is already present.
+    /// Retains one event at or after the horizon unless its ID is already present.
+    ///
+    /// Horizon rejection precedes duplicate detection. Either rejected outcome
+    /// drops the incoming value and leaves retained history and replay dirtiness
+    /// unchanged. Successful insertion updates the dirty replay boundary.
     ///
     /// In-order events append to the ordered deque. Events before the current
     /// tail enter the late-event tree. Identity is independent of timestamp:

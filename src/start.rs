@@ -1,3 +1,5 @@
+//! Assemble the owned admission, router, and history-worker topology.
+
 use std::marker::PhantomData;
 
 use crate::checkpoints::{ApplyEvents, ApplyWrapper, Snapshot};
@@ -10,6 +12,15 @@ where
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + Send + 'static,
     W: ApplyWrapper<S, I> + Clone + Send + 'static,
 {
+    /// Starts admission, router, and worker threads without a progress observer.
+    ///
+    /// The wrapper is cloned into each worker; `()` uses ordinary snapshot
+    /// application without extra hooks. Keep the returned owner until all work
+    /// is finished, then call [`Self::shutdown`] to close and join the topology.
+    ///
+    /// # Errors
+    /// Returns [`crate::StartError`] for zero routers or workers, or an operating
+    /// system thread-spawn failure. Threads already started are joined on failure.
     pub fn start(config: ConTimeConfig<I::Time>, wrapper: W) -> Result<Self, contime_runtime::StartError> {
         Self::start_with_progress(config, wrapper, ())
     }

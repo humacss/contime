@@ -1,8 +1,12 @@
 use crate::{Apply, Checkpoint, Event, EventStore, Snapshot, Store, Timestamp};
 
+/// Failure to select the state immediately before a requested new horizon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForwardError {
+    /// No valid checkpoint can reconstruct the horizon's predecessor. This
+    /// includes requests whose predecessor is before the current horizon.
     NoCheckpoint,
+    /// The requested horizon has no representable immediate predecessor.
     NoPreviousTimestamp,
 }
 impl std::fmt::Display for ForwardError {

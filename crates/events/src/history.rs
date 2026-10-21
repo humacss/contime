@@ -16,7 +16,8 @@ impl<E> EventHistory<E>
 where
     E: Event,
 {
-    /// Creates an empty event history.
+    /// Creates an empty event history whose horizon and dirty boundary are
+    /// [`Default::default()`] for the event's time type.
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
@@ -35,7 +36,8 @@ where
         self.retained_ids.reserve(additional);
     }
 
-    /// Creates an empty history at an already active horizon.
+    /// Creates an empty history whose horizon and initial dirty boundary are
+    /// `horizon`. Events strictly before it are rejected.
     pub fn with_horizon(horizon: E::Time) -> Self {
         Self::with_capacity_and_horizon(0, horizon)
     }
@@ -75,12 +77,18 @@ where
         }
     }
 
-    /// Returns the earliest timestamp from which replay must begin.
+    /// Returns the earliest changed timestamp since the last replay acknowledgement.
+    ///
+    /// The first accepted event after construction or [`Self::mark_replayed`]
+    /// sets this boundary; later accepted events can move it earlier. When clean,
+    /// it conservatively names the latest retained timestamp, or the empty-history
+    /// boundary. This value alone does not indicate whether new events exist.
     pub fn dirty_time(&self) -> &E::Time {
         &self.dirty_time
     }
 
-    /// Returns the active lower retained-history boundary.
+    /// Returns the lower admissible timestamp, which never decreases.
+    /// Events exactly at this horizon remain retained and admissible.
     pub fn horizon(&self) -> &E::Time {
         &self.horizon
     }

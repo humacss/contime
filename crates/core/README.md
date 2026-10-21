@@ -1,7 +1,7 @@
 # contime-core
 
 `contime-core` connects ConTime's isolated subsystems through concrete protocol
-and storage adapters. The root [`contime`](../../README.md) crate owns the running
+and storage adapters. The root [`contime`](https://github.com/humacss/contime/blob/main/README.md) crate owns the running
 engine, its configuration, startup, public operations, idle checks, and shutdown.
 Core does not depend on the root crate or start threads.
 
@@ -37,9 +37,9 @@ API output traits construct protocol batches without exposing their fields.
 root supplies its channels and owns the thread. Core's private frontier and
 admission rules remain here; this assembly interface does not duplicate them.
 
-See the [running pipeline guide](../../docs/running-contime.md) for public
-operations, completion boundaries, progress semantics, and performance notes.
-The [ordered values example](../../examples/ordered_values.rs) uses the root API.
+See the [project README](https://github.com/humacss/contime/blob/main/README.md) and Rust API documentation
+for public operations, completion boundaries, and progress semantics.
+The [ordered values example](https://github.com/humacss/contime/blob/main/examples/ordered_values.rs) uses the root API.
 
 ## Verification
 

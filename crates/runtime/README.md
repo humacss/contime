@@ -1,5 +1,15 @@
 # contime-runtime
 
+Start with the `Router` and `Worker` traits, then pass owned nonempty process
+collections to `Runtime::start`. This is a generic thread topology: its message
+types and process behavior are supplied by the caller.
+
+Submission acknowledges enqueueing. `shutdown` closes the owned sender and
+joins every component, preserving errors and panics in `ShutdownReport`. Drop
+external input-sender clones before calling it. Process implementations must
+release channels and return for shutdown to finish. Dropping `Runtime` without
+calling `shutdown` detaches join handles and does not wait for completion.
+
 `contime-runtime` is the isolated process-local execution topology for
 ConTime's apply path. It starts router and worker threads, connects them with
 Crossbeam channels, exposes one shared opaque router input boundary, and joins the complete

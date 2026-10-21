@@ -1,4 +1,21 @@
 //! Protocol and storage adapters connecting isolated ConTime subsystems.
+//!
+//! The root `contime` crate assembles the running pipeline. This crate supplies
+//! its concrete protocol and application seams without starting threads itself.
+//!
+//! Implement [`Input`] for event identity and snapshot routing, then implement
+//! [`checkpoints::ApplyEvents`] for deterministic state application. Optional
+//! [`checkpoints::ApplyWrapper`] hooks filter batches, publish live replay effects
+//! or compact retained state. [`SharedEvent`] shares one immutable input across
+//! its routes; [`RouterMessage`] and [`WorkerMessage`] carry pipeline requests.
+//!
+//! [`RouterProcess`] and [`WorkerProcess`] adapt those messages to the runtime.
+//! [`coordinate`] owns admission, fenced progress measurement and safe pruning on
+//! its caller's thread. [`ProgressPolicy`] receives local observations; it does
+//! not establish delivery guarantees outside the pipeline. [`lanes`] exposes
+//! optional typed consumer application contracts.
+
+#![deny(missing_docs)]
 
 mod checkpoint;
 mod coordinator;

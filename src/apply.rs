@@ -1,3 +1,5 @@
+//! Queue external inputs and expose their asynchronous rejection channel.
+
 use contime_api::ApiError;
 
 use crate::{ConTime, Input, RejectionReason};

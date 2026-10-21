@@ -10,13 +10,32 @@ use crate::{Advance, Input, ProgressObservation, ProgressPolicy, RejectionMessag
 
 /// Configuration for the admission coordinator run by the owning orchestrator.
 pub struct Settings<T> {
+    /// Duration subtracted from the processing target to request retained history.
     pub retention: T,
+    /// Number of workers whose fenced and pruning reports must be accounted for.
     pub workers: usize,
+    /// Minimum spacing between successive fenced measurement starts.
     pub interval: Duration,
 }
 
 /// Runs admission and progress coordination on the calling thread.
 /// The orchestrator supplies router controls, worker reports, and activity registrations.
+/// `input` carries public requests and worker reports; admitted messages are sent
+/// through `output` to routers. Each entry in `controls` addresses one router's
+/// flush channel. Activity subscribers receive `true` while coordination is busy.
+///
+/// `settings.workers` must describe the fixed, nonzero worker set and every worker
+/// must report with its corresponding zero-based index. Router and worker channels
+/// must preserve the fencing protocol. Policy callbacks execute inline and must
+/// not block waiting for this pipeline.
+///
+/// Returns on shutdown, disconnection of the input or activity registration
+/// channel, or failure to send a required downstream message. This function does
+/// not spawn or join threads; the orchestrator owns their lifecycle.
+///
+/// # Panics
+///
+/// Panics if `settings.workers` is zero.
 pub fn run<I: Input, S, P: ProgressPolicy<I::Time>>(
     input: Arc<Receiver<RouterMessage<I, S>>>,
     output: Sender<RouterMessage<I, S>>,

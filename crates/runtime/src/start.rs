@@ -28,7 +28,20 @@ impl Deps for DefaultDeps {
 }
 
 impl Runtime<(), (), ()> {
-    /// Starts a complete router and worker topology.
+    /// Takes ownership of the supplied processes and starts workers, then routers.
+    ///
+    /// Each worker receives a private unbounded queue. Routers share one
+    /// unbounded receiver and each owns senders for all workers in supplied order.
+    /// Threads are named `contime-worker-{index}` and `contime-router-{index}`.
+    /// Concurrent routers do not guarantee dispatch completion in dequeue order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StartError::NoRouters`] or [`StartError::NoWorkers`] for empty
+    /// collections before spawning. On thread creation failure, closes the
+    /// partial topology and joins every started process before returning
+    /// [`StartError::ThreadSpawn`]. Cleanup requires process implementations to
+    /// return when their input channels disconnect.
     pub fn start<R, W>(routers: Vec<R>, workers: Vec<W>) -> Result<StartedRuntime<R, W>, StartError>
     where
         R: Router<WorkerInput = W::Input>,

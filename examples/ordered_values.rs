@@ -1,6 +1,6 @@
-//! Historical queries and late arrivals through the current Core pipeline.
+//! Historical queries, late arrivals, and retained duplicate event IDs.
 //!
-//! Run `cargo run -p contime-core --example ordered_values` from the workspace.
+//! Run `cargo run -p contime --example ordered_values` from the workspace.
 
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ impl Timestamp for Time {
     }
 }
 
-impl contime_worker::AdvanceTime for Time {
+impl contime::AdvanceTime for Time {
     fn saturating_sub(&self, retention: &Self) -> Self {
         Self(self.0.saturating_sub(retention.0))
     }
@@ -88,21 +88,22 @@ fn main() -> Result<(), String> {
         history_retention: Time(100),
         checkpoints: CheckpointConfig { interval: 2 },
     };
-    let core = ConTime::<ReceiveValue, OrderedValues, ()>::start(config, ()).map_err(|error| format!("{error:?}"))?;
-    core.apply([input(100, 5, 50), input(101, 10, 100)]).map_err(|error| format!("{error:?}"))?;
-    core.wait_until_idle(Duration::from_secs(2)).map_err(|error| format!("{error:?}"))?;
-    let before = core.query_at(Time(11), [1]).map_err(|error| format!("{error:?}"))?;
+    let history = ConTime::<ReceiveValue, OrderedValues, ()>::start(config, ()).map_err(|error| format!("{error:?}"))?;
+    history.advance_to(Time(10)).map_err(|error| format!("{error:?}"))?;
+    history.apply([input(100, 5, 50), input(101, 10, 100)]).map_err(|error| format!("{error:?}"))?;
+    history.wait_until_idle(Duration::from_secs(2)).map_err(|error| format!("{error:?}"))?;
+    let before = history.query_at(Time(11), [1]).map_err(|error| format!("{error:?}"))?;
     assert_eq!(before[0].values, [50, 100]);
     println!("Before the late event: {:?}", before[0].values);
 
-    core.apply([input(102, 7, 70)]).map_err(|error| format!("{error:?}"))?;
-    core.wait_until_idle(Duration::from_secs(2)).map_err(|error| format!("{error:?}"))?;
+    history.apply([input(102, 7, 70), input(100, 5, 50)]).map_err(|error| format!("{error:?}"))?;
+    history.wait_until_idle(Duration::from_secs(2)).map_err(|error| format!("{error:?}"))?;
     for (time, expected) in [(6, vec![50]), (8, vec![50, 70]), (11, vec![50, 70, 100])] {
-        let snapshots = core.query_at(Time(time), [1]).map_err(|error| format!("{error:?}"))?;
+        let snapshots = history.query_at(Time(time), [1]).map_err(|error| format!("{error:?}"))?;
         assert_eq!(snapshots[0].values, expected);
         println!("Values visible at t={time}: {:?}", snapshots[0].values);
     }
-    assert!(core.errors().is_empty());
-    core.shutdown();
+    assert!(history.errors().is_empty());
+    history.shutdown();
     Ok(())
 }

@@ -2,7 +2,7 @@
 
 `contime` is an in-memory Rust workspace that builds queryable continuous-time state from unreliable event streams.
 
-It handles delayed, duplicated, and out-of-order events, and distributes independent snapshot histories across workers. The root `contime` crate assembles the running engine. [`contime-core`](crates/core/README.md) connects its protocol and storage contracts; the other crates provide the individual parts.
+It handles delayed, duplicated, and out-of-order events, and distributes independent snapshot histories across workers. The root `contime` crate assembles the running engine. [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) connects its protocol and storage contracts; the other crates provide the individual parts.
 
 ## Continuous Time?
 
@@ -64,32 +64,67 @@ Depend on `contime` for the running pipeline. The root owns configuration, start
 4. Submit inputs, advance processing as needed, and query historical state.
 5. Shut down the owned topology when finished.
 
-The [`ordered_values` example](examples/ordered_values.rs) shows how a late event changes historical queries without custom sorting:
+The [`ordered_values` example](https://github.com/humacss/contime/blob/main/examples/ordered_values.rs) shows how a late event changes historical queries without custom sorting:
 
 ```bash
 cargo run -p contime --example ordered_values
 ```
 
+For example, after defining the event and snapshot contracts, a late input can
+change historical results without changing your application loop:
+
+```rust,ignore
+let history = ConTime::<ReceiveValue, OrderedValues, ()>::start(config, ())?;
+history.advance_to(Time(10))?;
+history.apply([input(100, 5, 50), input(101, 10, 100)])?;
+history.wait_until_idle(Duration::from_secs(2))?;
+assert_eq!(history.query_at(Time(11), [1])?[0].values, [50, 100]);
+
+history.apply([input(102, 7, 70)])?;
+history.wait_until_idle(Duration::from_secs(2))?;
+assert_eq!(history.query_at(Time(8), [1])?[0].values, [50, 70]);
+assert_eq!(history.query_at(Time(11), [1])?[0].values, [50, 70, 100]);
+history.shutdown();
+```
+
+This excerpt uses the types and configuration from the complete
+[ordered-values example](https://github.com/humacss/contime/blob/main/examples/ordered_values.rs). It also shows why an
+explicit idle wait belongs before assertions about completed processing; a
+query alone is not a processing barrier. The example additionally submits an
+identical retained event twice to demonstrate deduplication.
+
+The [sensor-readings example](https://github.com/humacss/contime/blob/main/examples/sensor_readings.rs) uses request-scoped
+insertion acknowledgements, historical snapshot queries, and half-open event
+ranges. Both examples use only public ConTime APIs and ordinary application data.
+
+```bash
+cargo run -p contime --example sensor_readings
+```
+
+ConTime is not published on crates.io yet. For local development, depend on a
+checkout with `contime = { path = "/path/to/contime" }`. The workspace packages
+keep publishing disabled until a release is explicitly prepared.
+
 ConTime provides asynchronous submission and response receivers alongside convenience query methods. Successful submission means that work was queued for admission. Request-scoped completion channels, idle waits, replay listeners, and progress observations provide different completion boundaries; choose the one your integration needs. Rejections are reported separately from submission failures.
 
 Snapshot replay listeners observe relevant replay. `subscribe_pruned_horizon` reports completed pruning horizons. `ProgressPolicy` receives local processing observations; these observations do not establish delivery or durable persistence in an external system.
 
-Higher-level consumers can supply typed lanes, invalidation rules, reactors, serialization, and network transport. 
+Applications supply their own event types, snapshot state, and deterministic application logic. Serialization, persistence, and network transport remain outside ConTime.
 
 ## Workspace
 
 | Crate | Responsibility |
 | --- | --- |
 | `contime` (root) | Public engine handle, configuration, startup, operations, and shutdown |
-| [`contime-core`](crates/core/README.md) | Admission protocol, messages, and router/worker storage adapters |
-| [`contime-api`](crates/api/README.md) | Input batching and request boundaries |
-| [`contime-router`](crates/router/README.md) | Deterministic routing to worker-owned histories |
-| [`contime-runtime`](crates/runtime/README.md) | Thread topology, channels, and shutdown |
-| [`contime-worker`](crates/worker/README.md) | History ownership and incremental replay scheduling |
-| [`contime-snapshots`](crates/snapshots/README.md) | Checkpoint storage and historical reconstruction |
-| [`contime-events`](crates/events/README.md) | Ordered retained event history |
-| [`contime-lanes`](crates/lanes/README.md) | Consumer application and hook contracts |
-| [`contime-progress`](crates/progress/README.md) | Participant progress measurement |
+| [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Admission protocol, messages, and router/worker storage adapters |
+| [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input batching and request boundaries |
+| [`contime-router`](https://github.com/humacss/contime/blob/main/crates/router/README.md) | Deterministic routing to worker-owned histories |
+| [`contime-runtime`](https://github.com/humacss/contime/blob/main/crates/runtime/README.md) | Thread topology, channels, and shutdown |
+| [`contime-worker`](https://github.com/humacss/contime/blob/main/crates/worker/README.md) | History ownership and incremental replay scheduling |
+| [`contime-snapshots`](https://github.com/humacss/contime/blob/main/crates/snapshots/README.md) | Checkpoint storage and historical reconstruction |
+| [`contime-events`](https://github.com/humacss/contime/blob/main/crates/events/README.md) | Ordered retained event history |
+| [`contime-lanes`](https://github.com/humacss/contime/blob/main/crates/lanes/README.md) | Consumer application and hook contracts |
+| [`contime-progress`](https://github.com/humacss/contime/blob/main/crates/progress/README.md) | Participant progress measurement |
 
 ## Current Constraints
 
@@ -108,9 +143,14 @@ cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p contime --example ordered_values
+cargo run -p contime --example sensor_readings
+cargo test --doc --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
-See the [running pipeline guide](docs/running-contime.md) and crate READMEs for completion boundaries, focused tests, and benchmarks. The [documentation index](docs/README.md) separates current guides from historical designs and measurements.
+Build the Rust API documentation with `cargo doc --workspace --no-deps --open`
+for completion boundaries and public contracts. Each crate README describes
+its focused tests and benchmarks.
 
 ## License
 

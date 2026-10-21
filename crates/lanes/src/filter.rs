@@ -2,6 +2,10 @@ use crate::{ApplyLanes, EventFilter, FilterBatch, FilterLanes, FilterOutput, Lan
 
 /// Projects one canonical raw batch into a snapshot-specific borrowed filter
 /// batch while preserving metadata and canonical order.
+///
+/// Projection delegates event selection and representation to [`FilterLanes`].
+/// The caller must supply one canonically ordered timestamp batch; this function
+/// neither sorts events nor verifies that their timestamps match.
 pub fn project<'a, L, T, R>(batch: RawBatch<'a, T, R>) -> FilterBatch<T, L::Batch<'a>>
 where
     L: FilterLanes<R> + 'a,
@@ -14,7 +18,11 @@ where
     }
 }
 
-/// Runs one statically selected snapshot filter.
+/// Runs one statically selected snapshot filter with a caller-owned receiver.
+///
+/// The filter's exactly-one-output contract remains its responsibility. This
+/// wrapper delegates directly and does not count emissions; use [`crate::apply`]
+/// for immediate snapshot application with emission-count checks.
 pub fn filter<'a, T, F, A, E, O>(event_filter: &E, batch: FilterBatch<T, F::Batch<'a>>, output: &mut O)
 where
     F: Lanes + 'a,

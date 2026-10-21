@@ -6,6 +6,13 @@ autobenches = false
 license = "MIT"
 description = "Isolated worker-side replay orchestration for ConTime"
 publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-worker"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [dependencies]
 ahash = "0.8"
@@ -17,3 +24,6 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "messages"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true

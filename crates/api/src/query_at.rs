@@ -30,6 +30,13 @@ where
 
 /// Sends a historical snapshot query and collects results until all
 /// downstream response senders have closed.
+///
+/// Result batches are flattened in receive order without sorting or adding
+/// placeholders for missing snapshots. Empty IDs return an empty result.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if forwarding fails.
 pub fn query_at<O, T, S, Ids>(output: &Sender<O>, time: T, snapshot_ids: Ids) -> Result<Vec<Box<S>>, ApiError>
 where
     O: SnapshotQueryOutput<T, S>,

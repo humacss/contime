@@ -24,6 +24,15 @@ where
 
 /// Filters one complete snapshot batch and immediately applies its transient
 /// output lane type to the snapshot.
+///
+/// Input metadata is preserved even when the effective event batch is empty.
+/// Application happens inside the filter's output call; output may borrow from
+/// the input because it is consumed before this function returns.
+///
+/// # Panics
+///
+/// Panics if the filter emits no batch or emits more than one. Filter and snapshot
+/// application panics propagate; any state changes already made are not rolled back.
 pub fn apply<'a, S, T, F, A, E>(snapshot: &mut S, event_filter: &E, batch: FilterBatch<T, F::Batch<'a>>)
 where
     F: Lanes + 'a,

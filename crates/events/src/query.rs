@@ -4,7 +4,12 @@ impl<E> EventHistory<E>
 where
     E: Event,
 {
-    /// Clones retained events in canonical order over `[from, to)`.
+    /// Clones retained events in canonical `(time, event ID)` order over `[from, to)`.
+    ///
+    /// Equal or reversed bounds return an empty vector. A lower bound before the
+    /// horizon returns only events still retained; it is not an error. Each value
+    /// is cloned using `E::clone`, so shared handles need not clone their payloads.
+    /// The returned vector does not borrow the history.
     pub fn clone_between(&self, from: &E::Time, to: &E::Time) -> Vec<E>
     where
         E: Clone,

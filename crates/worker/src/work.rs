@@ -16,9 +16,24 @@ type ApplyCompletion<M> = <<M as WorkInput>::Apply as ApplyInput>::Completion;
 type ApplyEvent<M> = <ApplyRoute<M> as RouteInput>::Input;
 type EventTime<M, S> = <S as SnapshotStore<ApplyEvent<M>>>::Time;
 type PendingPrune<T, C> = (T, std::vec::IntoIter<u128>, C);
-/// Runs with activity subscriptions: false means idle, true means working.
-/// Registrations are serviced only in the idle phase; work receivers are ordinary channels.
-/// Only explicit Prune and Resolve messages authorize pruning.
+/// Drives messages, incremental pruning, and replay on the calling thread.
+///
+/// Drains each bounded batch of already-ready messages before granting replay
+/// opportunities, checking newly queued messages between steps. Pruning has
+/// priority over replay. Queries do not advance the replay schedule or publish
+/// effects; sustained queries still allow processing opportunities.
+///
+/// `registrations` accepts activity subscribers (`false` idle, `true` working)
+/// only in the idle phase. Idle follows completed hooks, notifications, and
+/// queued pruning. Disconnected subscribers are removed; bounded subscriber
+/// channels can block notification. Pass [`crossbeam_channel::never`] when no
+/// subscriptions are needed.
+///
+/// Drained work-channel disconnection returns after available replay/pruning
+/// steps finish. Retained events beyond the processing target do not prevent
+/// return or idle. A coordinated round awaiting resolution cannot replay until
+/// its matching resolution arrives. Store or callback panics propagate.
+/// Only explicit prune or matching resolve messages authorize history removal.
 pub fn work_messages<M, S>(
     input: Receiver<M>,
     store_config: S::Config,
@@ -42,7 +57,11 @@ pub fn work_messages<M, S>(
     worker.activity_loop();
 }
 
-/// Worker state that can be driven synchronously or by `work_messages`.
+/// Worker state that can be driven synchronously or by [`work_messages`].
+///
+/// A synchronous driver delivers messages with [`Self::handle`], then gives
+/// [`Self::prune_step`] priority over [`Self::step`], checking for delivered
+/// messages between steps. No thread is started by this type.
 pub struct MessageWorker<'a, M, S>
 where
     M: WorkInput,
@@ -87,6 +106,12 @@ where
     M::Advance: AdvanceInput<Time = S::Time>,
     ApplyEvent<M>: Clone,
 {
+    /// Constructs empty worker state, taking ownership of store configuration
+    /// and context while borrowing the input and registration receivers.
+    ///
+    /// Processing target and admission horizon start at the time type’s default.
+    /// Stores are created lazily on first insertion; listener registration alone
+    /// creates no store. Construction does not read channels or publish activity.
     pub fn new(
         input: &'a Receiver<M>,
         registrations: &'a Receiver<crossbeam_channel::Sender<bool>>,
@@ -179,7 +204,17 @@ where
         }
     }
 
-    /// Handles one delivered message without running scheduled replay or pruning.
+    /// Consumes one delivered message without running queued replay or pruning.
+    ///
+    /// Apply completion covers insertion and rejection collection, and advance
+    /// completion covers target acceptance. Queries and listener installation
+    /// happen immediately; prune completion remains owned until the pass ends.
+    /// Stale resolutions are dropped without changing the awaited round.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a newly authorized horizon would discard pending replay.
+    /// Storage, listener, and coordination callback panics also propagate.
     pub fn handle(&mut self, message: M) {
         match message.into_kind() {
             WorkInputKind::Apply(batch) => {
@@ -252,7 +287,15 @@ where
         self.schedule.insert((pending.0, pending.1, snapshot_id));
     }
 
-    /// Processes one snapshot to the next distinct bucket or target, then yields.
+    /// Processes one scheduled snapshot through the next distinct scheduled
+    /// timestamp bucket or processing target, whichever comes first, inclusively.
+    ///
+    /// Returns `true` when a store processing call ran. Returns `false` when no
+    /// replay is available at the target, pruning is pending, or a reported
+    /// coordination round awaits resolution. Equal-time unfinished entries run
+    /// before completed entries, then by snapshot ID. One call may process
+    /// multiple event timestamps; replay notifications flush before returning.
+    /// A step may also publish a ready coordination report and pause later replay.
     pub fn step(&mut self) -> bool {
         if self.awaiting_resolution.is_some() || !self.pending_prunes.is_empty() {
             return false;
@@ -318,8 +361,17 @@ where
         }
     }
 
-    /// Prunes one history, then returns to message handling. Completion stays
-    /// owned by the job until every captured history has been processed.
+    /// Forwards and prunes at most one captured history in the oldest prune job.
+    ///
+    /// Returns `true` when a job was serviced, including an empty pass, and
+    /// `false` when none is queued. Completion stays owned until every captured
+    /// history and its forwarding hooks finish. The completed-horizon callback
+    /// runs before that ownership is released; callback/store panics propagate
+    /// without reporting successful completion. Service messages between calls.
+    ///
+    /// # Panics
+    ///
+    /// Panics if pruning a history would discard its pending replay.
     pub fn prune_step(&mut self) -> bool {
         let Some((horizon, snapshots, _)) = self.pending_prunes.front_mut() else { return false };
         if let Some(snapshot_id) = snapshots.next() {

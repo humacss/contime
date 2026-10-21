@@ -3,3 +3,6 @@
 /Cargo.lock
 .DS_Store
 .worktrees/
+
+# Local working notes and design records.
+docs/

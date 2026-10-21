@@ -15,6 +15,46 @@ and runtime effects. The crate has no production dependencies.
 | commit.rs | Restricted retention operations and interval progress. |
 | types.rs | Checkpoint state and consumer contracts for snapshots, events, storage, and application. |
 
+## API guide
+
+[`SnapshotStore`](https://github.com/humacss/contime/blob/main/crates/snapshots/src/api.rs) is the public entry point. Implement the contracts
+in [`types.rs`](https://github.com/humacss/contime/blob/main/crates/snapshots/src/types.rs): `Snapshot` for clonable state, `Event` for timestamp
+access, `EventStore` for canonical borrowed history, and `Apply` for complete
+nonempty timestamp batches. Implement `InsertEventStore` to admit later events
+and `Timestamp` to support forwarding. None requires a specific event-storage
+crate or execution topology.
+
+- `query` returns an owned reconstruction through an inclusive target without
+  retaining checkpoints or moving processing progress. Use an effect-free
+  context because application callbacks still run. In gaps, the returned snapshot
+  keeps the last applied or starting-checkpoint timestamp.
+- `process_until` retains reconstructed progress through an inclusive target.
+  Whole timestamp batches are never split by checkpoint intervals.
+- `insert` admits without applying and invalidates affected checkpoints only for
+  `Insert::Inserted`. Events at the retention horizon remain admissible.
+- `forward` retains state immediately before a new horizon and invokes consumer
+  compaction hooks. It leaves events at the horizon available for replay.
+- `prune` physically removes obsolete history after forwarding, preserving the
+  predecessor checkpoint. Repeating cleanup is harmless.
+
+The initial snapshot precedes the supplied events, including those at its own
+timestamp, which becomes the initial horizon. A target before retained history
+returns `NoCheckpoint`. Forwarding also fails if its horizon has no predecessor,
+or that predecessor is before retained history; repeating the current horizon
+is therefore an error. Application and hook effects are not transactional.
+
+`BatchLookahead::next_event_time` may be read only after the current iterator is
+exhausted or dropped. It reports the next timestamp exposed by that playback
+range, not a guarantee about all retained or future history. Processing exposes
+additional lookahead across a completed checkpoint interval; query and forwarding
+do not supply that extra interval lookahead.
+
+Generate the public Rust API reference from the workspace root:
+
+```sh
+cargo doc -p contime-snapshots --no-deps --open
+```
+
 ## Contracts
 
 Construct `SnapshotStore::new(events, snapshot, checkpoint_interval)`. It owns a private
@@ -278,5 +318,5 @@ cargo clippy --all-targets -- -D warnings
 cargo test --release --lib benchmark_ -- --ignored --nocapture --test-threads=1
 ```
 
-The checkpoints crate is verified independently. Migration of downstream
-ConTime core adapters to these interfaces is a separate step.
+The snapshot store's contracts can be verified independently of downstream
+adapters and worker scheduling.

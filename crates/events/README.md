@@ -8,6 +8,28 @@ Core adapts this workspace member into each snapshot history and connects it
 to checkpoint storage. The event store itself remains independent of those
 crates and knows nothing about their execution topology.
 
+## API guide
+
+Implement [`Event`](https://github.com/humacss/contime/blob/main/crates/events/src/types.rs) for the owned event value or shared handle you
+want to store. Its time and ID must stay stable while retained. Create an
+[`EventHistory`](https://github.com/humacss/contime/blob/main/crates/events/src/history.rs) with `new`, `with_capacity`, or `with_horizon`,
+then call `insert`. Only `Insert::Inserted` changes replay dirtiness; events before
+the horizon are rejected before duplicate detection.
+
+Use `iter` for a borrowed canonical history, `iter_from_dirty` for whole-timestamp
+replay, or `clone_between(from, to)` for owned results over `[from, to)`. Empty
+and reversed query ranges return an empty vector. Queries that start before the
+horizon return only retained events and do not report missing older history.
+`iter_after` excludes one exact `(time, event_id)` key, rather than the entire
+timestamp. `prune_before` advances the horizon monotonically and forgets removed
+IDs. These operations never apply events to consumer state.
+
+Generate the public Rust API reference from the workspace root:
+
+```sh
+cargo doc -p contime-events --no-deps --open
+```
+
 ## Responsibilities
 
 - Accept any event ownership representation selected by the consumer.

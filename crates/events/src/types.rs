@@ -3,7 +3,11 @@ use std::iter::Peekable;
 
 use ahash::AHashSet;
 
-/// The minimal information required to store an event canonically.
+/// The identity and timestamp required to store an event canonically.
+///
+/// Both values must remain stable while the event is retained, including when
+/// the stored type is a shared handle with interior mutability. History keys and
+/// deduplication are recorded at insertion and are not recomputed on reads.
 pub trait Event {
     /// The event's ordered time representation.
     ///
@@ -23,7 +27,9 @@ pub trait Event {
 /// a time.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct EventKey<T> {
+    /// Timestamp used as the primary ordering component.
     pub time: T,
+    /// Stable event identity, used to order events sharing a timestamp.
     pub event_id: u128,
 }
 
@@ -68,7 +74,9 @@ pub enum Insert {
 /// The number of events removed from each internal event store.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PruneResult {
+    /// Events removed from the ordered append deque.
     pub removed_ordered: usize,
+    /// Events removed from the out-of-order event tree.
     pub removed_late: usize,
 }
 

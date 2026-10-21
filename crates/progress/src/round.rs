@@ -19,6 +19,7 @@ impl<T: Clone + Ord> MeasurementRound<T> {
         Self { id, minimum: cutoff, reported: vec![false; participants.get()], remaining: participants.get() }
     }
 
+    /// Returns whether every participant has supplied its first valid report.
     pub fn is_complete(&self) -> bool {
         self.remaining == 0
     }

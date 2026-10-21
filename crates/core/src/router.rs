@@ -18,6 +18,10 @@ where
         self
     }
 
+    /// Creates a router adapter using the supplied deterministic placement.
+    ///
+    /// Activity observation and flush controls are initially disabled; attach
+    /// their receivers with the corresponding builder methods when needed.
     pub fn new(placement: contime_router::Placement) -> Self {
         Self { placement, activity: crossbeam_channel::never(), controls: crossbeam_channel::never(), input: std::marker::PhantomData }
     }

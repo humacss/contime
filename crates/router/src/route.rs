@@ -25,6 +25,18 @@ impl<W> Deps<W> for DefaultDeps<'_, W> {
     }
 }
 
+/// Runs apply-only routing on the calling thread until the input disconnects.
+///
+/// Each input is moved to its final emitted route and cloned for earlier routes.
+/// One nonempty batch is sent per affected worker, with completion cloned across
+/// workers. Inputs without destinations and batches without routes are dropped.
+///
+/// # Errors
+///
+/// Returns [`RouterError::NoWorkers`] before receiving if no workers are supplied.
+/// A disconnected worker returns [`RouterError::WorkerUnavailable`] immediately;
+/// earlier sends remain in effect and unsent messages are dropped. Input-channel
+/// closure after queued batches are drained is normal success.
 pub fn route<B, W>(placement: Placement, input: Receiver<B>, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
 where
     B: RouteInputBatch,
@@ -35,8 +47,26 @@ where
     route_with_deps(placement, input, &DefaultDeps { worker_outputs })
 }
 
-/// Runs with activity subscriptions: false means idle, true means working.
-/// Registrations are serviced only in the idle phase; work receivers are ordinary channels.
+/// Dispatches unified work and coordination messages until the work input disconnects.
+///
+/// Activity subscriptions arrive on `registrations`: `false` means idle and
+/// `true` means dispatching. Registrations are serviced only while idle; working
+/// is published before dequeue. Disconnected subscribers are removed. Pass
+/// [`crossbeam_channel::never`] for unused registration or control receivers.
+/// `controls` flushes router-specific worker fences after the current dispatch;
+/// an in-band [`RouteInputKind::Fence`] only acknowledges its own dequeue.
+///
+/// Apply, query, listener, advancement, and pruning payloads remain caller-owned
+/// types. Sends can block on bounded worker or subscriber channels. Several
+/// routers sharing a receiver may dispatch out of order; this loop provides no
+/// cross-router barrier and never waits for worker completion.
+///
+/// # Errors
+///
+/// An empty worker set yields [`RouterError::NoWorkers`]. A worker disconnect
+/// stops dispatch with [`RouterError::WorkerUnavailable`]; earlier sends remain
+/// effective. Drained input disconnection returns success, independently of
+/// whether registration and control channels remain connected.
 pub fn route_messages<M, W>(
     placement: Placement,
     input: Receiver<M>,

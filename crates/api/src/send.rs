@@ -25,6 +25,11 @@ impl<O> Deps<O> for DefaultDeps<'_, O> {
 /// The batch owns the rejection sender, allowing channel closure to signal
 /// that every downstream copy of the batch has finished processing. This API
 /// does not prescribe whether each input is owned, shared, or tracked.
+/// Empty input forwards nothing and immediately drops `rejection_sender`.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if a nonempty batch cannot be queued.
 pub fn send<O, I, R, Input, Inputs>(
     output: &Sender<O>,
     inputs: Inputs,

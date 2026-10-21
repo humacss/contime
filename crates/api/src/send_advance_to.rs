@@ -20,6 +20,14 @@ impl<O> Deps<O> for DefaultDeps<'_, O> {
     }
 }
 
+/// Queues one advancement request with the caller's completion sender.
+///
+/// Success acknowledges enqueueing. Downstream adapters define advancement and
+/// release all completion sender clones when their work reaches that boundary.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if the downstream receiver is closed.
 pub fn send_advance_to<O, T>(output: &Sender<O>, time: T, completion: Sender<()>) -> Result<(), ApiError>
 where
     O: AdvanceOutput<T>,

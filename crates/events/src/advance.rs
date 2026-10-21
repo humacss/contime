@@ -4,7 +4,13 @@ impl<E> EventHistory<E>
 where
     E: Event,
 {
-    /// Advances the retained-history horizon and removes older events.
+    /// Advances the retained-history horizon and removes events strictly before it.
+    ///
+    /// A horizon at or below the current one is a no-op with zero removal counts.
+    /// Events at the new horizon remain retained. Removed event IDs become
+    /// reusable, but future insertions must still meet the new time boundary.
+    /// If no events remain, the dirty boundary becomes the new horizon;
+    /// otherwise pruning preserves its previous value.
     pub fn prune_before(&mut self, horizon: &E::Time) -> PruneResult {
         if horizon <= &self.horizon {
             return PruneResult { removed_ordered: 0, removed_late: 0 };

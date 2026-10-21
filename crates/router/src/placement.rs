@@ -12,7 +12,14 @@ impl Placement {
         Self { mapper: Some(mapper) }
     }
 
-    /// Returns an index in a nonempty topology.
+    /// Maps the full ID (or mapper result) modulo `worker_count`.
+    ///
+    /// The mapping and worker count must agree across every apply, query, and
+    /// listener for the lifetime of the topology to preserve history ownership.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `worker_count` is zero.
     pub fn worker_index(self, snapshot_id: u128, worker_count: usize) -> usize {
         assert!(worker_count > 0, "placement requires at least one worker");
         let value = self.mapper.map_or(snapshot_id, |mapper| mapper(snapshot_id));

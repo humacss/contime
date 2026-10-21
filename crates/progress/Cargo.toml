@@ -5,3 +5,13 @@ edition = "2021"
 license = "MIT"
 description = "Policy-independent bounded progress measurement for ConTime"
 publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-progress"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
+
+[package.metadata.docs.rs]
+all-features = true

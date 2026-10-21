@@ -39,6 +39,10 @@ where
 }
 
 impl CompletionHandle {
+    /// Wraps a request's rejection sender for routing and worker insertion.
+    ///
+    /// Clones keep the rejection stream open. Successful insertion drops its
+    /// handle; rejections are sent before the rejecting handle is released.
     pub fn new(sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
         Self { sender }
     }

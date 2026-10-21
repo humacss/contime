@@ -7,35 +7,70 @@ use crossbeam_channel::{Receiver, Sender};
 
 /// Opaque router execution owned by one runtime thread.
 pub trait Router: Send + 'static {
+    /// Opaque message taken from the shared competing-consumer router queue.
     type Input: Send + 'static;
+    /// Opaque message sent to private worker queues.
     type WorkerInput: Send + 'static;
+    /// Process error retained in the shutdown report without automatic recovery.
     type Error: Send + 'static;
 
+    /// Consumes this process on its runtime-owned thread.
+    ///
+    /// `workers` follows the supplied worker collection order. Implementations
+    /// should drain queued input until disconnect and then release worker senders
+    /// and return, so shutdown can join the topology. Other routers may still be
+    /// dispatching after this router dequeues a message. Returning an error stops
+    /// only this process and is recorded when joined.
     fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error>;
 }
 
 /// Opaque worker execution owned by one runtime thread.
 pub trait Worker: Send + 'static {
+    /// Opaque message delivered to this worker’s private queue.
     type Input: Send + 'static;
+    /// Process error retained in the shutdown report without automatic recovery.
     type Error: Send + 'static;
 
+    /// Consumes this process on its runtime-owned thread.
+    ///
+    /// Implementations should drain their queue until all router-owned senders
+    /// disconnect and return. The runtime cannot interrupt a blocked implementation.
+    /// Errors and panics are collected at shutdown; neither restarts the worker.
     fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error>;
 }
 
 /// The thread whose startup failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStage {
+    /// Admission-stage identity available to higher-level lifecycle reporting.
+    /// The topology started by [`Runtime::start`] spawns only routers and workers.
     Admission,
-    Router { index: usize },
-    Worker { index: usize },
+    /// Router thread in the supplied router collection.
+    Router {
+        /// Zero-based router index.
+        index: usize,
+    },
+    /// Worker thread in the supplied worker collection.
+    Worker {
+        /// Zero-based worker index.
+        index: usize,
+    },
 }
 
 /// Failure to construct a complete runtime topology.
 #[derive(Debug)]
 pub enum StartError {
+    /// No router instances were supplied; no threads were started.
     NoRouters,
+    /// No worker instances were supplied; no threads were started.
     NoWorkers,
-    ThreadSpawn { stage: RuntimeStage, source: io::Error },
+    /// A thread could not start; already started threads were closed and joined.
+    ThreadSpawn {
+        /// Component whose thread creation failed.
+        stage: RuntimeStage,
+        /// Operating-system thread creation error.
+        source: io::Error,
+    },
 }
 
 impl fmt::Display for StartError {
@@ -62,19 +97,28 @@ impl std::error::Error for StartError {
 /// Final state of one runtime thread.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ThreadOutcome<E> {
+    /// The process returned `Ok(())` and its thread joined normally.
     Completed,
+    /// The process returned its implementation-defined error.
     Failed(E),
+    /// Joining observed a panic; the panic payload is discarded.
     Panicked,
 }
 
 /// Ordered outcomes collected after every runtime thread has been joined.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ShutdownReport<RE, WE> {
+    /// One outcome per router, in supplied collection order rather than finish order.
     pub routers: Vec<ThreadOutcome<RE>>,
+    /// One outcome per worker, in supplied collection order rather than finish order.
     pub workers: Vec<ThreadOutcome<WE>>,
 }
 
-/// A running apply topology.
+/// Owned router/worker thread topology with one shared input sender.
+///
+/// Call [`Self::shutdown`] to close and join it explicitly. Dropping the handle
+/// closes its sender and detaches the join handles; it does not wait for threads.
+/// External sender clones keep input connected until they are dropped.
 pub struct Runtime<I, RE, WE> {
     pub(crate) input: Sender<I>,
     pub(crate) routers: Vec<JoinHandle<Result<(), RE>>>,

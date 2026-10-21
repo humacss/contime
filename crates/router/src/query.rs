@@ -4,6 +4,17 @@ use crate::Placement;
 use crate::{EventQueryInput, EventQueryWorkerOutput, RouterError, SnapshotQueryInput, SnapshotQueryWorkerOutput};
 
 /// Partitions a historical snapshot query into one message per affected worker.
+///
+/// IDs retain their relative order and duplicates within each partition. Query
+/// time and response ownership are cloned for additional workers and moved to
+/// the final worker. An empty ID list drops the response without sending.
+/// Query reconstruction and response collection belong to the worker and caller.
+///
+/// # Errors
+///
+/// An empty worker set yields [`RouterError::NoWorkers`]. A disconnected worker
+/// yields [`RouterError::WorkerUnavailable`] after any earlier sends; those sends
+/// are not rolled back.
 pub fn route_snapshot_query<Q, W>(placement: Placement, query: Q, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
 where
     Q: SnapshotQueryInput,
@@ -49,7 +60,15 @@ where
     Ok(())
 }
 
-/// Routes a single-history event query to exactly one worker.
+/// Moves a single-history event query to its owning worker.
+///
+/// The history ID, range bounds, and response handle are forwarded unchanged.
+/// This layer neither validates range ordering nor interprets endpoint inclusion.
+///
+/// # Errors
+///
+/// Returns [`RouterError::NoWorkers`] for an empty worker set, or
+/// [`RouterError::WorkerUnavailable`] if the selected worker disconnected.
 pub fn route_event_query<Q, W>(placement: Placement, query: Q, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
 where
     Q: EventQueryInput,

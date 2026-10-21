@@ -1,3 +1,5 @@
+//! Close admission and join the topology owned by the public handle.
+
 use std::convert::Infallible;
 
 use crate::{ConTime, Input};

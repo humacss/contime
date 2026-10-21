@@ -1,5 +1,15 @@
 # contime-router
 
+`contime-router` dispatches caller-owned inputs, historical queries, listener
+collections, and coordination messages to worker queues. It owns no threads or
+storage. Start with `Placement`, implement the input/output adapter traits, and
+use `route` for apply-only work or `route_messages` for the unified protocol.
+
+Dispatch success means messages were sent, not processed. A disconnected worker
+can leave earlier worker sends in effect; routing provides no rollback. Inputs
+move to their final route and clone only for additional routes. Reuse identical
+placement and worker counts across every operation in a topology.
+
 Horizon advancement is broadcast directly to every worker without snapshot
 hashing or route-vector allocation. The final worker takes the original time
 and completion handle; earlier workers receive clones. Local full-channel
@@ -20,7 +30,7 @@ snapshot route to a worker, and sends one final batch per affected worker.
 
 The root orchestrator uses this workspace member through Core's `RouterProcess`
 adapter. The router itself has no dependency on `contime` or `contime-api`.
-`route_messages` serves the running engine; the independent `route` helper
+`route_messages` serves the running pipeline; the independent `route` helper
 uses the same dispatch kernel for apply-only routing.
 
 ## Responsibilities

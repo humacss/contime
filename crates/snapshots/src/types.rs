@@ -1,4 +1,7 @@
-/// No valid checkpoint exists at or before the requested time.
+/// The requested time cannot be reconstructed from retained checkpoint history.
+///
+/// Returned for a target before the horizon, even if an older checkpoint is
+/// still physically present, or when no valid starting checkpoint exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NoCheckpoint;
 
@@ -9,26 +12,45 @@ impl std::fmt::Display for NoCheckpoint {
 }
 impl std::error::Error for NoCheckpoint {}
 
-/// Materialized state at a complete timestamp boundary.
+/// Materialized snapshot state and canonical application progress.
+///
+/// Completed checkpoints represent whole timestamp buckets. The initial
+/// checkpoint instead precedes all supplied events, including those at its own
+/// timestamp, and is identified by a zero event count.
 #[derive(Clone, Debug)]
 pub struct Checkpoint<S>
 where
     S: Snapshot,
 {
+    /// Consumer state cloned to reconstruct queries and subsequent checkpoints.
     pub snapshot: S,
+    /// Cumulative number of canonical events completed since initial state.
+    ///
+    /// The application kernel counts all events, including those the application
+    /// ignores, and saturates at [`u64::MAX`]. Pruning does not reset the count.
     pub history_event_count: u64,
 }
 
 /// A discrete timestamp with a checked immediate predecessor.
 pub trait Timestamp: Clone + Default + Ord {
+    /// Returns the immediately preceding representable timestamp, or `None` at
+    /// the minimum. Forwarding retains state at this predecessor so events
+    /// exactly at the new horizon remain eligible for application.
     fn previous(&self) -> Option<Self>;
 }
 
-/// Borrowed access to canonical events. Insertion and physical cleanup belong
-/// to the owning consumer, not checkpoint commit policies.
+/// Borrowed access to canonically ordered events and physical history cleanup.
+///
+/// Iteration must yield increasing timestamps, with a deterministic order inside
+/// each timestamp and no repeated event identities. Identity and tie-breaking
+/// are defined by the implementation. The snapshot kernel relies on this order
+/// to apply complete timestamp batches without sorting or deduplication.
 pub trait EventStore {
+    /// Ordered timestamp shared by the event store and its snapshot state.
     type Time: Clone + Default + Ord;
+    /// Retained event value borrowed during snapshot reconstruction.
     type Event: Event<Time = Self::Time>;
+    /// Canonical borrowed cursor, including every eligible event exactly once.
     type Iter<'a>: Iterator<Item = &'a Self::Event>
     where
         Self: 'a,
@@ -40,14 +62,19 @@ pub trait EventStore {
     fn iter_after(&self, boundary: Option<&Self::Time>) -> Self::Iter<'_>;
 
     /// Removes events strictly before the horizon, retaining events at it.
+    /// Relative order and identity of retained events must remain unchanged;
+    /// repeated cleanup at the same horizon must be harmless.
     fn prune_before(&mut self, horizon: &Self::Time);
 }
 
 /// Outcome of canonical event admission. Only `Inserted` changes history.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Insert {
+    /// The event was retained and affected checkpoints must be invalidated.
     Inserted,
+    /// An event with this identity is already retained; history is unchanged.
     Duplicate,
+    /// The event is too old for retained history; history is unchanged.
     BeforeHorizon,
 }
 
@@ -59,27 +86,41 @@ pub trait InsertEventStore: EventStore {
 }
 
 /// Consumer-owned state retained in checkpoints.
+///
+/// Cloning must preserve observable state while isolating later application
+/// mutations from the retained original. Shared immutable data is permitted;
+/// shared mutable state must not let query application modify retained state.
 pub trait Snapshot: Clone {
+    /// Ordered timestamp used for checkpoint validity and retained-history bounds.
     type Time: Clone + Default + Ord;
 
     /// Timestamp through which all canonical events have been processed.
+    /// The initial snapshot is pre-event state, even at its own timestamp.
     fn time(&self) -> &Self::Time;
 
     /// Records completion of a whole timestamp batch, even if its events were filtered.
     fn set_time(&mut self, time: Self::Time);
 }
 
-/// Time used for timestamp batches and checkpoint boundaries.
-/// Core adapters may implement this independently of their event-store contract.
+/// Timestamp access used to group events into complete application batches.
+///
+/// This contract is independent of any event-storage representation or identity
+/// scheme. [`EventStore`] supplies the stronger ordering requirements.
 pub trait Event {
+    /// Timestamp compared for equality when collecting one application batch.
     type Time: PartialEq;
+    /// Returns the stable timestamp of this retained event.
     fn time(&self) -> Self::Time;
 }
 
 /// Access to the timestamp following the current complete event batch.
 ///
-/// The value is available after the current batch iterator has been consumed.
-/// `None` means there is no later event in the current replay range.
+/// Read the value only after consuming the current batch iterator to completion.
+/// A reported timestamp is later than the current batch. Availability depends on
+/// the supplied playback range: `None` does not establish that all retained or
+/// future history is exhausted. [`crate::SnapshotStore::process_until`] also exposes
+/// the next playback interval when its boundary is reached; query and forwarding
+/// do not provide that extra interval lookahead.
 pub struct BatchLookahead<'a, T> {
     next_event_time: Option<&'a std::cell::RefCell<Option<Option<T>>>>,
     fallback: Option<&'a std::cell::RefCell<Option<Option<T>>>>,
@@ -107,6 +148,14 @@ impl<'a, T> BatchLookahead<'a, T> {
         Self { next_event_time: Some(next_event_time), fallback: fallback.next_event_time }
     }
 
+    /// Clones the next available timestamp, or returns `None` when none is exposed.
+    /// Lookahead created with [`Self::unavailable`] always returns `None`.
+    ///
+    /// # Panics
+    ///
+    /// Panics for an active batch if its iterator has not been exhausted. Dropping
+    /// the batch iterator drains it; reading lookahead while it is only partially
+    /// consumed still violates this contract.
     pub fn next_event_time(self) -> Option<T>
     where
         T: Clone,
@@ -120,8 +169,21 @@ impl<'a, T> BatchLookahead<'a, T> {
 }
 
 /// Consumer-defined application of one complete timestamp batch.
-/// Mutation and any application hooks belong entirely to this implementation.
+///
+/// Equivalent checkpoint state and canonical input must produce deterministic
+/// results. External effects belong to the consumer; the same events can be
+/// applied again during reconstruction. Query contexts must suppress effects
+/// that should occur only during processing.
 pub trait Apply<S, C = ()>: Event + Sized {
+    /// Applies the nonempty iterator of events sharing one timestamp to `snapshot`.
+    ///
+    /// When `S` is [`Checkpoint`], the kernel records the completed timestamp and
+    /// increments the raw event count after this call returns successfully. It
+    /// drains unread events, so ignoring events still completes their timestamp.
+    /// Consume or drop the iterator before reading `lookahead`.
+    ///
+    /// A panic propagates without transactional rollback of application mutations
+    /// or effects. Completion metadata is not advanced for the failed batch.
     fn apply<'a>(snapshot: &mut S, events: impl Iterator<Item = &'a Self>, lookahead: BatchLookahead<'_, Self::Time>, context: &C)
     where
         Self: 'a;

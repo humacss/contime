@@ -2,7 +2,17 @@ use crossbeam_channel::Sender;
 
 use crate::{AdvanceInput, AdvanceWorkerOutput, RouterError};
 
-/// Broadcasts one horizon advancement to every worker without hashing.
+/// Broadcasts a processing target to every worker without consulting placement.
+///
+/// Earlier workers receive cloned times and completion handles; the final worker
+/// receives the originals. Returning does not imply replay has reached the target
+/// or establish order against dispatch from another router.
+///
+/// # Errors
+///
+/// Returns [`RouterError::NoWorkers`] for an empty topology, or
+/// [`RouterError::WorkerUnavailable`] at the first disconnected worker. Earlier
+/// sends are retained; remaining ownership is dropped without rollback.
 pub fn route_advance<A, W>(advance: A, worker_outputs: &[Sender<W>]) -> Result<(), RouterError>
 where
     A: AdvanceInput,

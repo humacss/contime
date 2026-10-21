@@ -3,6 +3,13 @@ use crossbeam_channel::Sender;
 use crate::{ApiError, SnapshotQueryOutput};
 
 /// Forwards one asynchronous historical snapshot query.
+///
+/// Empty IDs forward nothing and drop `response`. Otherwise success means only
+/// that the query was queued; the adapter owns result ordering and completion.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if a nonempty query cannot be queued.
 pub fn send_query_at<O, T, S, Ids>(output: &Sender<O>, time: T, snapshot_ids: Ids, response: Sender<Vec<Box<S>>>) -> Result<(), ApiError>
 where
     O: SnapshotQueryOutput<T, S>,

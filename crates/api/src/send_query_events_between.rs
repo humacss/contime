@@ -2,7 +2,14 @@ use crossbeam_channel::Sender;
 
 use crate::{ApiError, EventQueryOutput};
 
-/// Forwards one asynchronous half-open event-history query.
+/// Forwards one asynchronous half-open event-history query over `[from, to)`.
+///
+/// Bounds are forwarded unchanged, including reversed or equal bounds. The
+/// downstream adapter owns validation, result ordering and response closure.
+///
+/// # Errors
+///
+/// Returns [`ApiError::OutputChannelClosed`] if the query cannot be queued.
 pub fn send_query_events_between<O, T, E>(
     output: &Sender<O>,
     snapshot_id: u128,
