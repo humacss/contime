@@ -23,7 +23,11 @@ contime-worker = { path = "crates/worker", version = "0.1.0" }
 crossbeam-channel = "0.5"
 
 [dev-dependencies]
-contentid = { git = "https://github.com/humacss/contentid.git", rev = "0bb70408b303132c93f8cc5f905ea42104bd2eb0", features = ["local"] }
+blake3 = "1.8"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
+ctrlc = { version = "3.5", features = ["termination"] }
+fastrand = "2"
+contentid = { version = "1.0.0", features = ["local"] }
 rstest = { version = "0.26", default-features = false }
 criterion = { version = "0.5", features = ["html_reports"] }
 

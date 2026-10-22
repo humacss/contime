@@ -37,66 +37,244 @@ Provide time-travel queries without needing a full persistent event store.
 
 ## Using `contime`
 
-Depend on `contime` for the running pipeline. The root owns configuration, startup, submission, queries, progress subscriptions, and shutdown. Core retains admission rules and the adapters connecting the individual subsystems.
+A running application usually submits events as they arrive and queries state when it needs to display or use it. It does not wait for every submission to finish before doing anything else.
 
-1. Define your time type, event inputs, and snapshot state.
-2. Implement Core's input routing and checkpoint application contracts.
-3. Start `ConTime` with router, worker, checkpoint, and retention settings.
-4. Submit inputs, advance processing as needed, and query historical state.
-5. Shut down the owned topology when finished.
+This walkthrough starts an in-memory ConTime engine with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
 
-The [`ordered_values` example](https://github.com/humacss/contime/blob/main/examples/ordered_values.rs) shows how a late event changes historical queries without custom sorting:
+The Rust blocks form one complete program, in order. The same program is available as [`examples/counter.rs`](https://github.com/humacss/contime/blob/main/examples/counter.rs). Run it from a ConTime checkout with:
 
 ```bash
-cargo run -p contime --example ordered_values
+cargo run -p contime --example counter
 ```
 
-For example, after defining the event and snapshot contracts, a late input can
-change historical results without changing your application loop:
+### Dependencies and Features
 
-```rust,ignore
-let history = ConTime::<ReceiveValue, OrderedValues, ()>::start(config, ())?;
-history.advance_to(Time(10))?;
-let counter = 7;
-insert(&history, [input(counter, 5, 50), input(counter, 10, 100)])?;
-assert_eq!(history.query_at(Time(11), [values_id(counter)])?[0].values, [50, 100]);
+To use ConTime 0.1 in your own Rust binary project, add:
 
-insert(&history, [input(counter, 7, 70)])?;
-assert_eq!(history.query_at(Time(8), [values_id(counter)])?[0].values, [50, 70]);
-assert_eq!(history.query_at(Time(11), [values_id(counter)])?[0].values, [50, 70, 100]);
-history.shutdown();
+```toml
+[dependencies]
+contime = "0.1.0"
+fastrand = "2"
 ```
 
-This excerpt uses the types and configuration from the complete
-[ordered-values example](https://github.com/humacss/contime/blob/main/examples/ordered_values.rs). It also shows why a
-request-scoped insertion acknowledgement belongs before querying submitted
-data. Its `insert` helper waits for insertion responses; it does not wait for
-global idle or completed live replay. The example additionally submits an
-identical retained event twice to demonstrate deduplication.
+ConTime supports Rust 1.90 or newer and currently has no optional Cargo features. `fastrand` only varies the example's event intervals and increments; it is not required by ConTime. For local development, you can instead use `contime = { path = "/path/to/contime" }`.
 
-Both examples use [`contentid`](https://github.com/humacss/contentid) to derive local event IDs from the complete event through Rust's `Hash` trait, without binary serialization. Snapshot IDs combine a snapshot type identifier with the fields identifying its history, such as a counter or sensor key. Routing and queries use the same calculation; changing snapshot state does not change that history's ID. Composite history keys can contain several fields.
+### Define Time
 
-Identical events have the same ID. If otherwise identical events represent separate occurrences, include a distinguishing field such as a sequence number in the event. These examples use local IDs for one running application, widening the 64-bit hashes to ConTime's `u128` ID type. Applications that exchange IDs across systems can instead use distributed IDs.
+First, import ConTime and the traits used by the example:
 
-`contentid` is a development dependency for these examples; ConTime's library does not depend on it. Until `contentid` is published on crates.io, the examples use a pinned revision from its public Git repository.
+```rust
+use std::thread;
+use std::time::{Duration, Instant};
 
-The [sensor-readings example](https://github.com/humacss/contime/blob/main/examples/sensor_readings.rs) uses request-scoped
-insertion acknowledgements, historical snapshot queries, and half-open event
-ranges. Both examples use only public ConTime APIs and ordinary application data.
+use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
+use contime::{AdvanceTime, ConTime, ConTimeConfig, Input, Placement};
+```
+
+ConTime uses your application's time type. Here, `Time` counts logical milliseconds. The application will calculate it from elapsed time; ConTime does not own a clock. The type provides ordering, a default starting time, a checked predecessor, and retention subtraction.
+
+```rust
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+struct Time(u64);
+
+impl Timestamp for Time {
+    fn previous(&self) -> Option<Self> {
+        self.0.checked_sub(1).map(Self)
+    }
+}
+
+impl AdvanceTime for Time {
+    fn saturating_sub(&self, retention: &Self) -> Self {
+        Self(self.0.saturating_sub(retention.0))
+    }
+}
+```
+
+### Define an Event and Its History Keys
+
+`CounterChanged` adds `delta` to each counter listed in `counter_ids` at the supplied time. `Event` exposes its timestamp; `Input` supplies its event ID and the snapshot histories it affects.
+
+```rust
+struct CounterChanged {
+    event_id: u128,
+    counter_ids: Vec<u128>,
+    time: Time,
+    delta: i64,
+}
+
+impl Event for CounterChanged {
+    type Time = Time;
+
+    fn time(&self) -> Time {
+        self.time
+    }
+}
+
+impl Input for CounterChanged {
+    fn event_id(&self) -> u128 {
+        self.event_id
+    }
+
+    fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
+        for &counter_id in &self.counter_ids {
+            emit(counter_id);
+        }
+    }
+}
+```
+
+You choose how to generate IDs. Event IDs are usually derived from the event content so retries reproduce the same ID. This example assigns increasing IDs instead. Snapshot IDs identify histories and stay the same as their state changes; they can be derived from identifying fields or assigned manually. Here, histories 1 and 2 represent the two counters.
+
+An event targeting `[1, 2]` contributes to both histories. Each history is updated independently; routing one event to several counters does not make their updates a cross-worker transaction.
+
+### Define Snapshot State and Application
+
+`Counter` stores its history ID, timestamp, and current value. The ID lets the display identify returned snapshots without relying on their order. `create` starts each counter at zero, and `apply_events` adds each event's delta. ConTime updates the snapshot timestamp through `set_time`.
+
+```rust
+#[derive(Clone, Default)]
+struct Counter {
+    counter_id: u128,
+    time: Time,
+    value: i64,
+}
+
+impl Snapshot for Counter {
+    type Time = Time;
+
+    fn time(&self) -> &Time {
+        &self.time
+    }
+
+    fn set_time(&mut self, time: Time) {
+        self.time = time;
+    }
+}
+
+impl ApplyEvents<CounterChanged> for Counter {
+    fn create(snapshot_id: u128, _first_event: &CounterChanged) -> Self {
+        Self { counter_id: snapshot_id, ..Self::default() }
+    }
+
+    fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Time, CounterChanged>) {
+        for event in batch.events {
+            self.value += event.delta;
+        }
+    }
+}
+```
+
+### Start ConTime
+
+Start the in-memory engine inside `main`:
+
+```rust
+fn main() {
+    let config = ConTimeConfig {
+        router_count: 1,
+        worker_count: 4,
+        placement: Placement::default(),
+        pruning_interval: Duration::from_millis(100),
+        history_retention: Time(1_000),
+        checkpoints: CheckpointConfig { interval: 32 },
+    };
+    let history = ConTime::<CounterChanged, Counter, ()>::start(config, ())
+        .expect("start ConTime");
+```
+
+`worker_count` selects the number of history-owning worker threads. Independent histories can be processed across those workers; a particular counter's history stays on one worker. This configuration also starts one router thread and an admission coordinator thread.
+
+`history_retention` requests 1,000 logical milliseconds of history behind the processing target. `pruning_interval` controls wall-clock spacing between coordination rounds. `checkpoints` controls checkpoint spacing, and the default `placement` maps snapshot IDs to workers.
+
+The type parameters select the event, snapshot, and application wrapper. The final `()` uses ordinary snapshot application without extra application hooks.
+
+### Submit Changes Without Waiting
+
+Continue inside `main`. The producer and display share the same start time. A scoped thread submits events every 40–180 milliseconds, with random positive increments. Every third event targets both counters; the others target one counter at a time.
+
+```rust
+    let start = Instant::now();
+    let duration = Duration::from_secs(5);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut event_id = 0;
+            loop {
+                thread::sleep(Duration::from_millis(fastrand::u64(40..=180)));
+                if start.elapsed() >= duration {
+                    break;
+                }
+                event_id += 1;
+                let counter_ids = match event_id % 3 {
+                    0 => vec![1, 2],
+                    1 => vec![1],
+                    _ => vec![2],
+                };
+                let event = CounterChanged {
+                    event_id,
+                    counter_ids,
+                    time: Time(start.elapsed().as_millis() as u64),
+                    delta: fastrand::i64(1..=5),
+                };
+                history.apply([event]).expect("enqueue counter change");
+            }
+        });
+```
+
+`apply` queues work and returns without waiting for insertion or replay. Rejected inputs are reported separately through `errors()`, which the display loop drains below. There is no insertion response wait between producing events and rendering frames.
+
+### Query and Display State at 20 Hz
+
+The main thread advances the processing target and queries the current application time every 50 milliseconds. It prints the available state, then waits until the next frame deadline. Counters without a returned snapshot are displayed as zero until their first event becomes visible.
+
+```rust
+        let frame_interval = Duration::from_millis(50);
+        let mut next_frame = start;
+        while start.elapsed() < duration {
+            let time = Time(start.elapsed().as_millis() as u64);
+            history.advance_to(time).expect("advance processing target");
+            let snapshots = history.query_at(time, [1, 2]).expect("query current counters");
+            let values = [1, 2].map(|id| {
+                snapshots.iter().find(|snapshot| snapshot.counter_id == id)
+                    .map_or(0, |snapshot| snapshot.value)
+            });
+            println!("t={}ms counter 1={} counter 2={}", time.0, values[0], values[1]);
+            for rejection in history.errors().try_iter() {
+                eprintln!("rejected input: {rejection:?}");
+            }
+            next_frame += frame_interval;
+            thread::sleep(next_frame.saturating_duration_since(Instant::now()));
+        }
+    });
+```
+
+Each query waits for its own results, not for the producer or all background processing to finish. It reconstructs admitted history through the requested time, including events exactly at that time. A recently submitted event may become visible on a later frame. The 50-millisecond deadline sets the target display cadence; actual timing also depends on query cost and operating-system scheduling.
+
+The counters advance at varying intervals, and their values differ between runs. In a graphical application, the rendering step would use these snapshots to draw the frame rather than print a line.
+
+### Shut Down
+
+After five seconds, the display loop ends and the scoped producer exits. Once the producer is joined, close admission and join ConTime's owned threads:
+
+```rust
+    let report = history.shutdown();
+    assert!(report.routers.iter().all(|outcome| *outcome == contime::ThreadOutcome::Completed));
+    assert!(report.workers.iter().all(|outcome| *outcome == contime::ThreadOutcome::Completed));
+}
+```
+
+The example uses `expect` and assertions to expose failures. Applications can handle submission errors, rejections, and shutdown outcomes according to their own policy. Idle waits are helpers for controlled tests and benchmarks; this running example never waits for global idle.
+
+For focused historical-query examples, see [ordered values](https://github.com/humacss/contime/blob/main/examples/ordered_values.rs) and [sensor readings](https://github.com/humacss/contime/blob/main/examples/sensor_readings.rs). Those examples also demonstrate deriving IDs with `contentid`.
+
+### Verify Order-Sensitive State
+
+The separate [`chain_hash` example](https://github.com/humacss/contime/blob/main/examples/chain_hash.rs) runs an interactive dashboard that checks a hash chain for each history. Every new digest depends on the previous digest and the event, so it carries the contribution of the entire accepted sequence. Checkpoints preserve the digest when older events are pruned. Unlike addition, the result depends on event order.
 
 ```bash
-cargo run -p contime --example sensor_readings
+cargo run -p contime --example chain_hash -- --counters 6 --workers 4 --events-per-second 100
 ```
 
-ConTime is not published on crates.io yet. For local development, depend on a
-checkout with `contime = { path = "/path/to/contime" }`. The workspace packages
-keep publishing disabled until a release is explicitly prepared.
-
-ConTime provides asynchronous submission and response receivers alongside convenience query methods. Successful submission means that work was queued for admission. Request-scoped completion channels, replay listeners, and progress observations provide different completion boundaries; choose the one your integration needs. Idle waits are helpers for tests and benchmarks, not synchronization for running applications. Rejections are reported separately from submission failures.
-
-Snapshot replay listeners observe relevant replay. `subscribe_pruned_horizon` reports completed pruning horizons. `ProgressPolicy` receives local processing observations; these observations do not establish delivery or durable persistence in an external system.
-
-Applications supply their own event types, snapshot state, and deterministic application logic. Serialization, persistence, and network transport remain outside ConTime.
+The example submits event groups in reverse order and queries fully admitted timestamp ranges. Its dashboard shows the last verified and latest produced hashes, pending work, and visibility delays. Each queried digest must match a retained reference-chain entry; an invalid result stops the example with an error. It runs until `q`, Escape, or Ctrl-C. See the [example guide](https://github.com/humacss/contime/blob/main/examples/chain_hash/README.md) for configuration and verification details. The counter walkthrough above needs no hashing or terminal UI dependencies.
 
 ## How it Works
 
