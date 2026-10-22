@@ -23,8 +23,9 @@ where
     }
 
     /// Low-level target submission. Completion acknowledges target delivery,
-    /// not completed replay or pruning. Use [`Self::wait_until_idle`] for local
-    /// completion and [`Self::subscribe_pruned_horizon`] for completed retention.
+    /// not completed replay or pruning. Use [`Self::subscribe_pruned_horizon`]
+    /// for completed retention and the configured [`crate::ProgressPolicy`] for
+    /// local processing observations. Neither establishes external delivery.
     pub fn send_advance_to(&self, time: I::Time, completion: Sender<()>) -> Result<(), ApiError> {
         contime_api::send_advance_to::<RouterMessage<I, S>, _>(&self.input, time, completion)
     }

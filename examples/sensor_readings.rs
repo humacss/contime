@@ -20,24 +20,29 @@ impl AdvanceTime for Time {
     }
 }
 
+#[derive(Hash)]
 struct Reading {
-    id: u128,
-    sensor: u128,
-    time: Time,
+    sensor: u64,
+    time: u64,
     temperature: i16,
 }
+
+fn temperature_id(sensor: u64) -> u128 {
+    u128::from(contentid::local_typed_content_id_u64("Temperature", &sensor))
+}
+
 impl Event for Reading {
     type Time = Time;
     fn time(&self) -> Time {
-        self.time
+        Time(self.time)
     }
 }
 impl Input for Reading {
     fn event_id(&self) -> u128 {
-        self.id
+        u128::from(contentid::local_typed_content_id_u64("Reading", self))
     }
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
-        emit(self.sensor);
+        emit(temperature_id(self.sensor));
     }
 }
 
@@ -84,9 +89,9 @@ fn main() -> Result<(), String> {
     history
         .send(
             [
-                Reading { id: 1, sensor: 7, time: Time(5), temperature: 17 },
-                Reading { id: 2, sensor: 7, time: Time(10), temperature: 20 },
-                Reading { id: 3, sensor: 7, time: Time(7), temperature: 18 },
+                Reading { sensor: 7, time: 5, temperature: 17 },
+                Reading { sensor: 7, time: 10, temperature: 20 },
+                Reading { sensor: 7, time: 7, temperature: 18 },
             ],
             responses,
         )
@@ -97,16 +102,14 @@ fn main() -> Result<(), String> {
 
     // Historical reads can reconstruct admitted future inputs before advancement.
     for (time, expected) in [(6, 17), (8, 18), (11, 20)] {
-        let snapshots = history.query_at(Time(time), [7]).map_err(|error| format!("{error:?}"))?;
+        let snapshots = history.query_at(Time(time), [temperature_id(7)]).map_err(|error| format!("{error:?}"))?;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].value, Some(expected));
         println!("Temperature at t={time}: {expected}");
     }
-    let events = history.query_events_between(7, Time(5), Time(10)).map_err(|error| format!("{error:?}"))?;
-    assert_eq!(events.iter().map(|event| event.event_id()).collect::<Vec<_>>(), [1, 3]);
+    let events = history.query_events_between(temperature_id(7), Time(5), Time(10)).map_err(|error| format!("{error:?}"))?;
+    assert_eq!(events.iter().map(|event| (event.time().0, event.temperature)).collect::<Vec<_>>(), [(5, 17), (7, 18)]);
 
-    history.advance_to(Time(10)).map_err(|error| format!("{error:?}"))?;
-    history.wait_until_idle(Duration::from_secs(2)).map_err(|error| format!("{error:?}"))?;
     assert!(history.errors().is_empty());
     history.shutdown();
     Ok(())

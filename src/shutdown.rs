@@ -8,9 +8,11 @@ impl<I, S, W> ConTime<I, S, W>
 where
     I: Input,
 {
-    /// Closes admission and joins the topology. When callbacks submit causal
-    /// work through a borrowed/shared owner, wait for idle before releasing
-    /// that owner and calling this consuming method.
+    /// Closes admission and joins the topology. Stop external producers and use
+    /// application-owned completion or progress conditions to finish any required
+    /// causal work before releasing borrowed/shared owners and calling this
+    /// consuming method. Running applications must not rely on global idle.
+    /// Idle waits are helpers for controlled tests and benchmarks only.
     pub fn shutdown(self) -> contime_runtime::ShutdownReport<contime_router::RouterError, Infallible> {
         let _ = self.input.send(crate::RouterMessage::Shutdown);
         let _ = self.coordinator.join();

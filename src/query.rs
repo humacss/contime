@@ -29,8 +29,11 @@ where
     ///
     /// Waits for this query's responses, not for global replay completion. Missing
     /// IDs and times before retained history produce no snapshot; result order is
-    /// unspecified. For a settled-state assertion, stop producers and call
-    /// [`Self::wait_until_idle`] first. Returns [`ApiError`] if submission fails.
+    /// unspecified. Observe the insertion responses for submitted inputs before
+    /// querying their state. For settled-state assertions in tests or benchmarks,
+    /// stop producers and use [`Self::wait_until_idle`]; running applications
+    /// should observe operation-specific responses or progress instead.
+    /// Returns [`ApiError`] if submission fails.
     pub fn query_at(&self, time: I::Time, snapshot_ids: impl IntoIterator<Item = u128>) -> Result<Vec<Box<S>>, ApiError> {
         contime_api::query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids)
     }

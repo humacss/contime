@@ -22,28 +22,33 @@ impl contime::AdvanceTime for Time {
     }
 }
 
+#[derive(Hash)]
 struct ReceiveValue {
-    snapshot_id: u128,
-    event_id: u128,
-    time: Time,
+    counter: u64,
+    time: u64,
     value: i64,
+}
+
+fn values_id(counter: u64) -> u128 {
+    // The same snapshot type identifier and counter key select the same history.
+    u128::from(contentid::local_typed_content_id_u64("OrderedValues", &counter))
 }
 
 impl Event for ReceiveValue {
     type Time = Time;
 
     fn time(&self) -> Time {
-        self.time
+        Time(self.time)
     }
 }
 
 impl Input for ReceiveValue {
     fn event_id(&self) -> u128 {
-        self.event_id
+        u128::from(contentid::local_typed_content_id_u64("ReceiveValue", self))
     }
 
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
-        emit(self.snapshot_id);
+        emit(values_id(self.counter));
     }
 }
 
@@ -75,8 +80,19 @@ impl ApplyEvents<ReceiveValue> for OrderedValues {
     }
 }
 
-fn input(event_id: u128, time: u64, value: i64) -> ReceiveValue {
-    ReceiveValue { snapshot_id: 1, event_id, time: Time(time), value }
+fn input(counter: u64, time: u64, value: i64) -> ReceiveValue {
+    ReceiveValue { counter, time, value }
+}
+
+fn insert(history: &ConTime<ReceiveValue, OrderedValues, ()>, inputs: impl IntoIterator<Item = ReceiveValue>) -> Result<(), String> {
+    let (responses, inserted) = crossbeam_channel::unbounded();
+    history.send(inputs, responses).map_err(|error| format!("{error:?}"))?;
+    // Closure acknowledges insertion on every route, not completed live replay.
+    let rejections = inserted.iter().collect::<Vec<_>>();
+    if !rejections.is_empty() {
+        return Err(format!("unexpected rejections: {rejections:?}"));
+    }
+    Ok(())
 }
 
 fn main() -> Result<(), String> {
@@ -90,16 +106,16 @@ fn main() -> Result<(), String> {
     };
     let history = ConTime::<ReceiveValue, OrderedValues, ()>::start(config, ()).map_err(|error| format!("{error:?}"))?;
     history.advance_to(Time(10)).map_err(|error| format!("{error:?}"))?;
-    history.apply([input(100, 5, 50), input(101, 10, 100)]).map_err(|error| format!("{error:?}"))?;
-    history.wait_until_idle(Duration::from_secs(2)).map_err(|error| format!("{error:?}"))?;
-    let before = history.query_at(Time(11), [1]).map_err(|error| format!("{error:?}"))?;
+    let counter = 7;
+    insert(&history, [input(counter, 5, 50), input(counter, 10, 100)])?;
+    let before = history.query_at(Time(11), [values_id(counter)]).map_err(|error| format!("{error:?}"))?;
     assert_eq!(before[0].values, [50, 100]);
     println!("Before the late event: {:?}", before[0].values);
 
-    history.apply([input(102, 7, 70), input(100, 5, 50)]).map_err(|error| format!("{error:?}"))?;
-    history.wait_until_idle(Duration::from_secs(2)).map_err(|error| format!("{error:?}"))?;
+    // Rebuilding the first event produces the same ID and does not count it twice.
+    insert(&history, [input(counter, 7, 70), input(counter, 5, 50)])?;
     for (time, expected) in [(6, vec![50]), (8, vec![50, 70]), (11, vec![50, 70, 100])] {
-        let snapshots = history.query_at(Time(time), [1]).map_err(|error| format!("{error:?}"))?;
+        let snapshots = history.query_at(Time(time), [values_id(counter)]).map_err(|error| format!("{error:?}"))?;
         assert_eq!(snapshots[0].values, expected);
         println!("Values visible at t={time}: {:?}", snapshots[0].values);
     }

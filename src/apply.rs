@@ -9,8 +9,10 @@ where
     I: Input,
 {
     /// Enqueues external inputs without waiting for admission or replay.
-    /// Observe rejected inputs through [`Self::errors`] and use
-    /// [`Self::wait_until_idle`] when a processing barrier is needed.
+    /// Observe rejected inputs through [`Self::errors`]. Use [`Self::send`] with
+    /// a request-scoped response channel when insertion acknowledgement is needed;
+    /// that acknowledgement does not establish completed replay. Idle waiting is
+    /// reserved for tests and benchmarks, not running-application synchronization.
     pub fn apply(&self, inputs: impl IntoIterator<Item = I>) -> Result<(), ApiError> {
         self.send(inputs, self.error_sender.clone())
     }

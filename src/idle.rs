@@ -49,8 +49,12 @@ impl<I: Input, S, W> ConTime<I, S, W> {
         }
     }
 
-    /// Blocks the caller until work queues are empty and routers/workers idle.
-    /// Stop submitting new work before calling to obtain a completion guarantee.
+    /// Test and benchmark helper that waits for empty queues and idle workers.
+    ///
+    /// Do not use this to synchronize running applications: continuously arriving
+    /// work can prevent idle indefinitely. Observe operation-specific responses
+    /// or progress there instead. In controlled tests and benchmarks, stop
+    /// submitting new work before calling to obtain a completion guarantee.
     /// Queued and active work are both observed, including router-to-worker
     /// handoffs. Does not advance time or cancel processing on timeout.
     /// Success observes idle; it does not prevent later submissions.

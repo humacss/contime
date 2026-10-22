@@ -2,7 +2,7 @@
 
 `contime-core` connects ConTime's isolated subsystems through concrete protocol
 and storage adapters. The root [`contime`](https://github.com/humacss/contime/blob/main/README.md) crate owns the running
-engine, its configuration, startup, public operations, idle checks, and shutdown.
+engine, its configuration, startup, public operations, and shutdown.
 Core does not depend on the root crate or start threads.
 
 ## Responsibilities

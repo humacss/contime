@@ -20,9 +20,11 @@
 //! [`ConTime::apply`] queues admission; a successful return does not mean that
 //! events have been applied. [`ConTime::errors`] reports asynchronous rejections.
 //! [`ConTime::send`] gives a caller its own insertion response channel instead.
-//! Stop external producers and use [`ConTime::wait_until_idle`] when an assertion
-//! or shutdown sequence needs completed processing. Queries observe available
-//! retained history and do not wait for global idle or publish application effects.
+//! Insertion responses establish insertion, not completed replay. Running
+//! applications should observe operation-specific responses or progress rather
+//! than waiting for global idle. [`ConTime::wait_until_idle`] is a helper for
+//! controlled tests and benchmarks only. Queries observe available retained
+//! history and do not wait for global idle or publish application effects.
 //!
 //! [`ConTime::advance_to`] raises the processing target without waiting for replay.
 //! It also requests time-based retention through [`ConTimeConfig::history_retention`].
