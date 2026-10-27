@@ -51,6 +51,7 @@ harness = false
 resolver = "2"
 members = [
     "crates/api",
+    "crates/batcher",
     "crates/core",
     "crates/events",
     "crates/lanes",
