@@ -78,64 +78,11 @@ cargo test --manifest-path crates/api/Cargo.toml --release --lib benchmark_send_
 
 ## Benchmarks
 
-Listener forwarding of one timestamp and 1,000 already-collected snapshot IDs
-measured **205.28 ns**, or approximately **0.205 ns per ID**, on 2026-09-02.
-The snapshot-ID vector and both channels are prepared outside the timed routine. Like the apply
-send benchmark, consuming and recollecting the owned vector can reuse its
-allocation; this measurement describes the API boundary only and excludes
-router partitioning, worker registration, and notification delivery.
+Inline benchmarks measure request construction, identity conversion, collection,
+and channel sends. Query benchmarks include owned result collection. Fixtures
+are prepared outside timing; downstream routing and replay are separate costs.
+Run the inline commands above, or the public query benchmark:
 
-The following medians were recorded locally in one release-mode run on
-2026-08-31. The fixtures have compile-time assertions fixing their complete
-sizes at exactly 32, 64, 208, and 1,008 bytes.
-
-| Event bytes | Ownership | Inputs | Total | ns/input | Inputs/s |
-| ---: | :--- | ---: | ---: | ---: | ---: |
-| 32 | owned | 1 | 103.87 ns | 103.87 | 9,627,419 |
-| 32 | shared | 1 | 110.42 ns | 110.42 | 9,056,330 |
-| 64 | owned | 1 | 104.08 ns | 104.08 | 9,607,994 |
-| 64 | shared | 1 | 110.42 ns | 110.42 | 9,056,330 |
-| 208 | owned | 1 | 104.81 ns | 104.81 | 9,541,074 |
-| 208 | shared | 1 | 110.78 ns | 110.78 | 9,027,983 |
-| 1,008 | owned | 1 | 103.68 ns | 103.68 | 9,644,290 |
-| 1,008 | shared | 1 | 110.87 ns | 110.87 | 9,019,572 |
-| 32 | owned | 1,000 | 87.875 ns | 0.08788 | 11.38 billion |
-| 32 | shared | 1,000 | 483.52 ns | 0.48352 | 2.068 billion |
-| 64 | owned | 1,000 | 85.384 ns | 0.08538 | 11.71 billion |
-| 64 | shared | 1,000 | 495.15 ns | 0.49515 | 2.019 billion |
-| 208 | owned | 1,000 | 105.48 ns | 0.10548 | 9.481 billion |
-| 208 | shared | 1,000 | 506.20 ns | 0.50620 | 1.975 billion |
-| 1,008 | owned | 1,000 | 130.84 ns | 0.13084 | 7.642 billion |
-| 1,008 | shared | 1,000 | 522.25 ns | 0.52225 | 1.915 billion |
-
-Each `send` case prepares the input vector and both Crossbeam channels outside
-the timed routine. The measurement includes generic identity conversion,
-collection into the forwarded vector, and one real output-channel send. It
-excludes downstream receipt, input construction, and destruction of the queued
-output. Rust can reuse an owned `Vec` allocation while collecting its consumed
-iterator, which explains the exceptionally small amortized batch figures.
-
-Both ownership strategies are effectively free at this boundary compared with
-downstream routing and processing. The API result does not justify either
-ownership strategy; it demonstrates that the generic API does not introduce a
-payload-sized copy or allocation. Router fan-out is the operation that makes
-shared ownership materially valuable.
-
-`api/apply/no_rejections` measured **107.49 ns**. It includes creation and
-closure of the internally owned rejection channel plus empty rejection
-collection. Its `send` dependency is stubbed, so it does not include input
-normalization, output-channel transport, or downstream work.
-
-Query boundary results recorded on 2026-09-01 include one real request/response
-round trip to a minimal downstream thread and synchronous result collection:
-
-| Results | Snapshot query | Event query |
-| ---: | ---: | ---: |
-| 1 | 1.534 us | 1.023 us |
-| 10 | 2.325 us | 1.014 us |
-| 100 | 11.01 us | 1.409 us |
-| 1,000 | 34.32 us | 3.724 us |
-
-The snapshot fixture allocates one boxed value per result downstream. The event
-fixture returns one contiguous vector, so the difference primarily describes
-result ownership and allocation rather than request construction.
+```sh
+cargo bench -p contime-api --bench query
+```

@@ -75,9 +75,8 @@ restore the terminal and shut down their backend normally before the summary.
 The standalone WASI guest flushes its validated final report before process exit.
 Browser sessions retain normal ownership and pause/resume behavior.
 
-The retired query-driven live stack and its scalar-only stdout protocol have
-been removed. The finite portable scenario remains because it independently
-checks late replay, duplicate rejection, pruning and frame allowances.
+The finite portable scenario independently checks late replay, duplicate
+rejection, pruning and frame allowances.
 
 Run focused checks from the repository root:
 

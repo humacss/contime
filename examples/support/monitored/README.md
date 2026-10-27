@@ -80,7 +80,7 @@ use all 32 bytes.
 ## Shared execution boundary
 
 Native counters and hashes use this host in both execution modes, as do
-WASI counters and hashes. All hash hosts now use simulator callbacks and monitor-only feedback. The launcher enables the native monitor
+WASI counters and hashes. Hash hosts use simulator callbacks and monitor-only feedback. The launcher enables the native monitor
 features and maps its existing settings through `Options::from_settings`, including skew, average/max fanout,
 retention, checkpoints, query frequency, and numeric source-window limits.
 Manual calls the existing `process()` once per loop turn, and validation also
@@ -91,7 +91,7 @@ after advancement about every 100 ms. Worker reports use the existing read-only
 status capture; they never drive processing. Runtime delegates its original
 submission, advancement, query and shutdown operations unchanged.
 The manual-only example builds without enabling the threaded runtime.
-The query-driven live stack has been removed; finite portable regression scenarios remain.
+Finite portable regression scenarios independently cover replay and retention.
 
 Run focused verification from the repository root:
 

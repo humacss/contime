@@ -66,7 +66,7 @@ Run the standalone hotspot example with:
 cargo run -p contime-simulator --example event_stream
 ```
 
-## Existing adaptive simulation API
+## Adaptive simulation API
 
 The older `Simulator`, `Workload`, and `Maximum` interfaces below remain available
 for existing consumers. They are separate from the independent event iterator.

@@ -30,7 +30,7 @@ ConTime uses 1,024 items per packet, at most 1,024 original requests per drain,
 and a 50 microsecond soft gathering-work budget. The coordinator supplies the
 clock check after each request; a single large submission or admission callback
 can exceed that budget. `Batcher::new` accepts a positive packet limit for focused
-experiments. Native behavior and public submission APIs are unchanged.
+experiments.
 
 ## Isolated verification and measurement
 
@@ -49,6 +49,5 @@ an in-memory output vector, and consumed input-vector destruction are timed.
 The draining case includes request limits and a trailing control boundary but
 uses an always-open work-budget callback. It excludes admission, clock reads,
 channel synchronization, routers, and workers. These benchmarks isolate batching
-cost; they do not measure end-to-end latency or resolve the previously observed
-worker-path throughput regression. Use the end-to-end probes under
-`benches/scaling` to measure those effects.
+cost. Use the end-to-end probes under `benches/scaling` to measure pipeline
+throughput and latency.

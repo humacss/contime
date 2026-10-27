@@ -168,131 +168,15 @@ replaced with equivalent state until a later cleanup can deduplicate them.
 Application and forwarding callbacks are not transactional; external effects
 cannot be rolled back if a callback panics.
 
-## Unit benchmark ballpark
+## Benchmarks
 
-Measured locally on ARM64 with Rust 1.95.0, release mode, on 2026-09-24.
-These are rounded Criterion point estimates from one complete run (30 samples,
-200 ms warm-up, 1 second measurement per case), not performance guarantees.
-
-Throughput below is workload count divided by elapsed seconds, derived from the
-displayed timings rather than a new measurement. M = million, B = billion.
-Events/s counts events applied unless labeled read or removed. Operations that
-do not process events use calls/s; those rates are not event-processing capacity.
-These are single-thread benchmark rates, not sustained application/server limits.
-
-| Unit | Operation | Approximate total time | Approximate throughput | Approximate time/event |
-| --- | --- | ---: | ---: | ---: |
-| Apply | Apply timestamp batches | 0.69 µs | 1.45 B events/s | 0.69 ns |
-| Store | Construct and drop | 20 ns | 50 M calls/s | — |
-| Store | Select playback | 23 ns | 43 M calls/s | — |
-| Playback | Construct | 1 ns | 1 B calls/s | — |
-| Playback | Begin and consume iterator | 49 ns | 2.04 B events read/s | 0.49 ns |
-| Playback | Commit with no-op policy | 1.8 ns | 556 M calls/s | — |
-| Commit | Replace checkpoint and set dirty | 1.9 ns | 526 M calls/s | — |
-| Query | Reconstruct state | 8.1 µs | 123 M events/s | 8.1 ns |
-| Replay | Apply and retain checkpoints | 8.4 µs | 119 M events/s | 8.4 ns |
-| Forward | Apply, invoke hooks, and publish horizon | 8.7 µs | 115 M events/s | 8.7 ns |
-| Store | Prune | 0.41 µs | 1.22 B events removed/s | 0.82 ns |
-| Store | Prune larger history | 2.4 µs | 2.08 B events removed/s | 0.48 ns |
-
-Total times cover 1,000 events for Apply, Query, Replay, and Forward; 100 events
-read for Playback begin; and 500 / 5,000 events removed for the two prune cases.
-Store playback selection searches 1,024 checkpoints. Prune starts with 1,000 /
-10,000 events and removes 5 / 50 checkpoints as well. Time/event is the total
-time divided by that event count, not the latency of an individual event.
-For read/removal rows it means time per event read/removed. A dash means no events
-are processed; the total time is already the time per call.
-
-Application workloads use the shared test event's payload-summing implementation
-and tiny timestamp-plus-sum snapshots. Query, Replay, and Forward use a checkpoint
-interval of 100 events and include the real underlying playback/application work;
-their numbers are not isolated wrapper overhead. Prepared fixture construction
-and remaining-store destruction are outside their timed sections. Query's returned
-allocation and its destruction are included. Prune includes actual event deletion
-and compaction in the Vec-backed test event store, so other storage implementations
-and expensive destructors can change its cost considerably.
-
-For scale: Query over 10,000 events with interval 100 measured about 83 µs
-(120 M events/s); rebuilding 1,000 events into existing dirty checkpoints
-measured about 8.0 µs (125 M events/s).
-Large real snapshots and consumer hooks are not represented by these fixtures.
-Sub-nanosecond-to-few-nanosecond results are particularly sensitive to compiler
-optimization and benchmark overhead. Older benchmark runs used evolving fixtures
-and setup; use this table as the current baseline rather than attributing changes
-from those runs to a particular code change.
-
-`api.rs` is a delegating interface and `types.rs` defines contracts and fixtures;
-neither has a separate unit benchmark. Public API integration benchmarks are a
-separate layer. Reproduce all unit measurements from this crate directory:
+Inline benchmarks cover snapshot application and playback operations. The `api`
+benchmark exercises the public storage API. Compare matching event payloads,
+timestamp distributions, checkpoint intervals, and setup/timing boundaries.
 
 ```sh
-cargo +1.95.0 test --release --lib benchmark_ -- --ignored --nocapture --test-threads=1
-```
-
-## Public API integration benchmarks
-
-`benches/api.rs` uses only the public API with one shared timestamp-plus-sum
-snapshot and a Vec-backed event store. Events have distinct timestamps and
-payloads equal to their timestamp; application sums actual payloads. The checkpoint
-interval is 100. Each isolated operation starts with fresh prepared state.
-Fixture preparation and store destruction are outside timing; query-result
-allocation/destruction is included. Construction measures `new` with an already
-built event store, not event generation. Forward uses a minimal black-box hook,
-not a real consumer's compaction logic. These measure full API work, not just
-dispatch overhead.
-
-Local ARM64, Rust 1.95.0 release, 2026-09-24; 30 samples, 200 ms warm-up,
-1 second measurement, rounded point estimates:
-
-| Operation | Approximate total time | Approximate throughput | Approximate time/event |
-| --- | ---: | ---: | ---: |
-| New | 11.6 ns | 86.2 M calls/s | — |
-| Insert, ordered into a full Vec | 0.552 µs | 1.81 M events inserted/s | 552 ns |
-| Query | 7.83 µs | 128 M events/s | 7.83 ns |
-| Process until | 8.07 µs | 124 M events/s | 8.07 ns |
-| Forward | 8.10 µs | 123 M events/s | 8.10 ns |
-| Prune | 0.263 µs | 1.90 B events removed/s | 0.526 ns |
-| Mixed, 10 cycles | 18.7 µs | 53.5 M timeline events/s | 18.7 ns |
-| Mixed, 100 cycles | 275.5 µs | 36.3 M timeline events/s | 27.55 ns |
-
-Query, Process until, and Forward each process 1,000 events; Forward publishes horizon
-1,001. Prune removes 500 of 1,000 events plus obsolete checkpoints. Mixed runs
-progress through 1,000 / 10,000 timeline events, with average cycle times of
-1.87 / 2.76 µs. Mixed time/event includes all four operations per timeline event,
-not just its application. New takes ownership of 1,000 prepared events without
-processing them, so time/event does not apply.
-
-Insertion was measured separately with the same release settings after adding the
-API. Each iteration admits one new event after 1,000 already-processed events.
-Preparation is untimed; admission includes the fixture's binary-search identity
-check and Vec growth from full capacity. This is not allocation-free insertion,
-nor a late-insertion benchmark. Other event-store implementations may have very
-different costs. A correctness check processes and queries the inserted event
-outside the timed section.
-
-Rates use the same count/time conversion as the unit table. Construction only
-takes ownership of prepared events; it does not process 1,000 events per call.
-Mixed throughput counts each distinct event reached along the timeline once:
-1,000 / 18.7 µs or 10,000 / 275.5 µs. Its denominator includes all four operations,
-including repeated application of some events, so this is end-to-end timeline
-progress, not a count of individual apply invocations or events physically pruned.
-
-Each mixed cycle queries the next 100-event target, replays to it, forwards to
-retain the most recent 50 timestamps, and prunes. The next cycle therefore queries
-and replays after the preceding cleanup. The store is reset only between complete
-benchmark iterations, never between cycles. All events remain preloaded in this
-mixed benchmark to preserve its four-operation baseline; insertion is measured
-separately. Vec prefix deletion shifts the remaining future
-events: the larger mixed case has a larger backlog as well as more cycles, so its
-higher average cannot be attributed solely to store age or checkpoint behavior.
-These are aggregate timings, not per-cycle latency distributions.
-
-Before measurement, the benchmark verifies each operation and every mixed cycle,
-including totals after pruning and queries exactly at the retained horizon. Inputs
-and results use black boxes; correctness assertions are outside measured sections.
-
-```sh
-cargo +1.95.0 bench --bench api
+cargo test --release -p contime-snapshots --lib benchmark_ -- --ignored --nocapture --test-threads=1
+cargo bench -p contime-snapshots --bench api
 ```
 
 ## Verification

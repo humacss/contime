@@ -9,4 +9,4 @@ Case-specific Cargo entry points live in
 [`../../support/entrypoints`](../../support/entrypoints/README.md).
 The support host attaches simulation, monitoring, validation and presentation.
 Runtime starts background threads; Manual processes one complete operation per
-shared host turn. Existing Cargo example names remain unchanged.
+shared host turn.

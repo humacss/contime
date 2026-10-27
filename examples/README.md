@@ -54,8 +54,7 @@ capabilities and execution resources.
 Execution is a separate choice: **Runtime** manages background threads, while
 **Manual** makes one `process()` call per host-loop turn. Native live entry
 points accept `--execution runtime|manual`. Runtime is the default, except for
-`manual_counter_live`, which remains a compatibility entry point defaulting to
-Manual. Enable the `manual` feature to use Manual from a Runtime entry point:
+`manual_counter_live`, which defaults to Manual. Enable the `manual` feature to use Manual from a Runtime entry point:
 
 ```sh
 cargo run --release --features manual,monitor,counters --example counter_live -- --execution manual
@@ -173,5 +172,4 @@ Native hosts stop production, confirm outstanding work through monitoring,
 validate all final state, restore the terminal and shut down their backend.
 WASI guests flush a final validated record before process exit. Browser sessions
 preserve their frame allowance and pause/resume ownership. The independent finite
-portable scenario remains for late-event, duplicate, rejection and pruning tests;
-the old query-driven live stack is removed.
+portable scenario covers late events, duplicates, rejection and pruning.

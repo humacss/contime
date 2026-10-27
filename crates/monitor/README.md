@@ -112,7 +112,7 @@ The [live example guide](../../examples/README.md) shows how the cases share a
 terminal dashboard built from these public APIs. Its renderer, UI tests and
 rendering benchmarks live outside this crate under `examples/support/ui/`.
 
-## Existing workload accounting
+## Workload accounting
 
 The following compatibility API records submitted and query-confirmed work. It
 is independent of worker-status collection and does not read worker execution
@@ -201,7 +201,7 @@ CONTIME_MONITOR_REVERSE=1 cargo +1.90.0 bench -p contime-monitor --bench sustain
 ```
 
 The existing `arithmetic`, `operations`, `pipeline`, and `sustained` benchmarks
-cover the compatibility workload-accounting API. They do not measure the new
+cover the compatibility workload-accounting API. They do not measure the
 worker-status collector. Use `workers` below for direct worker observation.
 
 | Unit | Correctness coverage | Benchmark |
