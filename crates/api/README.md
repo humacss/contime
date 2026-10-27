@@ -4,8 +4,8 @@
 It does not know what receives or processes its output.
 
 The root `contime` crate uses these helpers to submit Core protocol messages.
-This workspace member depends only on Crossbeam and defines its own generic
-rejection contract.
+This workspace member uses Crossbeam for channels and Traitstub for dependency
+wrappers, and defines its own generic rejection contract.
 
 The synchronous helpers here are independent functions. The root engine's
 `apply` and `advance_to` methods enqueue work asynchronously. In the composed
