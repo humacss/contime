@@ -523,3 +523,73 @@ fn happy() {
     assert_eq!(actual_event_responses, expected_event_responses);
     assert!(observed.is_empty());
 }
+
+#[test]
+fn sparse_histories_never_replay_an_event_free_gap() {
+    let (input, messages) = unbounded();
+    let (steps, observed) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let mut worker =
+        contime_worker::MessageWorker::<Message, TestStore>::new(&messages, &registrations, (), Context { steps, gate: None }, None);
+    let done = apply(&input, &[(7, 1, 1), (9, 2, 2), (11, 3, 3), (7, 4, 4), (9, 5, 5), (11, 6, 6)]);
+    worker.handle(messages.try_recv().unwrap());
+    worker.handle(Message::Advance(Advance(6, unbounded().0)));
+    let mut counts = std::collections::BTreeMap::new();
+    while worker.step() {
+        let snapshot = observed.try_recv().unwrap();
+        let previous = counts.insert(snapshot.id, snapshot.ids.len()).unwrap_or(0);
+        assert!(snapshot.ids.len() > previous, "snapshot {} replayed an event-free gap", snapshot.id);
+    }
+    assert_eq!(counts, [(7, 2), (9, 2), (11, 2)].into());
+    assert_eq!(done.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+    assert!(observed.is_empty());
+}
+
+#[test]
+fn sparse_future_replay_waits_for_its_inclusive_target() {
+    let (input, messages) = unbounded();
+    let (steps, observed) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let mut worker =
+        contime_worker::MessageWorker::<Message, TestStore>::new(&messages, &registrations, (), Context { steps, gate: None }, None);
+    apply(&input, &[(7, 1, 10), (7, 4, 100), (9, 2, 20), (11, 3, 30)]);
+    worker.handle(messages.try_recv().unwrap());
+    worker.handle(Message::Advance(Advance(30, unbounded().0)));
+    while worker.step() {}
+    let first = observed.try_iter().map(|s| (s.id, s.ids)).collect::<Vec<_>>();
+    assert_eq!(first, [(7, vec![1]), (9, vec![2]), (11, vec![3])]);
+    worker.handle(Message::Advance(Advance(99, unbounded().0)));
+    assert!(!worker.step());
+    assert!(observed.is_empty());
+    worker.handle(Message::Advance(Advance(100, unbounded().0)));
+    assert!(worker.step());
+    let final_state = observed.try_recv().unwrap();
+    assert_eq!((final_state.id, final_state.ids), (7, vec![1, 4]));
+    assert!(!worker.step());
+    assert!(observed.is_empty());
+}
+
+#[test]
+fn completed_history_reopens_for_late_same_time_input_but_not_a_duplicate() {
+    let (input, messages) = unbounded();
+    let (steps, observed) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let mut worker =
+        contime_worker::MessageWorker::<Message, TestStore>::new(&messages, &registrations, (), Context { steps, gate: None }, None);
+    apply(&input, &[(7, 2, 0), (7, 3, 10), (9, 4, 5)]);
+    worker.handle(messages.try_recv().unwrap());
+    worker.handle(Message::Advance(Advance(10, unbounded().0)));
+    while worker.step() {}
+    observed.try_iter().for_each(drop);
+    apply(&input, &[(7, 2, 0)]);
+    worker.handle(messages.try_recv().unwrap());
+    assert!(!worker.step());
+    assert!(observed.is_empty());
+    apply(&input, &[(7, 1, 0)]);
+    worker.handle(messages.try_recv().unwrap());
+    assert!(worker.step());
+    let corrected = observed.try_recv().unwrap();
+    assert_eq!((corrected.id, corrected.ids), (7, vec![1, 2, 3]));
+    assert!(!worker.step());
+    assert!(observed.is_empty());
+}

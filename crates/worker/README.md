@@ -30,8 +30,11 @@ schedule or the processing target, whichever comes first. One store call may
 process multiple event timestamps. Newly queued messages are checked between steps. Queries
 remain serviceable, and continuous read traffic cannot starve replay.
 
-An ordered set groups pending work by timestamp. Equal-time entries that still
-need that timestamp run before completed entries, then by snapshot ID. Late
+An ordered set groups scheduled histories by timestamp, with snapshot ID
+breaking equal-time ties. After each replay step, the store reports
+its next replay timestamp; finished histories leave the schedule and future
+work waits for its target. Stores must finish all replay through the inclusive
+step endpoint, including a complete timestamp bucket. Late
 insertions invalidate the complete same-time bucket and its suffix. Duplicate
 insertions do not invalidate progress. Notifications flush between steps.
 

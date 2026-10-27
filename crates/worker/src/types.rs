@@ -297,11 +297,17 @@ pub trait SnapshotStore<I>: Sized {
     fn insert(&mut self, input: I, admission_horizon: &Self::Time) -> EventInsert<Self::Rejection>;
     /// Timestamp of an input, used by the worker to schedule changed histories.
     fn event_time(input: &I) -> Self::Time;
-    /// Earliest possible replay publication, including reconstructed prefixes.
-    /// This is the lower bound used in fenced pruning measurements, so it must
-    /// cover every timestamp that pending live replay could still publish.
+    /// Earliest remaining replay application, including any unchanged prefix
+    /// reconstructed from the selected checkpoint after invalidation.
+    /// `None` means no accepted event remains to replay, including future events.
+    ///
+    /// The worker uses this timestamp for scheduling and fenced pruning reports.
+    /// After `process_until(T)` finishes, a returned timestamp must be strictly
+    /// greater than `T`. Insertion may invalidate history and move it backward;
+    /// queries must not change it.
     fn earliest_replay_time(&self) -> Option<Self::Time>;
-    /// Process complete timestamp batches through time, inclusively.
+    /// Process all remaining timestamp batches through time, inclusively.
+    /// On return, `earliest_replay_time()` must be `None` or later than `time`.
     fn process_until(&mut self, time: &Self::Time, context: &mut Self::Context);
     /// Reconstruct fresh state through `time`, including events exactly at it,
     /// without publishing effects or changing replay progress or scheduled work.

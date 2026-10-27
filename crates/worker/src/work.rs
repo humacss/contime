@@ -80,10 +80,8 @@ where
     current_time: S::Time,
     horizon: S::Time,
     pending_prunes: VecDeque<PendingPrune<S::Time, <M::Advance as AdvanceInput>::Completion>>,
-    // false = needs this timestamp; true = already processed through it.
-    schedule: BTreeSet<(S::Time, bool, u128)>,
-    pending: AHashMap<u128, (S::Time, bool)>,
-    latest: AHashMap<u128, S::Time>,
+    schedule: BTreeSet<(S::Time, u128)>,
+    pending: AHashMap<u128, S::Time>,
     coordination: Option<Coordination<S::Time>>,
     fence_round: Option<u64>,
     fence_routers: AHashSet<usize>,
@@ -130,7 +128,6 @@ where
             pending_prunes: VecDeque::new(),
             schedule: BTreeSet::new(),
             pending: AHashMap::new(),
-            latest: AHashMap::new(),
             coordination,
             fence_round: None,
             fence_routers: AHashSet::new(),
@@ -250,7 +247,7 @@ where
     fn queue_prune(&mut self, prune: M::Advance) {
         let (horizon, completion) = prune.into_parts();
         if horizon > self.horizon {
-            assert!(self.schedule.iter().all(|(time, complete, _)| *complete || time >= &horizon), "prune would discard pending replay");
+            assert!(self.schedule.iter().all(|(time, _)| time >= &horizon), "prune would discard pending replay");
             let snapshots = self.snapshots.keys().copied().collect::<Vec<_>>().into_iter();
             self.horizon = horizon.clone();
             self.pending_prunes.push_back((horizon, snapshots, completion));
@@ -270,8 +267,7 @@ where
             let result = store.insert(input, &self.horizon);
             rejections.extend(result.rejections);
             if result.changed {
-                self.latest.entry(snapshot_id).and_modify(|latest| *latest = latest.clone().max(time.clone())).or_insert(time.clone());
-                let pending = self.pending.get(&snapshot_id).cloned().map_or((time.clone(), false), |old| old.min((time, false)));
+                let pending = self.pending.get(&snapshot_id).cloned().map_or(time.clone(), |old| old.min(time));
                 self.schedule_at(snapshot_id, pending);
             }
         }
@@ -280,11 +276,11 @@ where
         }
     }
 
-    fn schedule_at(&mut self, snapshot_id: u128, pending: (S::Time, bool)) {
-        if let Some((time, complete)) = self.pending.insert(snapshot_id, pending.clone()) {
-            self.schedule.remove(&(time, complete, snapshot_id));
+    fn schedule_at(&mut self, snapshot_id: u128, time: S::Time) {
+        if let Some(previous) = self.pending.insert(snapshot_id, time.clone()) {
+            self.schedule.remove(&(previous, snapshot_id));
         }
-        self.schedule.insert((pending.0, pending.1, snapshot_id));
+        self.schedule.insert((time, snapshot_id));
     }
 
     /// Processes one scheduled snapshot through the next distinct scheduled
@@ -292,10 +288,16 @@ where
     ///
     /// Returns `true` when a store processing call ran. Returns `false` when no
     /// replay is available at the target, pruning is pending, or a reported
-    /// coordination round awaits resolution. Equal-time unfinished entries run
-    /// before completed entries, then by snapshot ID. One call may process
+    /// coordination round awaits resolution. Equal-time entries run by snapshot
+    /// ID. Remaining replay is scheduled at its earliest application time;
+    /// a completed history leaves the schedule. One call may process
     /// multiple event timestamps; replay notifications flush before returning.
     /// A step may also publish a ready coordination report and pause later replay.
+    ///
+    /// # Panics
+    ///
+    /// Panics if storage reports remaining replay at or before the endpoint
+    /// it just finished processing.
     pub fn step(&mut self) -> bool {
         if self.awaiting_resolution.is_some() || !self.pending_prunes.is_empty() {
             return false;
@@ -309,22 +311,23 @@ where
     }
 
     fn process_step(&mut self) -> bool {
-        let Some((time, complete, snapshot_id)) = self.schedule.first().cloned() else { return false };
-        if time > self.current_time || (complete && time == self.current_time) {
+        let Some((time, snapshot_id)) = self.schedule.first().cloned() else { return false };
+        if time > self.current_time {
             return false;
         }
         let end = self
             .schedule
-            .range((Excluded((time.clone(), true, u128::MAX)), Unbounded))
+            .range((Excluded((time.clone(), u128::MAX)), Unbounded))
             .next()
-            .map_or_else(|| self.current_time.clone(), |(next, _, _)| next.clone().min(self.current_time.clone()));
+            .map_or_else(|| self.current_time.clone(), |(next, _)| next.clone().min(self.current_time.clone()));
         self.schedule.pop_first();
         self.pending.remove(&snapshot_id);
         let slot = self.snapshots.get_mut(&snapshot_id).expect("scheduled history exists");
         let store = slot.store.as_mut().expect("scheduled store exists");
         store.process_until(&end, &mut self.store_context);
-        if self.latest.get(&snapshot_id).is_some_and(|latest| latest > &end) {
-            self.schedule_at(snapshot_id, (end, true));
+        if let Some(next) = store.earliest_replay_time() {
+            assert!(next > end, "storage must finish replay through the inclusive processing endpoint");
+            self.schedule_at(snapshot_id, next);
         }
         self.listeners.record(ReplayUpdate { snapshot_id, affected_from: time }, &mut self.snapshots);
         self.listeners.flush();
@@ -377,10 +380,7 @@ where
         if let Some(snapshot_id) = snapshots.next() {
             let slot = self.snapshots.get_mut(&snapshot_id).expect("pruning history exists");
             if let Some(store) = slot.store.as_mut() {
-                assert!(
-                    self.pending.get(&snapshot_id).is_none_or(|(time, complete)| *complete || time >= horizon),
-                    "prune would discard pending replay"
-                );
+                assert!(self.pending.get(&snapshot_id).is_none_or(|time| time >= horizon), "prune would discard pending replay");
                 store.forward(horizon, &mut self.store_context);
                 store.prune();
             }
