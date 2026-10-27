@@ -7,6 +7,7 @@
 //!
 //! Subscriptions are not exposed by this convenience API. Advanced applications
 //! can use [`WorkerDriver`](crate::manual::WorkerDriver) with their own worker message and storage contracts.
+#![doc = concat!("\n# Counter example\n\n```no_run\n", include_str!("../examples/cases/counter/manual.rs"), "\n```\n")]
 use contime_api::manual::Message;
 pub use contime_core::InsertionRejection;
 use contime_core::{

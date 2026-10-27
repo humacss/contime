@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ConTime browser example</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="ui/style.css">
+<script type="module" src="ui/app.js"></script>
+</head>
+<body>
+<main>
+<header><h1>ConTime between frames</h1><p>A continuous live event stream on the browser’s main thread. Manual backend, one worker.</p></header>
+<div class="layout">
+<section aria-labelledby="run-title">
+<div class="run-heading"><h2 id="run-title">Live diagnostics</h2><span id="state" role="status">Loading WebAssembly…</span></div>
+<div class="actions"><button id="start" type="button" disabled>Start</button><button id="pause" type="button" disabled>Pause</button><button id="reset" type="button" disabled>Reset</button></div>
+<p id="error" role="alert" hidden></p>
+<dl class="metrics">
+<div><dt id="submitted-label">Submitted events</dt><dd id="submitted">0</dd></div><div><dt id="visible-label">Confirmed events</dt><dd id="visible">0</dd></div>
+<div><dt id="throughput-label">Average completed events / second</dt><dd id="throughput">0</dd></div><div><dt id="pending-label">Unconfirmed events</dt><dd id="pending">0</dd></div><div><dt>Target events / second</dt><dd id="target-rate">0</dd></div><div><dt>Snapshot queries</dt><dd id="queries">0</dd></div>
+</dl>
+<p class="note">All cases use the same simulator and worker monitor as native and WASI hosts. Counter and hash use monitor-only Maximum production; movement uses a per-client input cadence. Rates include example work and browser cadence. One event may apply to multiple snapshots.</p>
+<table><caption>Host and workload diagnostics</caption><tbody>
+<tr><th scope="row">Active time</th><td id="elapsed">0 s</td></tr>
+<tr><th scope="row">Submitted applications</th><td id="applications">0</td></tr>
+<tr><th scope="row">Queued operations</th><td id="queued">0</td></tr>
+<tr><th scope="row">Last query time</th><td id="query_ms">0 ms</td></tr>
+<tr><th scope="row">Last frame work time</th><td id="frame_ms">0 ms</td></tr>
+<tr><th scope="row">Last frame steps</th><td id="steps">0</td></tr>
+<tr><th scope="row">Frame budget overruns</th><td id="overruns">0</td></tr>
+</tbody></table>
+<section id="movement-panel" hidden aria-labelledby="movement-title"><h3 id="movement-title">Client movement</h3>
+<canvas id="movement-map" tabindex="0" aria-label="Queried character positions and fading paths; WASD or arrows move, Space stops"></canvas>
+<p id="movement-stats"></p><p class="note">Click the map, then use WASD or arrows to move; Space stops. Inputs use the same simulated latency as bots. Cyan shows queried paths; amber shows revised old paths. The camera follows your queried character.</p></section>
+<section id="worker-panel" aria-labelledby="worker-title">
+<h3 id="worker-title">Worker monitor</h3>
+<div class="worker-scroll"><table class="worker-table"><caption>Cumulative totals and averages since the first worker reading</caption>
+<colgroup><col style="width:8%"><col style="width:12%"><col style="width:19%"><col style="width:19%"><col style="width:21%"><col style="width:21%"></colgroup>
+<thead><tr><th scope="col">Worker</th><th scope="col">Snapshots</th><th scope="col">Total inserted</th><th scope="col">Total replayed</th><th scope="col">Avg inserted/sec</th><th scope="col">Avg replayed/sec</th></tr></thead>
+<tbody id="worker-rows"></tbody></table></div>
+<p class="note">Worker counts measure event-to-snapshot applications. Replay totals include repeated work; they do not measure outstanding events. Averages appear after two readings.</p>
+</section>
+<section id="values-panel" class="hashes" hidden><h3>Hash verification</h3><p id="values">Waiting for first query</p><p class="note">First 20 snapshots: latest canonical generated state and last fully verified query. Every query validates all snapshots and every digest byte.</p></section>
+</section>
+</div>
+<footer>Read the Rust: <code>../../../environments/browser/src/clock.rs</code> (browser clock), <code>../../monitored</code> (shared simulator and monitor), <code>../../../cases/counter/model.rs</code> (counter model). UI code lives in <code>ui/</code>.</footer>
+</main>
+</body>
+</html>

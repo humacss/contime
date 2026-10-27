@@ -60,6 +60,12 @@ in your settings does not itself limit wall-clock production. Callbacks may reta
 sequence state. Zero events invokes neither callback. Fallible events can be
 represented as `Result` items; use ordinary iterator handling to stop on errors.
 
+Run the standalone hotspot example with:
+
+```sh
+cargo run -p contime-simulator --example event_stream
+```
+
 ## Existing adaptive simulation API
 
 The older `Simulator`, `Workload`, and `Maximum` interfaces below remain available

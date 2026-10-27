@@ -45,21 +45,30 @@ or use `process_with_clock` when allocating a time/work allowance. Query callbac
 during processing and may capture thread-local state. `take_rejections` drains
 insertion failures. Subscriptions are not exposed by that convenience API.
 
+The [manual counter example](../../examples/cases/counter/manual.rs) demonstrates a
+host loop using only the root crate. Run it with:
+
+```sh
+cargo run --no-default-features --features manual --example manual_counter
+```
+
 Advanced callers can still use this crate directly, or the root API's
 `contime::manual::WorkerDriver` re-export, with their own protocol and storage.
 Neither entry point pulls in the managed runtime.
 
-This crate has no snapshot/event dependency. The worker's channel-free
-constructor permits owned host-loop state without leaked receivers or
-self-referential storage.
+This crate has no snapshot/event dependency. The WebAssembly example uses the
+public manual facade, which composes the request and storage adapters; the
+browser host reuses that example. The worker's
+channel-free constructor permits safe ownership in a browser export or application
+resource without leaked receivers or self-referential storage.
 
 ```sh
 cargo +1.90.0 test -p contime-manual -p contime-worker
 cargo +1.90.0 clippy -p contime-manual -p contime-worker --all-targets -- -D warnings
 ```
 
-For wasm32-unknown-unknown, enable the entropy backend required by the
-worker's AHash dependency.
+For wasm32-unknown-unknown, enable the browser entropy backend required by the
+worker's AHash dependency. The browser example contains that target configuration.
 
 `status(worker_id)` reads the existing worker gauges and optional counters without
 processing work. The root Manual instance exposes it as `worker_status()` with

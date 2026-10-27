@@ -108,8 +108,9 @@ baseline for cumulative average rates, or use the previous reading for interval
 rates. Unavailable values remain explicit; do not turn them into zero.
 
 Collection, rendering, refresh cadence, clocks and input belong to the consumer.
-Consumers build their own presentation from these public APIs; terminal rendering
-and its tests and benchmarks stay outside this crate.
+The [live example guide](../../examples/README.md) shows how the cases share a
+terminal dashboard built from these public APIs. Its renderer, UI tests and
+rendering benchmarks live outside this crate under `examples/support/ui/`.
 
 ## Existing workload accounting
 

@@ -1,0 +1,5 @@
+# Rust 1.90's threaded WASI linker otherwise caps shared memory at its initial
+# size, preventing heap growth and thread-stack allocation (rust-lang/rust#146721).
+# This maximum reserves address space; it does not allocate 1 GiB at startup.
+[target.wasm32-wasip1-threads]
+rustflags = ["-C", "link-arg=--max-memory=1073741824"]

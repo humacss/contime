@@ -43,7 +43,7 @@ Submit one event or an iterator of events with `apply`; use `send` when you need
 
 This walkthrough starts an in-memory ConTime engine with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
 
-The Rust blocks form one complete program, in order. The same program is available as [`examples/counter.rs`](https://github.com/humacss/contime/blob/main/examples/counter.rs). Run it from a ConTime checkout with:
+The Rust blocks form one complete program, in order. The same program is available as [`examples/cases/counter/main.rs`](https://github.com/humacss/contime/blob/main/examples/cases/counter/main.rs). Run it from a ConTime checkout with:
 
 ```bash
 cargo run -p contime --example counter
@@ -80,25 +80,56 @@ caller-driven adaptive admission and query validation tools using monitor
 observations. It starts no threads and changes no execution or replay rules.
 See the [simulator guide](crates/simulator/README.md) for the APIs and examples.
 
-### Caller-driven processing
+### Run ConTime Manually
 
-For applications that own their loop, use:
+If your application already owns the loop, create a manual instance and decide
+when it processes work. No ConTime background threads are started. Use the same
+`Input`, `Snapshot`, and `ApplyEvents` contracts described below; you do not need
+to define worker messages or storage adapters.
 
 ```toml
 contime = { version = "0.1", default-features = false, features = ["manual"] }
 ```
 
-`contime::manual::ManualConTime` uses the same event and snapshot contracts as
-Runtime and starts no background threads. Enqueue `apply`, `advance_to`, and
-`query_at` operations, then call `process()` between other host work. Query
-callbacks execute on the calling thread and may capture thread-local state.
+The complete [manual counter example](examples/cases/counter/manual.rs) drives two
+counters from a host loop at 20 frames per second:
 
-`process_with_clock` optionally repeats complete steps up to a maximum time/work
-allowance. It returns early when no work is ready and never sleeps to fill the
-allowance. One complete operation may exceed the soft time limit. Retention is
-explicit through `prune_before`; regularly drain `take_rejections()` to inspect
-insertion failures. See the [Manual guide](crates/manual/README.md) for contracts
-and limitations.
+```sh
+cargo run --no-default-features --features manual --example manual_counter
+```
+
+Its loop schedules submissions and display requests at 20 Hz, while giving
+ConTime one processing opportunity on every loop turn. The key operations are:
+
+```rust,ignore
+contime.apply([event])?;
+contime.advance_to(time)?;
+contime.query_at(time, [1, 2], |snapshots| {
+    // Update the displayed state here, when processing reaches this query.
+})?;
+contime.process()?;
+```
+
+`process()` returns `true` when it makes progress and `false` when nothing is
+currently runnable. Each call handles one message, complete replay/pruning call,
+or pruning-barrier transition; a step may apply several events. Other application
+tasks run between calls. Query callbacks run on the calling thread during
+processing, including for empty results, and may capture thread-local state.
+
+`process_with_clock(budget, clock)` is an optional helper that repeats the same
+step up to a maximum time/work allowance. It returns early when no work is ready
+and never sleeps or waits to fill the allowance. The limit is soft: a complete
+operation can overrun it because time is checked between operations.
+
+Drain `take_rejections()` regularly; queue acceptance does not guarantee
+insertion or completed replay. Retention is explicit through `prune_before`, and
+its horizon must not exceed the queued processing target. The convenience API
+currently provides snapshot/event queries without subscriptions.
+
+The [WebAssembly example](examples/environments/wasi/README.md) runs outside a browser through WASI:
+Manual on standard WASI, or Manual and Runtime on threaded WASI with a compatible host. The separate [browser example](examples/environments/browser/README.md)
+uses Manual with simulator/monitor feedback for counters and a configurable dashboard; browser presentation stays under `examples/support/composition/browser/ui/`.
+It drives processing through `requestAnimationFrame` and `performance.now()`.
 
 ### Define Time
 
@@ -305,17 +336,66 @@ After five seconds, the display loop ends and the scoped producer exits. Once th
 
 The example uses `expect` and assertions to expose failures. Applications can handle submission errors, rejections, and shutdown outcomes according to their own policy. Idle waits are helpers for controlled tests and benchmarks; this running example never waits for global idle.
 
-For focused historical-query examples, see [ordered values](https://github.com/humacss/contime/blob/main/examples/ordered_values.rs) and [sensor readings](https://github.com/humacss/contime/blob/main/examples/sensor_readings.rs). Those examples also demonstrate deriving IDs with `contentid`.
+For a practical example with delayed client inputs and corrected historical paths, see [client movement](examples/cases/client_movement/README.md).
+
+### Explore Live Workloads
+
+The [example guide](examples/README.md) lists runnable walkthroughs and configurable
+live dashboards. Each scenario has its own folder and reader guide. Start with
+its application model and ConTime loop; UI code lives separately under `ui/`.
+
+```sh
+cargo run --release --features monitor,counters --example counter_live
+cargo run --release --features monitor,counters --example client_movement
+cargo run --release --no-default-features --features manual,monitor,counters --example manual_counter_live
+```
+
+Start the central example launcher with `cargo run --release --example launcher`
+to select a terminal, standalone WebAssembly, or browser host, execution model,
+application definition, and settings. See the [launcher guide](examples/support/launcher/README.md).
+
+Live application definitions are shared across hosts: each example's `model.rs`
+and `setup.rs` contain its event and snapshot contracts, while `examples/support`
+contains load generation, execution and UI. Add `--features manual` and pass
+`--execution manual` to a native live example to use caller-driven processing.
+All live cases use the simulator and worker monitor
+with cumulative per-worker throughput averages. WASI workload processing and full
+validation stay inside WebAssembly; its UI runs in the launcher. Browser hosts
+use Manual through a frame-budgeted adapter.
+
+The counter and chain-hash dashboards offer startup settings for snapshot count, worker count (Runtime),
+event rate, average/maximum snapshots per event, query frequency, retention and checkpoint spacing.
+Numeric event rates also offer an outstanding-work allowance. Live demos default to one worker per available logical CPU, 1,000 snapshots
+per worker, Maximum event production, and 128-event checkpoint spacing. Manual
+uses one worker. Choose a numeric event-rate cap for a controlled load. The
+production window bounds the example's own backlog and reference data. Maximum
+adjusts offered load and manages that window from worker status; a numeric rate
+retains a configurable source-event allowance. Worker readings confirm bounded
+production windows independently of state queries. Dashboards show target and
+cumulative completed source-event rates, unconfirmed events, and per-worker
+application totals and cumulative averages. Hashes validate state at completed
+windows; counters validate at shutdown.
+
+Client movement is a native real-time case with its own client count, input
+frequency, latency/jitter and fading settings. It queries current and historical
+character positions to show corrected paths on a terminal map. It uses a fixed
+input cadence rather than Maximum production; keyboard inputs follow the same
+delayed delivery path as simulated clients. See the
+[movement guide](examples/cases/client_movement/README.md).
+Use `--headless --duration 5` for finite comparisons without terminal rendering.
+The browser demo exposes one Manual worker and a configurable frame allowance.
+Measurements include example overhead; these are live diagnostics rather than
+isolated engine benchmarks.
 
 ### Verify Order-Sensitive State
 
-The separate [`chain_hash` example](https://github.com/humacss/contime/blob/main/examples/chain_hash.rs) runs an interactive dashboard that checks a hash chain for each history. Every new digest depends on the previous digest and the event, so it carries the contribution of the entire accepted sequence. Checkpoints preserve the digest when older events are pruned. Unlike addition, the result depends on event order.
+The separate [`chain_hash` example](https://github.com/humacss/contime/blob/main/examples/support/entrypoints/chain_hash.rs) runs an interactive dashboard that checks a hash chain for each history. Every new digest depends on the previous digest and the event, so it carries the contribution of the entire accepted sequence. Checkpoints preserve the digest when older events are pruned. Unlike addition, the result depends on event order.
 
 ```bash
-cargo run -p contime --example chain_hash -- --counters 6 --workers 4 --events-per-second 100
+cargo run -p contime --features monitor,counters --example chain_hash -- --snapshots 6 --workers 4 --events-per-second 100
 ```
 
-The example submits event groups in reverse order and queries fully admitted timestamp ranges. Its dashboard shows the last verified and latest produced hashes, pending work, and visibility delays. Each queried digest must match a retained reference-chain entry; an invalid result stops the example with an error. It runs until `q`, Escape, or Ctrl-C. See the [example guide](https://github.com/humacss/contime/blob/main/examples/chain_hash/README.md) for configuration and verification details. The counter walkthrough above needs no hashing or terminal UI dependencies.
+The example submits event groups in reverse order and queries fully admitted timestamp ranges. Its dashboard shows the target and average completed source-event rates, monitor-unconfirmed work, worker activity, and last verified and latest produced hashes. Each queried digest must match its captured canonical reference state; an invalid result stops the example with an error. It runs until `q`, Escape, or Ctrl-C. See the [example guide](https://github.com/humacss/contime/blob/main/examples/cases/chain_hash/README.md) for configuration and verification details. The counter walkthrough above needs no hashing or terminal UI dependencies.
 
 ## How it Works
 
@@ -443,8 +523,8 @@ Advancement requests are asynchronous. Processing observations and pruning notif
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p contime --example ordered_values
-cargo run -p contime --example sensor_readings
+cargo run -p contime --example counter
+cargo run -p contime --features monitor,counters --example client_movement -- --headless --duration 2
 cargo test --doc --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```

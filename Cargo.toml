@@ -3,6 +3,7 @@ name = "contime"
 version = "0.1.0"
 edition = "2021"
 autobenches = false
+autoexamples = false
 license = "MIT"
 description = "Continuous-time state from unreliable event streams"
 publish = false
@@ -32,6 +33,10 @@ contime-core = { path = "crates/core", version = "0.1.0" }
 contime-runtime = { path = "crates/runtime", version = "0.1.0", optional = true }
 
 [dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+contime-monitor = { path = "crates/monitor", version = "0.1.0", features = ["workers"] }
+contime-simulator = { path = "crates/simulator", version = "0.1.0" }
 contime-api = { path = "crates/api", version = "0.1.0" }
 contime-router = { path = "crates/router", version = "0.1.0" }
 contime-worker = { path = "crates/worker", version = "0.1.0" }
@@ -40,7 +45,6 @@ blake3 = "1.8"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
 ctrlc = { version = "3.5", features = ["termination"] }
 fastrand = "2"
-contentid = { version = "1.0.0", features = ["local"] }
 rstest = { version = "0.26", default-features = false }
 criterion = { version = "0.5", features = ["html_reports"] }
 
@@ -66,6 +70,7 @@ required-features = ["runtime"]
 
 [workspace]
 resolver = "2"
+exclude = ["examples/environments/wasi", "examples/environments/browser"]
 members = [
     "crates/api",
     "crates/batcher",
@@ -84,6 +89,16 @@ members = [
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[example]]
+name = "chain_hash"
+path = "examples/support/entrypoints/chain_hash.rs"
+required-features = ["runtime", "monitor", "counters"]
+
+[[example]]
+name = "counter"
+path = "examples/cases/counter/main.rs"
+required-features = ["runtime"]
 
 [[test]]
 name = "advance"
@@ -122,17 +137,31 @@ name = "replay_frontier"
 required-features = ["runtime"]
 
 [[example]]
-name = "counter"
-required-features = ["runtime"]
+name = "manual_counter"
+path = "examples/cases/counter/manual.rs"
+required-features = ["manual"]
 
 [[example]]
-name = "chain_hash"
-required-features = ["runtime"]
+name = "counter_live"
+path = "examples/support/entrypoints/counter.rs"
+required-features = ["runtime", "monitor", "counters"]
 
 [[example]]
-name = "ordered_values"
-required-features = ["runtime"]
+name = "manual_counter_live"
+path = "examples/support/entrypoints/manual_counter.rs"
+required-features = ["manual", "monitor", "counters"]
 
 [[example]]
-name = "sensor_readings"
+name = "launcher"
+path = "examples/support/launcher/main.rs"
 required-features = ["runtime"]
+
+[[bench]]
+name = "monitor_ui"
+harness = false
+required-features = ["monitor"]
+
+[[example]]
+name = "client_movement"
+path = "examples/support/entrypoints/client_movement.rs"
+required-features = ["runtime", "monitor", "counters"]

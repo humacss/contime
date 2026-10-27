@@ -17,9 +17,10 @@ distributed across workers; a history is reconstructed in canonical event order.
 
 # Getting started
 
-The complete example below defines one history containing an ordered list
-of values. A late event changes the appropriate historical queries, and
-resubmitting an identical retained event does not apply it twice.
+The complete example below defines counter events and snapshots, starts four
+workers, and queries two counters at 20 Hz while a producer submits changes.
+Some events affect both counters. It runs for five seconds; `fastrand` only
+varies its example traffic and is not required by ConTime.
 Pass `()` as the application wrapper unless you need the hooks in
 [`checkpoints::ApplyWrapper`]. No application framework or transport is required.
 
@@ -46,9 +47,9 @@ submissions; inspect its [`ShutdownReport`] for router and worker outcomes.
 
 # Example
 
-Run this example with `cargo run -p contime --example ordered_values`."###
+Run this example with `cargo run -p contime --example counter`."###
 )]
-#![cfg_attr(feature = "runtime", doc = concat!("```rust\n", include_str!("../examples/ordered_values.rs"), "\n```\n"))]
+#![cfg_attr(feature = "runtime", doc = concat!("```rust\n", include_str!("../examples/cases/counter/main.rs"), "\n```\n"))]
 
 /// Shared application contracts and synchronous storage adapters.
 pub use contime_core as core;
