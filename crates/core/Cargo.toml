@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 autobenches = false
 license = "MIT"
-description = "Protocol and storage adapters for isolated ConTime subsystems"
+description = "Shared application contracts and synchronous ConTime storage adapters"
 publish = false
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime-core"
@@ -15,15 +15,10 @@ categories = ["data-structures", "concurrency"]
 include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [dependencies]
-contime-api = { path = "../api", version = "0.1.0" }
 contime-checkpoints = { package = "contime-snapshots", path = "../snapshots", version = "0.1.0" }
 contime-events = { path = "../events", version = "0.1.0" }
 contime-lanes = { path = "../lanes", version = "0.1.0" }
-contime-progress = { path = "../progress", version = "0.1.0" }
-contime-router = { path = "../router", version = "0.1.0" }
-contime-runtime = { path = "../runtime", version = "0.1.0" }
 contime-worker = { path = "../worker", version = "0.1.0" }
-crossbeam-channel = "0.5"
 
 [dev-dependencies]
 rstest = { version = "0.26", default-features = false }

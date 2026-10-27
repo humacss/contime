@@ -3,12 +3,12 @@
 use crossbeam_channel::Sender;
 
 use crate::SharedEvent;
-use crate::{ApiError, ConTime, Input, RejectionMessage, RejectionReason, RouterMessage};
+use crate::{ApiError, ConTime, RejectionMessage, RejectionReason, RouterMessage};
 use contime_api::ApplyOutput;
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     /// Low-level enqueue with a caller-owned rejection stream. Closure of this
     /// stream acknowledges insertion, not completion of scheduled replay.
@@ -25,7 +25,7 @@ where
     /// enqueued before that application returns and cannot precede its time.
     /// Unlike external input, these records use the proven safe boundary.
     pub fn apply_internal(&self, source: I::Time, inputs: impl IntoIterator<Item = I>) -> Result<(), ApiError> {
-        let inputs = inputs.into_iter().collect::<Vec<_>>().into_iter().map(SharedEvent::from).collect();
+        let inputs = inputs.into_iter().map(SharedEvent::from).collect();
         self.input
             .send(RouterMessage::Internal { source, batch: crate::RouterBatch::create(inputs, self.error_sender.clone()) })
             .map_err(|_| ApiError::OutputChannelClosed)
@@ -38,9 +38,8 @@ fn send_to<I, S>(
     rejection_sender: Sender<RejectionMessage<RejectionReason>>,
 ) -> Result<(), ApiError>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
-    let inputs = inputs.into_iter().collect::<Vec<_>>();
     let inputs = inputs.into_iter().map(SharedEvent::from).collect::<Vec<_>>();
     contime_api::send::<RouterMessage<I, S>, _, _, _, _>(output, inputs, rejection_sender)
 }

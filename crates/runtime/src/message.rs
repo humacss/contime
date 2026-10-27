@@ -15,7 +15,7 @@ use contime_worker::{
 use crossbeam_channel::Sender;
 
 use crate::{
-    Advance, CompletionHandle, EventQuery, Input, RejectionReason, Route, RouterBatch, RouterMessage, SharedEvent, SnapshotListen,
+    Advance, CompletionHandle, EventQuery, RejectionReason, Route, RouterBatch, RouterMessage, SharedEvent, SnapshotListen,
     SnapshotListener, SnapshotListenerMessage, SnapshotQuery, WorkerBatch, WorkerMessage,
 };
 
@@ -58,7 +58,7 @@ impl Completion<RejectionMessage<RejectionReason>> for CompletionHandle {
 
 impl<I, S> ApiAdvanceOutput<I::Time> for RouterMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn advance(time: I::Time, completion: Sender<()>) -> Self {
         Self::Advance(Advance { time, completion })
@@ -79,7 +79,7 @@ where
 
 impl<I> ApplyOutput<SharedEvent<I>, RejectionReason> for RouterBatch<I>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn create(inputs: Vec<SharedEvent<I>>, rejection_sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
         Self { inputs, completion: CompletionHandle::new(rejection_sender) }
@@ -88,7 +88,7 @@ where
 
 impl<I, S> ApplyOutput<SharedEvent<I>, RejectionReason> for RouterMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn create(inputs: Vec<SharedEvent<I>>, rejection_sender: Sender<RejectionMessage<RejectionReason>>) -> Self {
         Self::Apply(RouterBatch { inputs, completion: CompletionHandle::new(rejection_sender) })
@@ -97,7 +97,7 @@ where
 
 impl<I, S> SnapshotQueryOutput<I::Time, S> for RouterMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn snapshot_query(time: I::Time, snapshot_ids: Vec<u128>, response: Sender<Vec<Box<S>>>) -> Self {
         Self::SnapshotQuery(SnapshotQuery { time, snapshot_ids, response })
@@ -106,7 +106,7 @@ where
 
 impl<I, S> EventQueryOutput<I::Time, SharedEvent<I>> for RouterMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn event_query(snapshot_id: u128, from: I::Time, to: I::Time, response: Sender<Vec<SharedEvent<I>>>) -> Self {
         Self::EventQuery(EventQuery { snapshot_id, from, to, response })
@@ -115,7 +115,7 @@ where
 
 impl<I, S> ApiSnapshotListenOutput<I::Time, SnapshotListenerMessage<I::Time>> for RouterMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn listen(time: I::Time, snapshot_ids: Vec<u128>, notifications: Sender<SnapshotListenerMessage<I::Time>>) -> Self {
         Self::SnapshotListen(SnapshotListen { time, snapshot_ids, listener: SnapshotListener::new(notifications) })
@@ -124,7 +124,7 @@ where
 
 impl<I> RouteInputBatch for RouterBatch<I>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Input = SharedEvent<I>;
     type Completion = CompletionHandle;
@@ -145,7 +145,7 @@ impl<T, S> RouterSnapshotQueryInput for SnapshotQuery<T, S> {
 
 impl<T, I> RouterEventQueryInput for EventQuery<T, I>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Time = T;
     type Response = Sender<Vec<SharedEvent<I>>>;
@@ -169,7 +169,7 @@ where
 
 impl<I, S> RouterInput for RouterMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Apply = RouterBatch<I>;
     type SnapshotQuery = SnapshotQuery<I::Time, S>;
@@ -198,7 +198,7 @@ where
 
 impl<I> RouteOutput<SharedEvent<I>> for Route<I>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn create(snapshot_id: u128, input: SharedEvent<I>) -> Self {
         Self { snapshot_id, input }
@@ -207,7 +207,7 @@ where
 
 impl<I> RouteInput for Route<I>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Input = SharedEvent<I>;
 
@@ -218,7 +218,7 @@ where
 
 impl<I> WorkerOutput<SharedEvent<I>, CompletionHandle> for WorkerBatch<I>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Route = Route<I>;
 
@@ -229,7 +229,7 @@ where
 
 impl<I, S> WorkerOutput<SharedEvent<I>, CompletionHandle> for WorkerMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Route = Route<I>;
 
@@ -240,7 +240,7 @@ where
 
 impl<I, S> SnapshotQueryWorkerOutput<I::Time, Sender<Vec<Box<S>>>> for WorkerMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn snapshot_query(time: I::Time, snapshot_ids: Vec<u128>, response: Sender<Vec<Box<S>>>) -> Self {
         Self::SnapshotQuery(SnapshotQuery { time, snapshot_ids, response })
@@ -249,7 +249,7 @@ where
 
 impl<I, S> EventQueryWorkerOutput<I::Time, Sender<Vec<SharedEvent<I>>>> for WorkerMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn event_query(snapshot_id: u128, from: I::Time, to: I::Time, response: Sender<Vec<SharedEvent<I>>>) -> Self {
         Self::EventQuery(EventQuery { snapshot_id, from, to, response })
@@ -258,7 +258,7 @@ where
 
 impl<I, S> SnapshotListenWorkerOutput<I::Time, SnapshotListener<I::Time>> for WorkerMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn listen(time: I::Time, snapshot_ids: Vec<u128>, listener: SnapshotListener<I::Time>) -> Self {
         Self::SnapshotListen(SnapshotListen { time, snapshot_ids, listener })
@@ -267,7 +267,7 @@ where
 
 impl<I, S> AdvanceWorkerOutput<I::Time, Sender<()>> for WorkerMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     fn advance(time: I::Time, completion: Sender<()>) -> Self {
         Self::Advance(Advance { time, completion })
@@ -286,7 +286,7 @@ where
     }
 }
 
-impl<I: Input, S> contime_router::CoordinationOutput<I::Time, Sender<()>> for WorkerMessage<I, S> {
+impl<I: crate::ThreadInput, S> contime_router::CoordinationOutput<I::Time, Sender<()>> for WorkerMessage<I, S> {
     fn resolve(round: u64, time: I::Time, completion: Sender<()>) -> Self {
         Self::Resolve { round, prune: Advance { time, completion } }
     }
@@ -300,7 +300,7 @@ impl<I: Input, S> contime_router::CoordinationOutput<I::Time, Sender<()>> for Wo
 
 impl<I> ApplyInput for WorkerBatch<I>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Route = Route<I>;
     type Completion = CompletionHandle;
@@ -321,7 +321,7 @@ impl<T, S> WorkerSnapshotQueryInput for SnapshotQuery<T, S> {
 
 impl<T, I> WorkerEventQueryInput for EventQuery<T, I>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Time = T;
     type Response = Sender<Vec<SharedEvent<I>>>;
@@ -345,7 +345,7 @@ where
 
 impl<I, S> WorkInput for WorkerMessage<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     type Apply = WorkerBatch<I>;
     type SnapshotQuery = SnapshotQuery<I::Time, S>;

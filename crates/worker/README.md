@@ -12,8 +12,9 @@ Insertion completion precedes replay, while pruning completion follows every
 captured history’s forwarding and pruning hooks.
 
 `contime-worker` owns incremental replay scheduling and the blocking message
-receive loop. It depends on no other ConTime crate. Core supplies concrete
-messages and a `SnapshotStore` adapter; the root orchestrator owns the threads.
+receive loop. It depends on no other ConTime crate. Runtime supplies concrete
+messages and wraps Core's shared storage adapter; Runtime owns the background
+threads.
 
 ## Message flow
 
@@ -75,7 +76,7 @@ hook or dropped completion sender never reports successful pruning.
 `MessageWorker::new` constructs the same state used by `work_messages` without
 spawning threads. `handle` delivers a message, `step` processes a scheduled
 snapshot, and `prune_step` forwards/prunes a history. A driver must preserve
-normal priority: delivered messages, pending pruning, then replay. Core's
+normal priority: delivered messages, pending pruning, then replay. Runtime's
 controlled frontier tests use this interface with real storage adapters.
 
 ## Verification and performance

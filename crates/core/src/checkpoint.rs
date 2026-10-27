@@ -1,6 +1,6 @@
 use crate::checkpoints::{Application, ApplyEvents, ApplyWrapper, Snapshot};
 use crate::types::{CheckpointStorage, CheckpointStorageConfig, History};
-use crate::{Input, RejectionMessage, RejectionReason, SharedEvent};
+use crate::{Input, InsertionRejection, RejectionReason, SharedEvent};
 use contime_checkpoints::Insert;
 use contime_worker::EventInsert;
 use std::marker::PhantomData;
@@ -15,7 +15,7 @@ where
     type Context = W;
     type Time = I::Time;
     type Snapshot = S;
-    type Rejection = RejectionMessage<RejectionReason>;
+    type Rejection = InsertionRejection;
 
     fn create(snapshot_id: u128, config: &Self::Config, horizon: &Self::Time) -> Self {
         Self { snapshot_id, horizon: horizon.clone(), interval: config.checkpoints.interval, store: None, wrapper: PhantomData }
@@ -29,37 +29,21 @@ where
         self.store.as_ref().and_then(|store| store.earliest_replay_time())
     }
 
-    fn insert(&mut self, mut input: SharedEvent<I>, admission_horizon: &I::Time) -> EventInsert<Self::Rejection> {
-        // Admission observations live only in flight, never in retained history.
-        let observation = input.observation.take();
-        let event_id = input.event_id();
+    fn insert(&mut self, input: SharedEvent<I>, admission_horizon: &I::Time) -> EventInsert<Self::Rejection> {
+        let rejection = InsertionRejection { event_id: input.event_id(), reason: RejectionReason::BeforeHistoryHorizon };
         if input.inner.time() < *admission_horizon {
-            if let Some(observation) = observation {
-                observation.lock().expect("admission observation poisoned").cover(self.snapshot_id, None);
-            }
-            return EventInsert {
-                changed: false,
-                rejections: vec![RejectionMessage { event_id, reason: RejectionReason::BeforeHistoryHorizon }],
-            };
+            return EventInsert { changed: false, rejections: vec![rejection] };
         }
         let store = self.store.get_or_insert_with(|| {
             let mut snapshot = S::create(self.snapshot_id, input.inner.as_ref());
             snapshot.set_time(self.horizon.clone());
             contime_checkpoints::SnapshotStore::new(History::with_horizon(self.horizon.clone()), snapshot, self.interval)
         });
-        let result = match store.insert(input) {
+        match store.insert(input) {
             Insert::Inserted => EventInsert { changed: true, rejections: vec![] },
             Insert::Duplicate => EventInsert { changed: false, rejections: vec![] },
-            Insert::BeforeHorizon => EventInsert {
-                changed: false,
-                rejections: vec![RejectionMessage { event_id, reason: RejectionReason::BeforeHistoryHorizon }],
-            },
-        };
-        if let Some(observation) = observation {
-            let minimum = result.changed.then(|| store.earliest_replay_time()).flatten();
-            observation.lock().expect("admission observation poisoned").cover(self.snapshot_id, minimum);
+            Insert::BeforeHorizon => EventInsert { changed: false, rejections: vec![rejection] },
         }
-        result
     }
 
     fn process_until(&mut self, time: &I::Time, context: &mut W) {
@@ -225,38 +209,6 @@ mod tests {
         assert_eq!(actual.counts, expected_counts);
         assert!(query_effects.is_empty());
         assert_eq!(context.effects, expected_effects);
-    }
-
-    #[test]
-    fn admission_coverage_waits_for_all_routes_and_is_not_retained() {
-        let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 100 } };
-        let mut first = Adapter::create(7, &config, &Time(20));
-        let mut second = Adapter::create(8, &config, &Time(20));
-        let observation = std::sync::Arc::new(std::sync::Mutex::new(contime_progress::CoverageConstraint::new(Time(20), [7, 8])));
-        let mut input = event(1, 90, 1);
-        input.observation = Some(observation.clone());
-
-        assert!(first.insert(input.clone(), &Time(20)).changed);
-        assert_eq!(observation.lock().unwrap().boundary(), Some(Time(20)));
-        assert!(second.insert(input, &Time(20)).changed);
-        assert_eq!(observation.lock().unwrap().boundary(), Some(Time(90)));
-        assert_eq!(std::sync::Arc::strong_count(&observation), 1);
-        assert!(first.query_events(&Time(20), &Time(100))[0].observation.is_none());
-        assert!(second.query_events(&Time(20), &Time(100))[0].observation.is_none());
-    }
-
-    #[test]
-    fn rejected_and_duplicate_admissions_cover_routes_without_adding_work() {
-        let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 100 } };
-        let mut store = Adapter::create(7, &config, &Time(20));
-        assert!(store.insert(event(1, 90, 1), &Time(20)).changed);
-        for mut input in [event(1, 90, 1), event(2, 10, 1)] {
-            let observation = std::sync::Arc::new(std::sync::Mutex::new(contime_progress::CoverageConstraint::new(Time(20), [7])));
-            input.observation = Some(observation.clone());
-            assert!(!store.insert(input, &Time(20)).changed);
-            assert_eq!(observation.lock().unwrap().boundary(), None);
-            assert_eq!(std::sync::Arc::strong_count(&observation), 1);
-        }
     }
 
     #[test]

@@ -4,11 +4,11 @@ use std::marker::PhantomData;
 
 use crate::checkpoints::{ApplyEvents, ApplyWrapper, Snapshot};
 
-use crate::{ConTime, ConTimeConfig, Input, RouterProcess, WorkerProcess};
+use crate::{ConTime, ConTimeConfig, RouterProcess, WorkerProcess};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + Send + 'static,
     W: ApplyWrapper<S, I> + Clone + Send + 'static,
 {
@@ -21,7 +21,7 @@ where
     /// # Errors
     /// Returns [`crate::StartError`] for zero routers or workers, or an operating
     /// system thread-spawn failure. Threads already started are joined on failure.
-    pub fn start(config: ConTimeConfig<I::Time>, wrapper: W) -> Result<Self, contime_runtime::StartError> {
+    pub fn start(config: ConTimeConfig<I::Time>, wrapper: W) -> Result<Self, crate::StartError> {
         Self::start_with_progress(config, wrapper, ())
     }
 
@@ -33,7 +33,7 @@ where
         config: ConTimeConfig<I::Time>,
         wrapper: W,
         policy: P,
-    ) -> Result<Self, contime_runtime::StartError> {
+    ) -> Result<Self, crate::StartError> {
         let (input, incoming) = crossbeam_channel::unbounded();
         let incoming = std::sync::Arc::new(incoming);
         let (error_sender, errors) = crossbeam_channel::unbounded();
@@ -68,19 +68,19 @@ where
                 })
             })
             .collect();
-        let runtime = contime_runtime::Runtime::start(routers, workers)?;
+        let runtime = crate::ThreadTopology::start(routers, workers)?;
         let mut queues = runtime.queue_checks().to_vec();
         let weak = std::sync::Arc::downgrade(&incoming);
         queues.push(std::sync::Arc::new(move || weak.upgrade().is_none_or(|queue| queue.is_empty())));
         let registrations = activity();
         let output = runtime.input().clone();
         let coordinator = match std::thread::Builder::new().name("contime-admission".into()).spawn(move || {
-            contime_core::coordinate(
+            crate::coordinate(
                 incoming,
                 output,
                 controls,
                 registrations,
-                contime_core::CoordinatorSettings {
+                crate::CoordinatorSettings {
                     retention: config.history_retention,
                     workers: config.worker_count,
                     interval: config.pruning_interval,
@@ -91,7 +91,7 @@ where
             Ok(coordinator) => coordinator,
             Err(source) => {
                 runtime.shutdown();
-                return Err(contime_runtime::StartError::ThreadSpawn { stage: contime_runtime::RuntimeStage::Admission, source });
+                return Err(crate::StartError::ThreadSpawn { stage: crate::RuntimeStage::Admission, source });
             }
         };
         Ok(Self { runtime, input, coordinator, errors, error_sender, subscriptions, queues, types: PhantomData })
@@ -166,14 +166,14 @@ mod tests {
     fn start_rejects_an_empty_router_collection() {
         let result = ConTime::<TestInput, TestSnapshot, ()>::start(config(0, 1), ());
 
-        assert!(matches!(result, Err(contime_runtime::StartError::NoRouters)));
+        assert!(matches!(result, Err(crate::StartError::NoRouters)));
     }
 
     #[test]
     fn start_rejects_an_empty_worker_collection() {
         let result = ConTime::<TestInput, TestSnapshot, ()>::start(config(1, 0), ());
 
-        assert!(matches!(result, Err(contime_runtime::StartError::NoWorkers)));
+        assert!(matches!(result, Err(crate::StartError::NoWorkers)));
     }
 
     #[test]

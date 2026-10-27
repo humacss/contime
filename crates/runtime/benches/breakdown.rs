@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use contime_runtime::{Router, Runtime, ThreadOutcome, Worker};
+use contime_runtime::{Router, ThreadOutcome, ThreadTopology, Worker};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
@@ -194,13 +194,13 @@ impl BoundedTwoHopHarness {
 }
 
 struct TwoHopHarness {
-    runtime: Runtime<RouterInput, (), ()>,
+    runtime: ThreadTopology<RouterInput, (), ()>,
     events: Vec<Event>,
 }
 
 impl TwoHopHarness {
     fn new(input_count: usize) -> Self {
-        let runtime = Runtime::start(vec![RelayRouter], vec![DrainWorker]).unwrap();
+        let runtime = ThreadTopology::start(vec![RelayRouter], vec![DrainWorker]).unwrap();
         Self { runtime, events: events(input_count) }
     }
 

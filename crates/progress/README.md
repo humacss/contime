@@ -10,14 +10,14 @@ cutoff. Wrong-round, duplicate and unknown-participant reports are ignored.
 Missing reports never count as completion.
 
 `constrain(boundary)` conservatively lowers an unfinished observation when the
-caller discovers additional work. Core uses its previously committed safe
+caller discovers additional work. Runtime uses its previously committed safe
 boundary here when an admission can reconstruct an older checkpoint prefix.
 
 `CoverageConstraint` accounts for one admission's affected route keys. Until
 every route is covered, its bound includes the caller's conservative fallback.
 Once covered, only the reported actual work bounds remain. Unknown and duplicate
 keys cannot discharge other routes. This pure reducer owns no delivery, locking,
-or pruning policy. Core uses it for observation only; pruning keeps its original
+or pruning policy. Runtime uses it for observation only; pruning keeps its original
 irreversible admission constraint.
 
 Results are exclusive boundaries and preserve the caller's timestamp ordering,
@@ -38,7 +38,7 @@ minimum of stale local observations.
 
 ## Current reuse
 
-Core's pruning `Frontier` delegates measurement to this crate while retaining
+Runtime's pruning `Frontier` delegates measurement to this crate while retaining
 its requested/safe timestamps, round sequencing and monotonic pruning policy.
 The existing router fences and worker callbacks remain unchanged. The root's
 `ConTime::start_with_progress` accepts this crate's `ProgressPolicy`, selecting a
@@ -52,15 +52,15 @@ host) and measured exclusive boundary. Reports in successive rounds may fall
 back when newly admitted work requires earlier processing. External consumers must
 account for in-flight work before publishing a monotonic group-safe boundary.
 Policies that cache reports can implement the default `invalidated()` callback.
-Core invokes it before routing admitted batches, including internal feedback,
+Runtime invokes it before routing admitted batches, including internal feedback,
 so a completed insertion cannot leave a pre-admission report in that cache.
-It does not account for messages still outside Core or replace fenced reports.
+It does not account for messages still outside Runtime or replace fenced reports.
 
 ## Verification
 
 ```sh
 cargo +1.95.0 test --offline --manifest-path crates/progress/Cargo.toml
-cargo +1.95.0 test --offline --manifest-path crates/core/Cargo.toml
+cargo +1.95.0 test --offline --manifest-path crates/runtime/Cargo.toml
 ```
 
 Public-API tests cover missing and stale reports, duplicate completion,

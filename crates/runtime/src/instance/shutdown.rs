@@ -2,18 +2,18 @@
 
 use std::convert::Infallible;
 
-use crate::{ConTime, Input};
+use crate::ConTime;
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     /// Closes admission and joins the topology. Stop external producers and use
     /// application-owned completion or progress conditions to finish any required
     /// causal work before releasing borrowed/shared owners and calling this
     /// consuming method. Running applications must not rely on global idle.
     /// Idle waits are helpers for controlled tests and benchmarks only.
-    pub fn shutdown(self) -> contime_runtime::ShutdownReport<contime_router::RouterError, Infallible> {
+    pub fn shutdown(self) -> crate::ShutdownReport<contime_router::RouterError, Infallible> {
         let _ = self.input.send(crate::RouterMessage::Shutdown);
         let _ = self.coordinator.join();
         self.runtime.shutdown()
@@ -92,8 +92,8 @@ mod tests {
     fn shutdown_joins_every_supplied_process() {
         let report = runtime().shutdown();
 
-        assert_eq!(report.routers, vec![contime_runtime::ThreadOutcome::Completed]);
-        assert_eq!(report.workers, vec![contime_runtime::ThreadOutcome::Completed]);
+        assert_eq!(report.routers, vec![crate::ThreadOutcome::Completed]);
+        assert_eq!(report.workers, vec![crate::ThreadOutcome::Completed]);
     }
 
     #[test]

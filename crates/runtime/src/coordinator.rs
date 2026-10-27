@@ -6,7 +6,7 @@ use contime_worker::AdvanceTime;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::frontier::Frontier;
-use crate::{Advance, Input, ProgressObservation, ProgressPolicy, RejectionMessage, RejectionReason, RouterBatch, RouterMessage};
+use crate::{Advance, ProgressObservation, ProgressPolicy, RejectionMessage, RejectionReason, RouterBatch, RouterMessage, ThreadInput};
 
 /// Configuration for the admission coordinator run by the owning orchestrator.
 pub struct Settings<T> {
@@ -36,7 +36,7 @@ pub struct Settings<T> {
 /// # Panics
 ///
 /// Panics if `settings.workers` is zero.
-pub fn run<I: Input, S, P: ProgressPolicy<I::Time>>(
+pub fn run<I: ThreadInput, S, P: ProgressPolicy<I::Time>>(
     input: Arc<Receiver<RouterMessage<I, S>>>,
     output: Sender<RouterMessage<I, S>>,
     controls: Vec<Sender<contime_router::Flush>>,
@@ -217,7 +217,7 @@ pub fn run<I: Input, S, P: ProgressPolicy<I::Time>>(
     }
 }
 
-pub(crate) fn admit<I: Input, S>(
+pub(crate) fn admit<I: ThreadInput, S>(
     mut batch: RouterBatch<I>,
     source: Option<I::Time>,
     frontier: &mut Frontier<I::Time>,
@@ -260,7 +260,7 @@ mod tests {
             self.0
         }
     }
-    impl Input for Event {
+    impl crate::Input for Event {
         fn event_id(&self) -> u128 {
             self.0 .0 as u128
         }

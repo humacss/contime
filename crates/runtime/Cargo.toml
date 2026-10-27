@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 autobenches = false
 license = "MIT"
-description = "Isolated thread and channel orchestration for ConTime"
+description = "Managed background processing and thread lifecycle for ConTime"
 publish = false
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime-runtime"
@@ -15,9 +15,18 @@ categories = ["data-structures", "concurrency"]
 include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [dependencies]
+contime-core = { path = "../core", version = "0.1.0" }
+contime-api = { path = "../api", version = "0.1.0" }
+contime-events = { path = "../events", version = "0.1.0" }
+contime-lanes = { path = "../lanes", version = "0.1.0" }
+contime-progress = { path = "../progress", version = "0.1.0" }
+contime-router = { path = "../router", version = "0.1.0" }
+contime-worker = { path = "../worker", version = "0.1.0" }
+contime-checkpoints = { package = "contime-snapshots", path = "../snapshots", version = "0.1.0" }
 crossbeam-channel = "0.5"
 
 [dev-dependencies]
+rstest = { version = "0.26", default-features = false }
 criterion = { version = "0.5", features = ["html_reports"] }
 pprof = { version = "0.15", features = ["criterion", "flamegraph"] }
 

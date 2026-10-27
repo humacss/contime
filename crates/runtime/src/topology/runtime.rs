@@ -2,24 +2,24 @@ use std::fmt;
 
 use crossbeam_channel::Sender;
 
-use crate::Runtime;
+use crate::ThreadTopology;
 
 /// An apply input returned when the shared router queue is unavailable.
 #[derive(Debug, Eq, PartialEq)]
-pub struct RuntimeSendError<I> {
+pub struct TopologySendError<I> {
     /// Original unsent value, returned because every router receiver disconnected.
     pub input: I,
 }
 
-impl<I> fmt::Display for RuntimeSendError<I> {
+impl<I> fmt::Display for TopologySendError<I> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("the runtime input queue is unavailable")
     }
 }
 
-impl<I> std::error::Error for RuntimeSendError<I> where I: fmt::Debug {}
+impl<I> std::error::Error for TopologySendError<I> where I: fmt::Debug {}
 
-impl<I, RE, WE> Runtime<I, RE, WE> {
+impl<I, RE, WE> ThreadTopology<I, RE, WE> {
     /// Observes whether any owned router or worker thread has finished.
     /// This reads join-handle status only: it sends no messages and does not
     /// wait, join threads, inspect queues, or establish an idle barrier.
@@ -53,11 +53,11 @@ impl<I, RE, WE> Runtime<I, RE, WE> {
     ///
     /// # Errors
     ///
-    /// If every router receiver has disconnected, returns [`RuntimeSendError`]
+    /// If every router receiver has disconnected, returns [`TopologySendError`]
     /// containing the original input. A successful send is not evidence that a
     /// router or worker will ultimately process the message successfully.
-    pub fn send(&self, input: I) -> Result<(), RuntimeSendError<I>> {
-        self.input.send(input).map_err(|error| RuntimeSendError { input: error.0 })
+    pub fn send(&self, input: I) -> Result<(), TopologySendError<I>> {
+        self.input.send(input).map_err(|error| TopologySendError { input: error.0 })
     }
 }
 
@@ -68,7 +68,7 @@ mod tests {
 
     use crossbeam_channel::{Receiver, Sender};
 
-    use crate::{Router, Runtime, Worker};
+    use crate::{Router, ThreadTopology, Worker};
 
     struct RelayRouter {
         index: usize,
@@ -103,12 +103,16 @@ mod tests {
         }
     }
 
-    fn test_runtime(router_count: usize, received: Arc<Mutex<Vec<u64>>>, received_counts: Arc<Vec<AtomicUsize>>) -> Runtime<u64, (), ()> {
+    fn test_runtime(
+        router_count: usize,
+        received: Arc<Mutex<Vec<u64>>>,
+        received_counts: Arc<Vec<AtomicUsize>>,
+    ) -> ThreadTopology<u64, (), ()> {
         let routers = (0..router_count).map(|index| RelayRouter { index, received_counts: Arc::clone(&received_counts) }).collect();
-        Runtime::start(routers, vec![RecordingWorker { received }]).unwrap()
+        ThreadTopology::start(routers, vec![RecordingWorker { received }]).unwrap()
     }
 
-    fn finish_test_runtime(runtime: Runtime<u64, (), ()>) {
+    fn finish_test_runtime(runtime: ThreadTopology<u64, (), ()>) {
         let report = runtime.shutdown();
         assert!(report.routers.iter().all(|outcome| matches!(outcome, crate::ThreadOutcome::Completed)));
         assert!(report.workers.iter().all(|outcome| matches!(outcome, crate::ThreadOutcome::Completed)));
@@ -122,7 +126,7 @@ mod tests {
             Ok::<(), ()>(())
         });
         let (input, _incoming) = crossbeam_channel::unbounded();
-        let runtime = Runtime::<(), (), ()> { input, routers: Vec::new(), workers: vec![worker], queue_checks: Vec::new() };
+        let runtime = ThreadTopology::<(), (), ()> { input, routers: Vec::new(), workers: vec![worker], queue_checks: Vec::new() };
         assert!(!runtime.has_stopped_components());
         release.send(()).unwrap();
         runtime.shutdown();
@@ -138,7 +142,7 @@ mod tests {
                 std::thread::yield_now();
             }
             let (input, _incoming) = crossbeam_channel::unbounded();
-            let mut runtime = Runtime::<(), (), ()> { input, routers: Vec::new(), workers: Vec::new(), queue_checks: Vec::new() };
+            let mut runtime = ThreadTopology::<(), (), ()> { input, routers: Vec::new(), workers: Vec::new(), queue_checks: Vec::new() };
             if is_worker {
                 runtime.workers.push(completed);
             } else {
@@ -187,7 +191,7 @@ mod tests {
     fn send_returns_the_input_when_the_shared_queue_is_closed() {
         let (input, receiver) = crossbeam_channel::unbounded();
         drop(receiver);
-        let runtime = Runtime::<u64, (), ()> { input, routers: Vec::new(), workers: Vec::new(), queue_checks: Vec::new() };
+        let runtime = ThreadTopology::<u64, (), ()> { input, routers: Vec::new(), workers: Vec::new(), queue_checks: Vec::new() };
 
         let error = runtime.send(42).unwrap_err();
 

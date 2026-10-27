@@ -2,11 +2,11 @@
 
 use contime_api::ApiError;
 
-use crate::{ConTime, Input, RejectionReason};
+use crate::{ConTime, RejectionReason};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     /// Enqueues external inputs without waiting for admission or replay.
     /// Observe rejected inputs through [`Self::errors`]. Use [`Self::send`] with

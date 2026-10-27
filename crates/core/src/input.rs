@@ -12,7 +12,7 @@ pub(crate) fn prepare_inputs<I: Input>(inputs: Vec<I>) -> Vec<SharedEvent<I>> {
 
 impl<I: Input> From<I> for SharedEvent<I> {
     fn from(input: I) -> Self {
-        Self { inner: Arc::new(input), observation: None }
+        Self { inner: Arc::new(input) }
     }
 }
 
@@ -21,7 +21,7 @@ where
     I: Input,
 {
     fn clone(&self) -> Self {
-        Self { inner: self.inner.clone(), observation: self.observation.clone() }
+        Self { inner: self.inner.clone() }
     }
 }
 
@@ -66,14 +66,5 @@ where
 
     fn time(&self) -> Self::Time {
         self.deref().time()
-    }
-}
-
-impl<I> contime_router::RoutableInput for SharedEvent<I>
-where
-    I: Input,
-{
-    fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
-        self.deref().snapshot_ids(emit);
     }
 }

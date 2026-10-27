@@ -1,24 +1,47 @@
-//! Thread and channel lifecycle for opaque router and worker processes.
+//! Managed background ConTime execution, admission and thread lifecycle.
 //!
-//! Implement [`Router`] and [`Worker`], supply nonempty collections to
-//! [`Runtime::start`], and submit messages through [`Runtime::send`] or
-//! [`Runtime::input`]. Routers compete for a shared unbounded input queue; each
-//! worker has a private unbounded queue receiving from every router.
-//! This crate does not interpret messages or impose ordering across routers.
-//!
-//! [`Runtime::shutdown`] closes the owned sender and joins routers before
-//! workers, collecting a [`ShutdownReport`] even when a process fails or panics.
-//! Drop external sender clones before shutdown so receivers can disconnect.
-//! Process implementations must release their channels and return for joining
-//! to finish; this crate neither cancels nor restarts them. Dropping a runtime
-//! without explicit shutdown drops its join handles and does not join threads.
-
+//! [`ConTime::start`] starts the complete runtime. The root `contime` crate
+//! re-exports this interface. Shared application/storage contracts live in Core.
+//! [`ThreadTopology`] is the low-level generic topology used by process adapters
+//! and diagnostics; it does not interpret messages or coordinate admission.
 #![deny(missing_docs)]
-
-mod runtime;
-mod shutdown;
-mod start;
+mod checkpoint;
+mod coordinator;
+mod frontier;
+mod input;
+mod instance;
+#[cfg(test)]
+mod listen;
+mod message;
+#[cfg(test)]
+#[path = "../tests/controlled/replay_frontier.rs"]
+mod replay_frontier_tests;
+mod router;
+#[cfg(test)]
+mod testing;
+mod topology;
 mod types;
-
-pub use runtime::RuntimeSendError;
-pub use types::{Router, Runtime, RuntimeStage, ShutdownReport, StartError, ThreadOutcome, Worker};
+mod worker;
+pub use contime_api::{ApiError, ApplyResponse, RejectionMessage};
+pub use contime_core::{checkpoints, lanes, Input, RejectionReason};
+pub use contime_progress::{ProgressObservation, ProgressPolicy};
+pub use contime_router::Placement;
+pub use contime_worker::AdvanceTime;
+pub use instance::{ConTime, ConTimeConfig, IdleError};
+/// A managed background ConTime instance.
+pub type Runtime<I, S, W> = ConTime<I, S, W>;
+pub use coordinator::{run as coordinate, Settings as CoordinatorSettings};
+pub use topology::{Router, RuntimeStage, ShutdownReport, StartError, ThreadOutcome, ThreadTopology, TopologySendError, Worker};
+pub use types::{
+    Advance, CompletionHandle, EventQuery, Route, RouterBatch, RouterMessage, RouterProcess, SharedEvent, SnapshotListen, SnapshotListener,
+    SnapshotListenerMessage, SnapshotQuery, WorkerBatch, WorkerMessage, WorkerProcess,
+};
+/// An input that can cross the managed runtime's thread boundaries.
+/// Core application and storage contracts require only [`Input`].
+pub trait ThreadInput: Input<Time: Send + Sync> + Send + Sync {}
+impl<I> ThreadInput for I
+where
+    I: Input + Send + Sync,
+    I::Time: Send + Sync,
+{
+}

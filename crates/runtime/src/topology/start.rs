@@ -4,7 +4,7 @@ use std::thread::JoinHandle;
 
 use crossbeam_channel::unbounded;
 
-use crate::{Router, Runtime, RuntimeStage, StartError, Worker};
+use crate::{Router, RuntimeStage, StartError, ThreadTopology, Worker};
 
 trait Deps {
     fn spawn<T, F>(&self, name: String, run: F) -> io::Result<JoinHandle<T>>
@@ -15,7 +15,7 @@ trait Deps {
 
 struct DefaultDeps;
 
-type StartedRuntime<R, W> = Runtime<<R as Router>::Input, <R as Router>::Error, <W as Worker>::Error>;
+type StartedRuntime<R, W> = ThreadTopology<<R as Router>::Input, <R as Router>::Error, <W as Worker>::Error>;
 
 impl Deps for DefaultDeps {
     fn spawn<T, F>(&self, name: String, run: F) -> io::Result<JoinHandle<T>>
@@ -27,7 +27,7 @@ impl Deps for DefaultDeps {
     }
 }
 
-impl Runtime<(), (), ()> {
+impl ThreadTopology<(), (), ()> {
     /// Takes ownership of the supplied processes and starts workers, then routers.
     ///
     /// Each worker receives a private unbounded queue. Routers share one
@@ -115,7 +115,7 @@ where
 
     drop(input_receiver);
     drop(worker_senders);
-    Ok(Runtime { input: input_sender, routers: router_handles, workers: worker_handles, queue_checks })
+    Ok(ThreadTopology { input: input_sender, routers: router_handles, workers: worker_handles, queue_checks })
 }
 
 fn join_ignoring_outcomes<E>(handles: Vec<JoinHandle<Result<(), E>>>) {
@@ -134,7 +134,7 @@ mod tests {
     use crossbeam_channel::{unbounded, Receiver, Sender};
 
     use super::{start_with_deps, Deps};
-    use crate::{Router, Runtime, StartError, Worker};
+    use crate::{Router, StartError, ThreadTopology, Worker};
 
     struct TestRouter;
 
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn start_accepts_preassembled_router_and_worker_instances() {
-        let runtime = Runtime::start(vec![TestRouter, TestRouter], vec![TestWorker]).unwrap();
+        let runtime = ThreadTopology::start(vec![TestRouter, TestRouter], vec![TestWorker]).unwrap();
         let checks = runtime.queue_checks().to_vec();
         assert_eq!(checks.len(), 2); // Shared router queue plus one worker queue.
         assert!(checks.iter().all(|empty| empty()));
@@ -177,21 +177,21 @@ mod tests {
 
     #[test]
     fn zero_router_count_is_rejected() {
-        let result = Runtime::start(Vec::<TestRouter>::new(), vec![TestWorker]);
+        let result = ThreadTopology::start(Vec::<TestRouter>::new(), vec![TestWorker]);
 
         assert!(matches!(result, Err(StartError::NoRouters)));
     }
 
     #[test]
     fn zero_worker_count_is_rejected() {
-        let result = Runtime::start(vec![TestRouter], Vec::<TestWorker>::new());
+        let result = ThreadTopology::start(vec![TestRouter], Vec::<TestWorker>::new());
 
         assert!(matches!(result, Err(StartError::NoWorkers)));
     }
 
     #[test]
     fn startup_preserves_the_supplied_process_counts() {
-        let runtime = Runtime::start(vec![TestRouter, TestRouter], vec![TestWorker, TestWorker, TestWorker, TestWorker]).unwrap();
+        let runtime = ThreadTopology::start(vec![TestRouter, TestRouter], vec![TestWorker, TestWorker, TestWorker, TestWorker]).unwrap();
 
         let report = runtime.shutdown();
 

@@ -2,11 +2,11 @@
 
 use crossbeam_channel::Sender;
 
-use crate::{ApiError, ConTime, Input, SnapshotListenerMessage};
+use crate::{ApiError, ConTime, SnapshotListenerMessage};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     /// Registers replay notifications for the requested IDs through `time`.
     ///

@@ -19,16 +19,16 @@ four workers, and 2.275 us for sixteen workers.
 The broadcast does not establish a barrier with apply batches being processed
 by another router. With multiple routers, an earlier apply and a later advance
 can therefore reach the same worker in the opposite order. The router crate
-provides dispatch, not cross-router sequencing. Core coordinates safety through
+provides dispatch, not cross-router sequencing. Runtime coordinates safety through
 router fences and worker reports. `Resolve` broadcasts the round identifier,
 authorized horizon, and shared completion ownership to every worker. Completion
 closes only after all recipients release the round and finish required forwarding;
-Core serializes subsequent rounds against that completion.
+Runtime serializes subsequent rounds against that completion.
 
 `contime-router` receives complete input batches, deterministically maps each
 snapshot route to a worker, and sends one final batch per affected worker.
 
-The root orchestrator uses this workspace member through Core's `RouterProcess`
+The managed Runtime uses this workspace member through its `RouterProcess`
 adapter. The router itself has no dependency on `contime` or `contime-api`.
 `route_messages` serves the running pipeline; the independent `route` helper
 uses the same dispatch kernel for apply-only routing.

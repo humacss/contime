@@ -1,8 +1,8 @@
 use std::thread::JoinHandle;
 
-use crate::{Runtime, ShutdownReport, ThreadOutcome};
+use crate::{ShutdownReport, ThreadOutcome, ThreadTopology};
 
-impl<I, RE, WE> Runtime<I, RE, WE> {
+impl<I, RE, WE> ThreadTopology<I, RE, WE> {
     /// Drops the owned input sender and joins all routers, then all workers.
     ///
     /// Every thread is joined even if another returns an error or panics. The
@@ -39,7 +39,7 @@ mod tests {
 
     use crossbeam_channel::{Receiver, Sender};
 
-    use crate::{Router, Runtime, ThreadOutcome, Worker};
+    use crate::{Router, ThreadOutcome, ThreadTopology, Worker};
 
     struct FailingRouter(usize);
 
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn shutdown_collects_every_returned_error_without_returning_early() {
-        let runtime = Runtime::start(vec![FailingRouter(0), FailingRouter(1)], vec![FailingWorker(0), FailingWorker(1)]).unwrap();
+        let runtime = ThreadTopology::start(vec![FailingRouter(0), FailingRouter(1)], vec![FailingWorker(0), FailingWorker(1)]).unwrap();
 
         let report = runtime.shutdown();
 
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn shutdown_distinguishes_router_and_worker_panics() {
-        let runtime = Runtime::start(vec![PanickingRouter], vec![PanickingWorker]).unwrap();
+        let runtime = ThreadTopology::start(vec![PanickingRouter], vec![PanickingWorker]).unwrap();
 
         let report = runtime.shutdown();
 
@@ -150,7 +150,7 @@ mod tests {
         let routers_for_factory = Arc::clone(&routers_returned);
         let routers_for_worker = Arc::clone(&routers_returned);
         let observed_for_worker = Arc::clone(&worker_observed);
-        let runtime = Runtime::start(
+        let runtime = ThreadTopology::start(
             vec![
                 OrderedRouter { returned: Arc::clone(&routers_for_factory) },
                 OrderedRouter { returned: Arc::clone(&routers_for_factory) },

@@ -1,23 +1,38 @@
 # contime-runtime
 
+`contime-runtime` owns the managed ConTime instance, admission coordination,
+protocol adapters, background threads, and shutdown. Shared application and
+storage contracts live in `contime-core`.
+
+Use `ConTime::start` with `ConTimeConfig` to start a managed instance. Public
+operations submit inputs, advance processing, query retained state, and register
+listeners. `shutdown` closes admission and joins the owned topology. Inputs,
+application state, and wrappers must satisfy the managed thread boundaries.
+`ThreadInput` adds `Send + Sync` for events and timestamps to Core's `Input`
+contract; snapshot state and application wrappers must be sendable as well.
+`Runtime<I, S, W>` is an alias for the managed `ConTime<I, S, W>` instance.
+
+The low-level topology is available separately as `ThreadTopology`; the guide
+below describes that generic thread and channel owner.
+
 Start with the `Router` and `Worker` traits, then pass owned nonempty process
-collections to `Runtime::start`. This is a generic thread topology: its message
+collections to `ThreadTopology::start`. This is a generic thread topology: its message
 types and process behavior are supplied by the caller.
 
 Submission acknowledges enqueueing. `shutdown` closes the owned sender and
 joins every component, preserving errors and panics in `ShutdownReport`. Drop
 external input-sender clones before calling it. Process implementations must
-release channels and return for shutdown to finish. Dropping `Runtime` without
+release channels and return for shutdown to finish. Dropping `ThreadTopology` without
 calling `shutdown` detaches join handles and does not wait for completion.
 
-`contime-runtime` is the isolated process-local execution topology for
+`ThreadTopology` is the isolated process-local execution topology for
 ConTime's apply path. It starts router and worker threads, connects them with
 Crossbeam channels, exposes one shared opaque router input boundary, and joins the complete
 topology during shutdown.
 
-The crate does not depend on `contime` or any other ConTime subcrate. It
-declares local `Router` and `Worker` traits. The root `contime` orchestrator
-supplies Core process adapters that implement those contracts.
+The topology declares local `Router` and `Worker` traits. Managed process
+adapters in this crate implement those contracts and connect the shared Core
+storage adapter to the router and worker crates.
 
 ## Topology
 
@@ -28,7 +43,7 @@ supplies Core process adapters that implement those contracts.
 - The caller supplies the complete router and worker instance collections.
 - Router and worker collections must both be nonempty.
 
-The runtime owns thread and channel lifecycle only. It does not inspect,
+The generic topology owns thread and channel lifecycle only. It does not inspect,
 clone, route, apply, replay, or otherwise interpret messages.
 
 `queue_checks()` exposes read-only emptiness checks created with the queues:
@@ -47,26 +62,26 @@ ordering barrier.
 
 ## Lifecycle
 
-`Runtime::start` validates the supplied process collections, creates the channels, starts all
+`ThreadTopology::start` validates the supplied process collections, creates the channels, starts all
 workers, and then starts all routers. Threads receive deterministic names:
 `contime-worker-{index}` and `contime-router-{index}`.
 
 If a thread cannot be spawned, startup closes the partial topology and joins
 every thread already started before returning `StartError::ThreadSpawn`.
 
-A running `Runtime` offers `send(input)` and borrowed access to its shared
+A running `ThreadTopology` offers `send(input)` and borrowed access to its shared
 router input sender. The first available router receives each message. Callers may clone the sender, but explicit shutdown cannot finish until
 all external clones have been dropped.
 
-`Runtime::shutdown` drops the runtime-owned input sender, joins every router,
+`ThreadTopology::shutdown` drops the runtime-owned input sender, joins every router,
 then joins every worker after the router-owned worker senders have closed. Its
 report preserves one ordered outcome per thread and distinguishes completion,
 a returned implementation error, and a panic. The runtime observes failures
 but does not restart or recover failed threads in this version.
 
-Queries, advanced/time operations, memory policy, routing policy, replay,
-snapshots, automatic restarts, and live health monitoring are outside this
-crate.
+The generic topology leaves queries, advancement, retention, routing and replay
+to its process adapters. The managed instance assembles those adapters. Neither
+layer automatically restarts failed threads.
 
 ## Verification
 

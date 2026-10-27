@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use contime_runtime::{Router, Runtime, Worker};
+use contime_runtime::{Router, ThreadTopology, Worker};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
@@ -67,7 +67,7 @@ impl Worker for BenchmarkWorker {
 }
 
 struct Harness {
-    runtime: Runtime<RouterInput, (), ()>,
+    runtime: ThreadTopology<RouterInput, (), ()>,
     events: Vec<BenchmarkEvent>,
 }
 
@@ -78,9 +78,11 @@ struct PreparedRun {
 
 impl Harness {
     fn new(router_count: usize, worker_count: usize) -> Self {
-        let runtime =
-            Runtime::start((0..router_count).map(|_| BenchmarkRouter).collect(), (0..worker_count).map(|_| BenchmarkWorker).collect())
-                .unwrap();
+        let runtime = ThreadTopology::start(
+            (0..router_count).map(|_| BenchmarkRouter).collect(),
+            (0..worker_count).map(|_| BenchmarkWorker).collect(),
+        )
+        .unwrap();
         let events = (0..INPUT_COUNT).map(|value| BenchmarkEvent { worker_index: value % worker_count, value }).collect();
         Self { runtime, events }
     }

@@ -3,11 +3,11 @@
 `contime-api` isolates the work performed at ConTime's public input boundary.
 It does not know what receives or processes its output.
 
-The root `contime` crate uses these helpers to submit Core protocol messages.
+The managed Runtime uses these helpers to submit its protocol messages.
 This workspace member depends only on Crossbeam and defines its own generic
 rejection contract.
 
-The synchronous helpers here are independent functions. The root engine's
+The synchronous helpers here are independent functions. The managed instance's
 `apply` and `advance_to` methods enqueue work asynchronously. In the composed
 pipeline, closing an apply rejection stream acknowledges insertion; it does
 not establish replay completion.

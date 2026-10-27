@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{unbounded, Select};
 
-use crate::{ConTime, Input};
+use crate::ConTime;
 
 /// Idle could not be confirmed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,7 +37,7 @@ impl std::fmt::Display for IdleError {
 }
 impl std::error::Error for IdleError {}
 
-impl<I: Input, S, W> ConTime<I, S, W> {
+impl<I: crate::ThreadInput, S, W> ConTime<I, S, W> {
     /// Observes whether an admission, router, or worker thread has finished.
     /// This sends no probes and does not wait for work, replay, or idle. As
     /// with any health observation, components may stop after it returns.
@@ -104,6 +104,7 @@ mod tests {
     use super::*;
     use crate::checkpoints::{ApplyBatch, ApplyEvents, Snapshot};
     use crate::testing::Time;
+    use crate::Input;
 
     #[derive(Clone, Default)]
     struct Value(Time);

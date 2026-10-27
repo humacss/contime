@@ -43,26 +43,10 @@
 #![doc = concat!("```rust\n", include_str!("../examples/ordered_values.rs"), "\n```\n")]
 #![deny(missing_docs)]
 
-mod advance;
-mod api;
-mod apply;
-mod idle;
-mod listen;
-mod query;
-mod send;
-mod shutdown;
-mod start;
-
-#[cfg(test)]
-mod testing;
-
-pub use api::{ConTime, ConTimeConfig};
-pub use contime_api::{ApiError, ApplyResponse, RejectionMessage};
-pub use contime_core::{
-    checkpoints, lanes, Input, Placement, ProgressObservation, ProgressPolicy, RejectionReason, SharedEvent, SnapshotListenerMessage,
+/// Shared application contracts and synchronous storage adapters.
+pub use contime_core as core;
+pub use contime_core::{checkpoints, lanes, AdvanceTime, Input, RejectionReason};
+pub use contime_runtime::{
+    ApiError, ApplyResponse, ConTime, ConTimeConfig, IdleError, Placement, ProgressObservation, ProgressPolicy, RejectionMessage,
+    SharedEvent, ShutdownReport, SnapshotListenerMessage, StartError, ThreadInput, ThreadOutcome,
 };
-pub use contime_runtime::{ShutdownReport, StartError, ThreadOutcome};
-pub use contime_worker::AdvanceTime;
-pub use idle::IdleError;
-
-use contime_core::{RouterBatch, RouterMessage, RouterProcess, WorkerProcess};

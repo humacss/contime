@@ -2,11 +2,11 @@
 
 use crossbeam_channel::Sender;
 
-use crate::{ApiError, ConTime, Input, RouterMessage, SharedEvent};
+use crate::{ApiError, ConTime, RouterMessage, SharedEvent};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     /// Enqueues a read of the requested snapshots through `time`, inclusively.
     ///

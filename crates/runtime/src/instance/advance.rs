@@ -2,11 +2,11 @@
 
 use crossbeam_channel::Sender;
 
-use crate::{ApiError, ConTime, Input, RouterMessage};
+use crate::{ApiError, ConTime, RouterMessage};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     /// Subscribe to the horizon completed by every worker, including retention
     /// hooks. Samples strictly before each reported horizon may be considered

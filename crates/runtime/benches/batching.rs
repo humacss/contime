@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use contime_runtime::{Router, Runtime, ThreadOutcome, Worker};
+use contime_runtime::{Router, ThreadOutcome, ThreadTopology, Worker};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use pprof::criterion::{Output, PProfProfiler};
@@ -75,7 +75,7 @@ impl Worker for BatchWorker {
 }
 
 struct Harness {
-    runtime: Runtime<RouterInput, (), ()>,
+    runtime: ThreadTopology<RouterInput, (), ()>,
     batches: Vec<EventBatch>,
 }
 
@@ -87,7 +87,8 @@ struct PreparedRun {
 impl Harness {
     fn new(router_count: usize, worker_count: usize, batches_per_worker: usize, events_per_batch: usize) -> Self {
         let runtime =
-            Runtime::start((0..router_count).map(|_| BatchRouter).collect(), (0..worker_count).map(|_| BatchWorker).collect()).unwrap();
+            ThreadTopology::start((0..router_count).map(|_| BatchRouter).collect(), (0..worker_count).map(|_| BatchWorker).collect())
+                .unwrap();
         let batches = (0..worker_count)
             .flat_map(|worker_index| {
                 (0..batches_per_worker).map(move |batch_index| {

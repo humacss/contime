@@ -6,11 +6,11 @@ use crate::checkpoints::{ApplyEvents, ApplyWrapper, CheckpointConfig, Snapshot};
 use crossbeam_channel::Receiver;
 
 use crate::types::{CheckpointStorage, CheckpointStorageConfig};
-use crate::{Input, WorkerMessage, WorkerProcess};
+use crate::{WorkerMessage, WorkerProcess};
 
 impl<I, S, W> WorkerProcess<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
     S: Snapshot,
 {
     /// Registers idle observers for this worker.
@@ -34,9 +34,9 @@ where
     }
 }
 
-impl<I, S, W> contime_runtime::Worker for WorkerProcess<I, S, W>
+impl<I, S, W> crate::Worker for WorkerProcess<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + Send + 'static,
     W: ApplyWrapper<S, I> + Send + 'static,
 {
@@ -66,8 +66,8 @@ mod tests {
     use crate::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
     use contime_api::RejectionMessage;
 
+    use crate::Worker as RuntimeWorker;
     use contime_router::{RouteOutput, WorkerOutput};
-    use contime_runtime::Worker as RuntimeWorker;
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::{unbounded, TryRecvError};
 

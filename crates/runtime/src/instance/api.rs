@@ -1,6 +1,6 @@
 //! Configuration and ownership of the public in-memory pipeline.
 
-use crate::{Input, RejectionReason, RouterMessage};
+use crate::{RejectionReason, RouterMessage};
 use crossbeam_channel::{Receiver, Sender};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -26,9 +26,9 @@ pub struct ConTimeConfig<T> {
 /// A running apply-and-query pipeline.
 pub struct ConTime<I, S, W>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
-    pub(crate) runtime: contime_runtime::Runtime<RouterMessage<I, S>, contime_router::RouterError, std::convert::Infallible>,
+    pub(crate) runtime: crate::ThreadTopology<RouterMessage<I, S>, contime_router::RouterError, std::convert::Infallible>,
     pub(crate) input: Sender<RouterMessage<I, S>>,
     pub(crate) coordinator: std::thread::JoinHandle<()>,
     pub(crate) errors: Receiver<contime_api::RejectionMessage<RejectionReason>>,

@@ -1,10 +1,10 @@
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::{Input, RouterMessage, RouterProcess, WorkerMessage};
+use crate::{RouterMessage, RouterProcess, WorkerMessage};
 
 impl<I, S> RouterProcess<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
 {
     /// Registers idle observers for this router.
     pub fn with_activity(mut self, activity: Receiver<Sender<bool>>) -> Self {
@@ -27,9 +27,9 @@ where
     }
 }
 
-impl<I, S> contime_runtime::Router for RouterProcess<I, S>
+impl<I, S> crate::Router for RouterProcess<I, S>
 where
-    I: Input,
+    I: crate::ThreadInput,
     S: Send + 'static,
 {
     type Input = RouterMessage<I, S>;
@@ -48,7 +48,7 @@ mod tests {
 
     use contime_api::{ApplyOutput, RejectionMessage};
 
-    use contime_runtime::Router as RuntimeRouter;
+    use crate::Router as RuntimeRouter;
     use contime_worker::ApplyInput;
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::unbounded;

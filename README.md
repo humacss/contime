@@ -2,7 +2,7 @@
 
 `contime` is an in-memory Rust workspace that builds queryable continuous-time state from unreliable event streams.
 
-It handles delayed, duplicated, and out-of-order events, and distributes independent snapshot histories across workers. The root `contime` crate assembles the running engine. [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) connects its protocol and storage contracts; the other crates provide the individual parts.
+It handles delayed, duplicated, and out-of-order events, and distributes independent snapshot histories across workers. The root `contime` crate re-exports the managed runtime. [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) provides shared application contracts and synchronous storage; the other crates provide the individual parts.
 
 ## Continuous Time?
 
@@ -374,11 +374,11 @@ Advancement requests are asynchronous. Processing observations and pruning notif
 
 | Crate | Responsibility |
 | --- | --- |
-| `contime` (root) | Public engine handle, configuration, startup, operations, and shutdown |
-| [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Admission protocol, messages, and router/worker storage adapters |
+| `contime` (root) | Public facade re-exporting the managed instance and shared contracts |
+| [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Shared application contracts and synchronous storage adapters |
 | [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input batching and request boundaries |
 | [`contime-router`](https://github.com/humacss/contime/blob/main/crates/router/README.md) | Deterministic routing to worker-owned histories |
-| [`contime-runtime`](https://github.com/humacss/contime/blob/main/crates/runtime/README.md) | Thread topology, channels, and shutdown |
+| [`contime-runtime`](https://github.com/humacss/contime/blob/main/crates/runtime/README.md) | Managed instance, admission coordination, protocol adapters, thread topology, and shutdown |
 | [`contime-worker`](https://github.com/humacss/contime/blob/main/crates/worker/README.md) | History ownership and incremental replay scheduling |
 | [`contime-snapshots`](https://github.com/humacss/contime/blob/main/crates/snapshots/README.md) | Checkpoint storage and historical reconstruction |
 | [`contime-events`](https://github.com/humacss/contime/blob/main/crates/events/README.md) | Ordered retained event history |

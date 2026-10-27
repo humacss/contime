@@ -1,143 +1,258 @@
-use std::fmt;
-use std::io;
-use std::sync::Arc;
-use std::thread::JoinHandle;
+use crate::RejectionReason;
+use std::marker::PhantomData;
+
+#[cfg(test)]
+pub(crate) mod testing {
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+    pub struct Time(pub i64);
+
+    impl contime_checkpoints::Timestamp for Time {
+        fn previous(&self) -> Option<Self> {
+            self.0.checked_sub(1).map(Self)
+        }
+    }
+    impl contime_worker::AdvanceTime for Time {
+        fn saturating_sub(&self, other: &Self) -> Self {
+            Self(self.0.saturating_sub(other.0))
+        }
+    }
+}
 
 use crossbeam_channel::{Receiver, Sender};
 
-/// Opaque router execution owned by one runtime thread.
-pub trait Router: Send + 'static {
-    /// Opaque message taken from the shared competing-consumer router queue.
-    type Input: Send + 'static;
-    /// Opaque message sent to private worker queues.
-    type WorkerInput: Send + 'static;
-    /// Process error retained in the shutdown report without automatic recovery.
-    type Error: Send + 'static;
-
-    /// Consumes this process on its runtime-owned thread.
-    ///
-    /// `workers` follows the supplied worker collection order. Implementations
-    /// should drain queued input until disconnect and then release worker senders
-    /// and return, so shutdown can join the topology. Other routers may still be
-    /// dispatching after this router dequeues a message. Returning an error stops
-    /// only this process and is recorded when joined.
-    fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error>;
+/// An immutable event shared by its routed snapshot histories.
+pub struct SharedEvent<I>
+where
+    I: crate::ThreadInput,
+{
+    pub(crate) inner: contime_core::SharedEvent<I>,
+    pub(crate) observation: Option<crate::frontier::AdmissionObservation<I::Time>>,
 }
 
-/// Opaque worker execution owned by one runtime thread.
-pub trait Worker: Send + 'static {
-    /// Opaque message delivered to this worker’s private queue.
-    type Input: Send + 'static;
-    /// Process error retained in the shutdown report without automatic recovery.
-    type Error: Send + 'static;
-
-    /// Consumes this process on its runtime-owned thread.
-    ///
-    /// Implementations should drain their queue until all router-owned senders
-    /// disconnect and return. The runtime cannot interrupt a blocked implementation.
-    /// Errors and panics are collected at shutdown; neither restarts the worker.
-    fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error>;
+/// Request completion forwarded unchanged from API admission to the worker.
+#[derive(Clone)]
+pub struct CompletionHandle {
+    pub(crate) sender: Sender<contime_api::RejectionMessage<RejectionReason>>,
 }
 
-/// The thread whose startup failed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RuntimeStage {
-    /// Admission-stage identity available to higher-level lifecycle reporting.
-    /// The topology started by [`Runtime::start`] spawns only routers and workers.
-    Admission,
-    /// Router thread in the supplied router collection.
-    Router {
-        /// Zero-based router index.
-        index: usize,
-    },
-    /// Worker thread in the supplied worker collection.
-    Worker {
-        /// Zero-based worker index.
-        index: usize,
-    },
-}
-
-/// Failure to construct a complete runtime topology.
-#[derive(Debug)]
-pub enum StartError {
-    /// No router instances were supplied; no threads were started.
-    NoRouters,
-    /// No worker instances were supplied; no threads were started.
-    NoWorkers,
-    /// A thread could not start; already started threads were closed and joined.
-    ThreadSpawn {
-        /// Component whose thread creation failed.
-        stage: RuntimeStage,
-        /// Operating-system thread creation error.
-        source: io::Error,
-    },
-}
-
-impl fmt::Display for StartError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoRouters => formatter.write_str("the runtime requires at least one router"),
-            Self::NoWorkers => formatter.write_str("the runtime requires at least one worker"),
-            Self::ThreadSpawn { stage, source } => {
-                write!(formatter, "failed to start {stage:?}: {source}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for StartError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ThreadSpawn { source, .. } => Some(source),
-            Self::NoRouters | Self::NoWorkers => None,
-        }
-    }
-}
-
-/// Final state of one runtime thread.
-#[derive(Debug, Eq, PartialEq)]
-pub enum ThreadOutcome<E> {
-    /// The process returned `Ok(())` and its thread joined normally.
-    Completed,
-    /// The process returned its implementation-defined error.
-    Failed(E),
-    /// Joining observed a panic; the panic payload is discarded.
-    Panicked,
-}
-
-/// Ordered outcomes collected after every runtime thread has been joined.
-#[derive(Debug, Eq, PartialEq)]
-pub struct ShutdownReport<RE, WE> {
-    /// One outcome per router, in supplied collection order rather than finish order.
-    pub routers: Vec<ThreadOutcome<RE>>,
-    /// One outcome per worker, in supplied collection order rather than finish order.
-    pub workers: Vec<ThreadOutcome<WE>>,
-}
-
-/// Owned router/worker thread topology with one shared input sender.
+/// A processing or pruning timestamp paired with a closure-based completion.
 ///
-/// Call [`Self::shutdown`] to close and join it explicitly. Dropping the handle
-/// closes its sender and detaches the join handles; it does not wait for threads.
-/// External sender clones keep input connected until they are dropped.
-pub struct Runtime<I, RE, WE> {
-    pub(crate) input: Sender<I>,
-    pub(crate) routers: Vec<JoinHandle<Result<(), RE>>>,
-    pub(crate) workers: Vec<JoinHandle<Result<(), WE>>>,
-    pub(crate) queue_checks: Vec<Arc<dyn Fn() -> bool + Send + Sync>>,
+/// Protocol adapters construct and consume this opaque payload through their
+/// advancement traits. Dropping every completion sender clone ends the request.
+pub struct Advance<T> {
+    pub(crate) time: T,
+    pub(crate) completion: Sender<()>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{ShutdownReport, ThreadOutcome};
+/// One admitted API batch consumed by a router.
+pub struct RouterBatch<I>
+where
+    I: crate::ThreadInput,
+{
+    pub(crate) inputs: Vec<SharedEvent<I>>,
+    pub(crate) completion: CompletionHandle,
+}
 
-    #[test]
-    fn shutdown_report_preserves_every_ordered_outcome() {
-        let report: ShutdownReport<&str, &str> = ShutdownReport {
-            routers: vec![ThreadOutcome::Completed, ThreadOutcome::Failed("router")],
-            workers: vec![ThreadOutcome::Panicked, ThreadOutcome::Completed],
-        };
-        assert_eq!(report.routers.len(), 2);
-        assert_eq!(report.workers.len(), 2);
-        assert_eq!(report.routers[1], ThreadOutcome::Failed("router"));
-    }
+/// An opaque query for boxed snapshots at one inclusive timestamp.
+///
+/// API and router query traits construct and partition this request; worker
+/// response senders close when all requested histories have been checked.
+pub struct SnapshotQuery<T, S> {
+    pub(crate) time: T,
+    pub(crate) snapshot_ids: Vec<u128>,
+    pub(crate) response: Sender<Vec<Box<S>>>,
+}
+
+/// An opaque query for retained events in one history over `[from, to)`.
+///
+/// Results retain shared ownership of the original immutable inputs.
+pub struct EventQuery<T, I>
+where
+    I: crate::ThreadInput,
+{
+    pub(crate) snapshot_id: u128,
+    pub(crate) from: T,
+    pub(crate) to: T,
+    pub(crate) response: Sender<Vec<SharedEvent<I>>>,
+}
+
+/// Notification emitted by a registered snapshot listener.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SnapshotListenerMessage<T> {
+    /// A worker has accepted its portion of the requested registration.
+    /// Multiple workers may acknowledge disjoint ID subsets separately.
+    Registered {
+        /// Watched timestamp supplied by the registration.
+        time: T,
+        /// Snapshot IDs installed by the acknowledging worker.
+        snapshot_ids: Vec<u128>,
+    },
+    /// Relevant replay has affected registered histories at the watched time.
+    Replayed {
+        /// Watched timestamp, rather than the timestamp of an individual event.
+        time: T,
+        /// Registered histories affected by the replay update.
+        snapshot_ids: Vec<u128>,
+    },
+}
+
+/// Runtime adapter around a consumer-owned notification sender.
+#[derive(Clone)]
+pub struct SnapshotListener<T> {
+    pub(crate) notifications: Sender<SnapshotListenerMessage<T>>,
+}
+
+/// One snapshot-listener registration routed to owning workers.
+pub struct SnapshotListen<T> {
+    pub(crate) time: T,
+    pub(crate) snapshot_ids: Vec<u128>,
+    pub(crate) listener: SnapshotListener<T>,
+}
+
+/// Messages accepted by admission coordination and its downstream routers.
+///
+/// Coordination consumes internal admissions, worker reports, pruning subscriptions
+/// and shutdown. Those variants must not be sent directly to a router process.
+pub enum RouterMessage<I, S>
+where
+    I: crate::ThreadInput,
+{
+    /// Submit an external batch for admission and routing.
+    Apply(RouterBatch<I>),
+    /// Reconstruct requested snapshots at one timestamp without publishing effects.
+    SnapshotQuery(SnapshotQuery<I::Time, S>),
+    /// Read retained events from one snapshot history.
+    EventQuery(EventQuery<I::Time, I>),
+    /// Register interest in replay affecting snapshots at a watched timestamp.
+    SnapshotListen(SnapshotListen<I::Time>),
+    /// Raise the processing target and request subsequent safe retention progress.
+    Advance(Advance<I::Time>),
+    /// Forward a proven pruning boundary to the owning workers.
+    Prune(Advance<I::Time>),
+    /// Resume participants after a measurement and apply its safe pruning bound.
+    Resolve {
+        /// Measurement identity being resolved.
+        round: u64,
+        /// Safe boundary and completion handle for distributed resolution.
+        prune: Advance<I::Time>,
+    },
+    /// Mark ordered admission output before router flush controls are issued.
+    Fence {
+        /// Identity of the measurement requiring this marker.
+        round: u64,
+        /// Receives the round ID when a router observes the marker.
+        observed: Sender<u64>,
+    },
+    /// Admit feedback with the additional causal lower bound of its source.
+    Internal {
+        /// Earliest timestamp permitted by the generating application work.
+        source: I::Time,
+        /// Generated inputs awaiting admission.
+        batch: RouterBatch<I>,
+    },
+    /// Report one worker's fenced earliest remaining work to the coordinator.
+    Report {
+        /// Measurement identity; stale rounds are ignored.
+        round: u64,
+        /// Zero-based worker index in the configured participant set.
+        worker: usize,
+        /// Earliest possible work, or `None` when the worker has none.
+        minimum: Option<I::Time>,
+    },
+    /// Confirm a worker's completed retention boundary.
+    Pruned {
+        /// Zero-based worker index in the configured participant set.
+        worker: usize,
+        /// Boundary through which this worker has completed pruning.
+        horizon: I::Time,
+    },
+    /// Receive the current completed pruning horizon and later increases.
+    /// The coordinator reports the minimum completed horizon across all workers.
+    SubscribePrunedHorizon(Sender<I::Time>),
+    /// Stop the admission coordinator on receipt.
+    Shutdown,
+}
+
+/// One snapshot-specific route emitted by a router.
+pub struct Route<I>
+where
+    I: crate::ThreadInput,
+{
+    pub(crate) snapshot_id: u128,
+    pub(crate) input: SharedEvent<I>,
+}
+
+/// One routed apply batch consumed by a worker.
+pub struct WorkerBatch<I>
+where
+    I: crate::ThreadInput,
+{
+    pub(crate) routes: Vec<Route<I>>,
+    pub(crate) completion: CompletionHandle,
+}
+
+/// Routed requests consumed by one worker owning a set of snapshot histories.
+pub enum WorkerMessage<I, S>
+where
+    I: crate::ThreadInput,
+{
+    /// Insert the routes belonging to this worker and schedule affected histories.
+    Apply(WorkerBatch<I>),
+    /// Reconstruct snapshots without publishing live replay effects.
+    SnapshotQuery(SnapshotQuery<I::Time, S>),
+    /// Read the retained events in one owned history.
+    EventQuery(EventQuery<I::Time, I>),
+    /// Install this worker's portion of a replay listener registration.
+    SnapshotListen(SnapshotListen<I::Time>),
+    /// Raise this worker's processing target.
+    Advance(Advance<I::Time>),
+    /// Move retained history to a coordinator-proven safe boundary.
+    Prune(Advance<I::Time>),
+    /// Resume processing after a measurement and apply its pruning boundary.
+    Resolve {
+        /// Identity of the measurement being resolved.
+        round: u64,
+        /// Safe retention boundary and closure-based completion.
+        prune: Advance<I::Time>,
+    },
+    /// Mark this router's ordered input boundary for a measurement.
+    Fence {
+        /// Identity of the measurement requiring the fence.
+        round: u64,
+        /// Zero-based router index in the worker's participant set.
+        router: usize,
+    },
+}
+
+pub(crate) use contime_core::CheckpointStorageConfig;
+
+pub(crate) struct CheckpointStorage<I: crate::ThreadInput, S: contime_checkpoints::Snapshot<Time = I::Time>, W> {
+    pub(crate) snapshot_id: u128,
+    pub(crate) inner: contime_core::CheckpointStorage<I, S, W>,
+}
+
+/// Deterministic router execution supplied to the runtime.
+#[derive(Clone, Debug)]
+pub struct RouterProcess<I, S>
+where
+    I: crate::ThreadInput,
+{
+    pub(crate) placement: contime_router::Placement,
+    pub(crate) activity: Receiver<Sender<bool>>,
+    pub(crate) controls: Receiver<contime_router::Flush>,
+    pub(crate) input: PhantomData<fn() -> (I, S)>,
+}
+
+/// Replay worker execution supplied to the runtime.
+pub struct WorkerProcess<I, S, W>
+where
+    I: crate::ThreadInput,
+    S: contime_checkpoints::Snapshot,
+{
+    pub(crate) checkpoints: crate::checkpoints::CheckpointConfig,
+
+    pub(crate) wrapper: W,
+    pub(crate) activity: Receiver<Sender<bool>>,
+    pub(crate) coordination: Option<contime_worker::Coordination<I::Time>>,
+    pub(crate) types: PhantomData<fn() -> (I, S)>,
 }
