@@ -196,7 +196,7 @@ mod tests {
     fn empty_send_drops_the_original_rejection_sender() {
         let (rejection_sender, rejection_receiver) = unbounded();
 
-        send_with_deps::<InputBatch<u128, ()>, _, _, _, _>(&Defs, [] as [u128; 0], rejection_sender).unwrap();
+        send_with_deps::<InputBatch<u128, ()>, _, _, _, _>(&Stubs, [] as [u128; 0], rejection_sender).unwrap();
 
         assert_eq!(rejection_receiver.try_recv(), Err(TryRecvError::Disconnected));
     }

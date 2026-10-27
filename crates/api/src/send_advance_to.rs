@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn shared_defaults_complete_without_retaining_the_sender() {
         let (completion, done) = unbounded();
-        assert_eq!(send_advance_to_with_deps::<AdvanceMessage, _>(&Defs, 50, completion), Ok(()));
+        assert_eq!(send_advance_to_with_deps::<AdvanceMessage, _>(&Stubs, 50, completion), Ok(()));
         assert_eq!(done.try_recv(), Err(TryRecvError::Disconnected));
     }
 

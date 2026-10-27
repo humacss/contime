@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn apply_returns_an_empty_response_when_send_reports_no_rejections() {
-        let result = apply_with_deps::<TestReason, _>(&Defs, [13_u128]).unwrap();
+        let result = apply_with_deps::<TestReason, _>(&Stubs, [13_u128]).unwrap();
         assert!(result.is_empty());
     }
 
@@ -154,7 +154,7 @@ mod tests {
         let mut criterion = Criterion::default();
 
         criterion.bench_function("api/apply/no_rejections", |bencher| {
-            bencher.iter(|| black_box(apply_with_deps::<TestReason, _>(&Defs, [()]).unwrap()));
+            bencher.iter(|| black_box(apply_with_deps::<TestReason, _>(&Stubs, [()]).unwrap()));
         });
 
         criterion.final_summary();

@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn shared_defaults_return_no_events() {
-        assert_eq!(query_events_between_with_deps::<u64, u64>(&Defs, 7, 10, 30), Ok(Vec::new()));
+        assert_eq!(query_events_between_with_deps::<u64, u64>(&Stubs, 7, 10, 30), Ok(Vec::new()));
     }
 
     #[test]

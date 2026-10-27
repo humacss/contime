@@ -18,7 +18,7 @@ include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "
 manual = ["dep:contime-worker"]
 
 [dependencies]
-traitstub = { path = "../../../../timeless-4d-games/traitstub" }
+traitstub = "0.1.0"
 crossbeam-channel = "0.5"
 contime-worker = { path = "../worker", version = "0.1.0", optional = true }
 

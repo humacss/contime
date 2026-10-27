@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn synchronous_advance_finishes_when_the_completion_sender_closes() {
-        assert_eq!(advance_to_with_deps(&Defs, 50_u64), Ok(()));
+        assert_eq!(advance_to_with_deps(&Stubs, 50_u64), Ok(()));
     }
 
     #[test]
@@ -118,7 +118,7 @@ mod tests {
     fn benchmark_synchronous_advance() {
         let mut criterion = Criterion::default();
         criterion.bench_function("api/advance_to/immediate_completion", |bencher| {
-            bencher.iter(|| advance_to_with_deps(&Defs, black_box(50_u64)).unwrap());
+            bencher.iter(|| advance_to_with_deps(&Stubs, black_box(50_u64)).unwrap());
         });
         criterion.final_summary();
     }

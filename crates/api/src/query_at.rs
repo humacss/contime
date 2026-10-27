@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn shared_stubs_close_the_response_channel_without_results() {
-        assert_eq!(query_at_with_deps::<u64, u64, _>(&Defs, 42, [7]), Ok(Vec::new()));
+        assert_eq!(query_at_with_deps::<u64, u64, _>(&Stubs, 42, [7]), Ok(Vec::new()));
     }
 
     struct QueryOutput {
