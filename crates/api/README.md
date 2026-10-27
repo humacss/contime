@@ -1,13 +1,20 @@
 # contime-api
 
 `contime-api` isolates the work performed at ConTime's public input boundary.
-It does not know what receives or processes its output.
+Its default channel helpers do not know what receives or processes their output.
 
-The managed Runtime uses these helpers to submit its protocol messages.
-This workspace member depends only on Crossbeam and defines its own generic
-rejection contract.
+Runtime uses the default helpers to submit its protocol messages. The optional
+`manual` feature adds callback-based request adapters for the worker contracts;
+it owns no worker, storage, queue or processing loop. The root manual facade
+composes those adapters with Core storage and the thin manual driver.
 
-The synchronous helpers here are independent functions. The managed instance's
+Default channel helpers use Crossbeam. Enabling `manual` also depends on
+`contime-worker`; callbacks may capture thread-local state and never wait on a
+channel. They run only after a worker begins processing their request. Empty
+queries complete with an empty vector; dropping unprocessed requests does not
+invoke callbacks. Callbacks must not block waiting for the same worker.
+
+The synchronous helpers here are independent functions. The root engine's
 `apply` and `advance_to` methods enqueue work asynchronously. In the composed
 pipeline, closing an apply rejection stream acknowledges insertion; it does
 not establish replay completion.
@@ -132,16 +139,3 @@ round trip to a minimal downstream thread and synchronous result collection:
 The snapshot fixture allocates one boxed value per result downstream. The event
 fixture returns one contiguous vector, so the difference primarily describes
 result ownership and allocation rather than request construction.
-
-## Caller-driven request adapters
-
-The optional `manual` feature adds local callback-based adapters implementing
-`contime-worker` request and response contracts. It owns no worker, storage,
-queue or processing loop. Enabling this feature adds a dependency on
-`contime-worker`; the default channel helpers retain their existing contracts.
-
-Callbacks run synchronously once a worker begins processing their request and
-may capture thread-local state. Empty processed queries invoke their callback
-with an empty vector. Dropping an unprocessed request does not invoke its
-callback, and unwinding does not report successful empty completion. Callbacks
-must not block waiting for the same worker.

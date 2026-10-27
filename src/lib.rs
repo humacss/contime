@@ -1,8 +1,8 @@
 //! Continuous-time state with managed background or caller-driven processing.
 //!
-//! The default `runtime` feature starts managed background processing. With
-//! `default-features = false, features = ["manual"]`, the host drives processing
-//! through `contime::manual` without depending on the managed Runtime.
+//! The default `runtime` feature exposes the managed `contime-runtime` API.
+//! With `default-features = false` and `features = ["manual"]`, use `contime::manual`
+//! to drive a worker yourself without depending on the threaded runtime.
 #![deny(missing_docs)]
 #![cfg_attr(
     feature = "runtime",
@@ -51,7 +51,7 @@ Run this example with `cargo run -p contime --example counter`."###
 )]
 #![cfg_attr(feature = "runtime", doc = concat!("```rust\n", include_str!("../examples/cases/counter/main.rs"), "\n```\n"))]
 
-/// Shared application contracts and synchronous storage adapters.
+/// Shared application contracts and storage adapters for either execution mode.
 pub use contime_core as core;
 pub use contime_core::{checkpoints, lanes, AdvanceTime, Input, RejectionReason};
 /// Caller-driven processing; creating an instance starts no background threads.

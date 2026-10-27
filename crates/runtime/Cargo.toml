@@ -2,10 +2,11 @@
 name = "contime-runtime"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.90"
 autobenches = false
 license = "MIT"
 description = "Managed background processing and thread lifecycle for ConTime"
-publish = false
+publish = ["crates-io"]
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime-runtime"
 readme = "README.md"

@@ -1,8 +1,11 @@
+[![Crates.io](https://img.shields.io/crates/v/contime.svg)](https://crates.io/crates/contime)
+[![Docs](https://docs.rs/contime/badge.svg)](https://docs.rs/contime)
+
 # contime
 
 `contime` is an in-memory Rust workspace that builds queryable continuous-time state from unreliable event streams.
 
-It handles delayed, duplicated, and out-of-order events, and distributes independent snapshot histories across workers. The root `contime` crate re-exports the managed runtime. [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) provides shared application contracts and synchronous storage; the other crates provide the individual parts.
+It handles delayed, duplicated, and out-of-order events, and distributes independent snapshot histories across workers. The root `contime` crate re-exports managed or caller-driven processing. [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) provides shared application contracts and synchronous storage; the other crates provide the individual parts.
 
 ## Continuous Time?
 
@@ -59,7 +62,7 @@ contime = "0.1.0"
 fastrand = "2"
 ```
 
-ConTime supports Rust 1.90 or newer. The default `runtime` feature starts managed background processing. For caller-driven processing, enable `manual` with default features disabled; both features can also be enabled together. `fastrand` only varies the example's event intervals and increments; it is not required by ConTime. For local development, you can instead use `contime = { path = "/path/to/contime" }`.
+ConTime supports Rust 1.90 or newer. The default `runtime` feature starts managed background threads. For caller-driven processing, use `contime = { version = "0.1", default-features = false, features = ["manual"] }` and create a `contime::manual::ManualConTime` instance. Creating that instance starts no threads; your application calls `process()` between its other work, with an optional `process_with_clock` helper for budgeted processing. The [manual crate](crates/manual/README.md) describes its worker contracts and processing budget. Both features may be enabled together. Shared application and storage adapters are available through `contime::core`. `fastrand` only varies the example's event intervals and increments; it is not required by ConTime. For local development, you can instead use `contime = { path = "/path/to/contime" }`.
 
 The optional `counters` feature records worker-owned insertion and live replay
 application totals. It is disabled by default. With `monitor` enabled, totals and
@@ -495,17 +498,35 @@ Advancement requests are asynchronous. Processing observations and pruning notif
 
 | Crate | Responsibility |
 | --- | --- |
-| `contime` (root) | Public facade for managed or caller-driven processing and shared contracts |
-| [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Shared application contracts and synchronous storage adapters |
-| [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input requests, responses, and optional local callback adapters |
+| [`contime-monitor`](crates/monitor/README.md) | Read-only worker status, workload accounting, and bounded observation history |
+| [`contime-simulator`](crates/simulator/README.md) | Caller-driven generation, independent validation, and paced Maximum admission |
+| [`contime-batcher`](crates/batcher/README.md) | Bounded packetization and ready-queue draining for the native pipeline |
 | [`contime-manual`](crates/manual/README.md) | Caller-driven processing of one worker between complete operations |
+| `contime` (root) | Public facade and selection of manual or managed runtime processing |
+| [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Shared application contracts and synchronous history/storage adapters |
+| [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input requests, responses, and optional local callback adapters |
 | [`contime-router`](https://github.com/humacss/contime/blob/main/crates/router/README.md) | Deterministic routing to worker-owned histories |
-| [`contime-runtime`](https://github.com/humacss/contime/blob/main/crates/runtime/README.md) | Managed instance, admission coordination, protocol adapters, thread topology, and shutdown |
+| [`contime-runtime`](https://github.com/humacss/contime/blob/main/crates/runtime/README.md) | Managed instance, admission, batching integration, router/worker threads, and shutdown |
 | [`contime-worker`](https://github.com/humacss/contime/blob/main/crates/worker/README.md) | History ownership and incremental replay scheduling |
 | [`contime-snapshots`](https://github.com/humacss/contime/blob/main/crates/snapshots/README.md) | Checkpoint storage and historical reconstruction |
 | [`contime-events`](https://github.com/humacss/contime/blob/main/crates/events/README.md) | Ordered retained event history |
 | [`contime-lanes`](https://github.com/humacss/contime/blob/main/crates/lanes/README.md) | Consumer application and hook contracts |
 | [`contime-progress`](https://github.com/humacss/contime/blob/main/crates/progress/README.md) | Participant progress measurement |
+
+`contime-manual` owns caller-driven processing; `contime-batcher` owns transport batching for the native pipeline. Neither depends on the other.
+
+Verify each concern independently:
+
+```bash
+cargo +1.90.0 test -p contime-manual
+cargo +1.90.0 test -p contime-batcher
+cargo +1.90.0 bench -p contime-batcher --bench batcher
+cargo +1.90.0 test --manifest-path examples/environments/wasi/Cargo.toml
+```
+
+The [WebAssembly example](examples/environments/wasi/README.md) verifies Manual and threaded Runtime
+execution through their respective WASI targets; the [browser example](examples/environments/browser/README.md) adds a
+configurable browser host.
 
 ## Current Constraints
 

@@ -28,7 +28,7 @@ Runtime serializes subsequent rounds against that completion.
 `contime-router` receives complete input batches, deterministically maps each
 snapshot route to a worker, and sends one final batch per affected worker.
 
-The managed Runtime uses this workspace member through its `RouterProcess`
+The managed runtime uses this workspace member through its `RouterProcess`
 adapter. The router itself has no dependency on `contime` or `contime-api`.
 `route_messages` serves the running pipeline; the independent `route` helper
 uses the same dispatch kernel for apply-only routing.

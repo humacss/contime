@@ -13,8 +13,8 @@ captured history’s forwarding and pruning hooks.
 
 `contime-worker` owns incremental replay scheduling and the blocking message
 receive loop. It depends on no other ConTime crate. Runtime supplies concrete
-messages and wraps Core's shared storage adapter; Runtime owns the background
-threads.
+messages and wraps Core's shared storage adapter;
+Runtime owns the background threads. Manual drives the same worker directly.
 
 ## Message flow
 
@@ -109,9 +109,8 @@ status request does not fence inputs still queued elsewhere in the topology.
 
 `MessageWorker::new` constructs the same state used by `work_messages` without
 spawning threads. `MessageWorker::new_inline` constructs that state without
-channel bindings, for owned state in an application host loop. Both constructors
-use the same message handling, replay scheduling and pruning methods.
-`handle` delivers a message, `step` processes a scheduled
+channel bindings, for an owned browser host or application resource. Both use
+the same message handling, replay scheduling, and pruning methods. `handle` delivers a message, `step` processes a scheduled
 snapshot, and `prune_step` forwards/prunes a history. A driver must preserve
 normal priority: delivered messages, pending pruning, then replay. Runtime's
 controlled frontier tests use this interface with real storage adapters.
@@ -129,7 +128,16 @@ cargo bench -p contime-worker --bench messages
 The `messages` benchmark checks observable insertion, processing, query,
 notification, and pruning results with storage stubs before timing. It measures
 worker overhead rather than end-to-end history or checkpoint performance.
-Run timing suites serially; results depend on the fixture and hardware.
+The `worker/status` group checks empty, 1-, 128-, and 4,096-slot fixtures
+before and after timing. It separately measures direct capture and same-thread
+request/response transport, with initialized stores or listener-only metadata.
+Store fixtures mix due and future histories; setup is excluded from timing.
+Filter it with `cargo bench -p contime-worker --bench messages -- worker/status`.
+
+Compare the same fixture with and without `--features counters` in separate
+builds to measure optional counting overhead. The benchmark store reports its
+existing processed-count delta through the counted adapter. Run timing suites
+serially; results depend on the fixture and hardware.
 
 Source units are `work.rs` (receive loop and scheduler), `listen.rs` (replay
 notifications), `query.rs` (store queries), and `types.rs` (transport and storage

@@ -56,3 +56,6 @@ required-features = ["runtime"]
 name = "activity"
 harness = false
 required-features = ["workers"]
+
+[package.metadata.docs.rs]
+all-features = true

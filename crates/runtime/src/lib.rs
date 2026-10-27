@@ -38,7 +38,7 @@ pub use types::{
     SnapshotListenerMessage, SnapshotQuery, WorkerBatch, WorkerMessage, WorkerProcess,
 };
 /// An input that can cross the managed runtime's thread boundaries.
-/// Core application and storage contracts require only [`Input`].
+/// Manual processing and Core require only [`Input`].
 pub trait ThreadInput: Input<Time: Send + Sync> + Send + Sync {}
 impl<I> ThreadInput for I
 where

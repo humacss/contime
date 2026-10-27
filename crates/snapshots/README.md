@@ -44,7 +44,6 @@ reconstructed after late insertion. Query and forwarding work are excluded. It
 uses the working checkpoint's existing event-count delta without another history
 scan. `process_until` keeps its existing API and behavior.
 
-
 The initial snapshot precedes the supplied events, including those at its own
 timestamp, which becomes the initial horizon. A target before retained history
 returns `NoCheckpoint`. Forwarding also fails if its horizon has no predecessor,

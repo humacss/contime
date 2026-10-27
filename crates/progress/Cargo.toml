@@ -2,9 +2,10 @@
 name = "contime-progress"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.90"
 license = "MIT"
 description = "Policy-independent bounded progress measurement for ConTime"
-publish = false
+publish = ["crates-io"]
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime-progress"
 readme = "README.md"

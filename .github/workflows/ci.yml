@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }}, Rust ${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        toolchain: ["1.90.0", stable]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+      - name: Test workspace and Rust documentation examples
+        run: cargo +${{ matrix.toolchain }} test --workspace
+      - name: Test optional features
+        run: cargo +${{ matrix.toolchain }} test --workspace --all-features
+      - name: Test Manual without managed Runtime
+        run: cargo +${{ matrix.toolchain }} test -p contime --no-default-features --features manual --test manual
+      - name: Test example verification logic
+        run: cargo +${{ matrix.toolchain }} test -p contime --features manual,monitor,counters --examples
+      - name: Check all targets, including benchmarks
+        run: cargo +${{ matrix.toolchain }} check --workspace --all-targets
+      - name: Run counter walkthrough
+        run: cargo +${{ matrix.toolchain }} run -p contime --example counter
+      - name: Run client-movement example
+        run: cargo +${{ matrix.toolchain }} run -p contime --features monitor,counters --example client_movement -- --headless --duration 1 --clients 8
+
+  release-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install Rust tools
+        run: rustup toolchain install 1.90.0 --profile minimal --component rustfmt --component clippy
+      - name: Check formatting
+        run: cargo +1.90.0 fmt --all -- --check
+      - name: Check lints
+        run: cargo +1.90.0 clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build Rust documentation with warnings denied
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo +1.90.0 doc --workspace --all-features --no-deps
+      - name: Run counter walkthrough
+        run: cargo +1.90.0 run -p contime --example counter
+      - name: Verify workspace release without uploading
+        run: cargo +1.90.0 publish --workspace --all-features --dry-run

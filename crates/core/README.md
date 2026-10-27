@@ -2,7 +2,7 @@
 
 Shared application contracts and synchronous storage adapters for ConTime.
 Core starts no threads and defines no channel-based request protocol. It does
-not depend on Runtime, routing, or distributed progress tracking.
+not depend on Runtime, the router, the batcher, or distributed progress tracking.
 
 `Input` describes stable event identity, timestamps, and destination histories.
 It has no `Send` or `Sync` requirement. The managed runtime adds those bounds
@@ -23,19 +23,20 @@ worker storage contract over the canonical event history and snapshot store;
 `CheckpointStorageConfig` supplies checkpoint spacing. Insertion failures carry
 event IDs in transport-independent `InsertionRejection` records. The adapter
 preserves duplicate detection, late-event replay, historical queries, and
-time-based retention. It does not route events or decide when processing runs.
+time-based retention.
+It does not route events or decide when processing should run.
 
 The runtime wraps this storage to account for in-flight admission observations.
-Those observations never enter retained history. Applications may also use the
-shared synchronous adapter directly with thread-local state and their own
-scheduling of storage operations.
+Those observations never enter retained history. Manual remains a generic
+worker driver and may use this adapter or another implementation of the worker
+storage contract. The WebAssembly and browser examples use the public manual
+facade with this shared storage adapter.
 
 The optional `counters` feature enables worker counters and the native storage's
 exact counted replay method. It counts raw canonical events traversed during each
 live replay call, including rebuilt prefixes after late input and events skipped
 by an application wrapper. Silent queries and retention forwarding are excluded.
 Worker scheduling and the existing `process_until` method are unchanged.
-
 
 ## Verification
 

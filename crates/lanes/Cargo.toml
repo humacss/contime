@@ -2,10 +2,11 @@
 name = "contime-lanes"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.90"
 autobenches = false
 license = "MIT"
 description = "Isolated compile-time lane projection and application contracts for ConTime"
-publish = false
+publish = ["crates-io"]
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime-lanes"
 readme = "README.md"

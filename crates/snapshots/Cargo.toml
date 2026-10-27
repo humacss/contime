@@ -2,10 +2,11 @@
 name = "contime-snapshots"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.90"
 autobenches = false
 license = "MIT"
 description = "Snapshot store with query, replay, forwarding, and pruning for ConTime"
-publish = false
+publish = ["crates-io"]
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime-snapshots"
 readme = "README.md"

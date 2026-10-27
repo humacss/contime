@@ -1,4 +1,7 @@
-//! API-side input forwarding and rejection collection for ConTime.
+//! API-side request adapters and rejection collection for ConTime.
+//!
+//! The optional `manual` feature adds local callback-based worker requests.
+//! It starts no processing and owns no storage or worker loop.
 //!
 //! The API forwards one batch per call to an opaque downstream receiver and
 //! collects insertion rejections until request senders close. Replay completion
@@ -56,7 +59,5 @@ pub use types::{
     SnapshotQueryOutput,
 };
 
-/// Local callback-based request adapters for caller-driven worker processing.
-/// This module owns no worker, storage, queue or processing loop.
 #[cfg(feature = "manual")]
 pub mod manual;

@@ -1,48 +1,49 @@
 # contime-runtime
 
-`contime-runtime` owns the managed ConTime instance, admission coordination,
-protocol adapters, background threads, and shutdown. Shared application and
-storage contracts live in `contime-core`.
+The managed ConTime runtime. `ConTime::start` (also available as `Runtime::start`)
+starts admission, router, and worker threads. The root `contime` crate re-exports
+`ConTime`, its configuration, and operations for existing callers.
 
-Use `ConTime::start` with `ConTimeConfig` to start a managed instance. Public
-operations submit inputs, advance processing, query retained state, and register
-listeners. `shutdown` closes admission and joins the owned topology. Inputs,
-application state, and wrappers must satisfy the managed thread boundaries.
-`ThreadInput` adds `Send + Sync` for events and timestamps to Core's `Input`
-contract; snapshot state and application wrappers must be sendable as well.
-`Runtime<I, S, W>` is an alias for the managed `ConTime<I, S, W>` instance.
+Implement Core's `Input` and snapshot/application contracts, configure worker
+counts, checkpoint spacing, and history retention, then retain the returned
+instance until shutdown. Inputs and timestamps must be `Send + Sync`; snapshots
+and application wrappers must be movable to their worker threads. The blanket
+`ThreadInput` contract applies those requirements without changing Core's
+thread-local contracts.
 
-The low-level topology is available separately as `ThreadTopology`; the guide
-below describes that generic thread and channel owner.
+Generic native helpers that previously used only `I: Input` should now use
+`I: ThreadInput` when accepting a managed instance. Core inputs themselves may
+remain thread-local. Low-level callers of the former generic `Runtime` use
+`ThreadTopology`; the root `ConTime` interface keeps its existing operations.
 
-Start with the `Router` and `Worker` traits, then pass owned nonempty process
-collections to `ThreadTopology::start`. This is a generic thread topology: its message
-types and process behavior are supplied by the caller.
+## Responsibilities
 
-Submission acknowledges enqueueing. `shutdown` closes the owned sender and
-joins every component, preserving errors and panics in `ShutdownReport`. Drop
-external input-sender clones before calling it. Process implementations must
-release channels and return for shutdown to finish. Dropping `ThreadTopology` without
-calling `shutdown` detaches join handles and does not wait for completion.
+Runtime owns the public managed instance, native message protocol, response
+channels, admission coordinator, progress fences, safe retention coordination,
+and the adapters connecting routers/workers to background threads. The batcher
+owns packetization; Runtime integrates it after admission and before routing.
+Independent request completions remain independent of transport packet sizes.
+Only already-queued submissions are gathered, without waiting for more arrivals.
+Gathering is bounded and stops at control messages.
 
-`ThreadTopology` is the isolated process-local execution topology for
-ConTime's apply path. It starts router and worker threads, connects them with
-Crossbeam channels, exposes one shared opaque router input boundary, and joins the complete
-topology during shutdown.
+History and checkpoint application use Core's synchronous storage adapter. A
+small native wrapper records route coverage for in-flight admission observations
+and removes that metadata before retaining events. Worker scheduling, routing,
+event ordering, and snapshot algorithms remain in their specialized crates.
 
-The topology declares local `Router` and `Worker` traits. Managed process
-adapters in this crate implement those contracts and connect the shared Core
-storage adapter to the router and worker crates.
+Submission acknowledges queueing, insertion responses acknowledge insertion,
+and advancement acknowledges acceptance of a processing target. None establishes
+completed live replay. Use operation-specific responses or progress in running
+applications. Global idle helpers are only for controlled tests and benchmarks.
 
-## Internal transport batching
+`shutdown` closes admission and joins the owned topology. It preserves router
+and worker outcomes in `ShutdownReport`. ConTime does not restart failed threads
+or provide persistence.
 
-The admission coordinator uses `contime-batcher` after admission and before
-routing. It splits large submissions and combines adjacent requests already in
-the queue, without waiting for more arrivals. Gathering stops at control messages
-and is bounded by request count and CPU time. Routing preserves each request's
-rejection destination and insertion-completion ownership, including across
-multiple workers. Internal packet boundaries do not change timestamps or
-canonical replay order.
+The optional `counters` feature enables cumulative worker counters and native
+counted replay through Core. Replay counts include repeated work after late input
+and raw events skipped by application logic; queries and retention forwarding
+are excluded. Enabling counters does not change worker scheduling.
 
 ## Worker observations
 
@@ -63,83 +64,38 @@ blocking and exposes immutable readings separately from any presentation layer.
 Dropping a response receiver never blocks a worker. Status requests share normal
 worker queues, so collection can be delayed by queued work.
 
-## Topology
+## Low-level thread topology
 
-- Every router competes for work from one shared input receiver.
-- Every worker has one private input receiver.
-- Every router receives senders for the complete worker set.
-- The runtime treats router input and worker input as opaque generic values.
-- The caller supplies the complete router and worker instance collections.
-- Router and worker collections must both be nonempty.
+`ThreadTopology`, with `Router` and `Worker`, is the existing generic channel
+and thread implementation used by process adapters and isolated diagnostics.
+Its implementation lives in the private `topology` module. The descriptive
+name distinguishes it from the complete `Runtime` instance.
 
-The generic topology owns thread and channel lifecycle only. It does not inspect,
-clone, route, apply, replay, or otherwise interpret messages.
+Routers compete for one shared unbounded input queue. Each worker has a private
+queue receiving from every router. The topology treats messages as opaque:
+it does not coordinate admission or guarantee dispatch completion order across
+routers. Runtime's higher-level protocol supplies the required fences.
 
-`queue_checks()` exposes read-only emptiness checks created with the queues:
-one for the shared router queue and one per worker. They retain only weak
-receiver references, so observation cannot keep a stopped queue connected.
-A stopped queue returns false. Queue emptiness alone does not establish idle;
-the caller must also account for active processing.
-
-The shared receiver guarantees that each input message is taken by exactly one
-router; it does not guarantee that several routers finish dispatching messages
-in receive order. Each worker channel preserves the order in which that worker
-receives messages from its router producers, but there is no fence spanning all
-router producers. Higher layers must wait for completion before submitting an
-operation that must happen after earlier work, or introduce an explicit
-ordering barrier.
-
-## Lifecycle
-
-`ThreadTopology::start` validates the supplied process collections, creates the channels, starts all
-workers, and then starts all routers. Threads receive deterministic names:
-`contime-worker-{index}` and `contime-router-{index}`.
-
-If a thread cannot be spawned, startup closes the partial topology and joins
-every thread already started before returning `StartError::ThreadSpawn`.
-
-A running `ThreadTopology` offers `send(input)` and borrowed access to its shared
-router input sender. The first available router receives each message. Callers may clone the sender, but explicit shutdown cannot finish until
-all external clones have been dropped.
-
-`ThreadTopology::shutdown` drops the runtime-owned input sender, joins every router,
-then joins every worker after the router-owned worker senders have closed. Its
-report preserves one ordered outcome per thread and distinguishes completion,
-a returned implementation error, and a panic. The runtime observes failures
-but does not restart or recover failed threads in this version.
-
-The generic topology leaves queries, advancement, retention, routing and replay
-to its process adapters. The managed instance assembles those adapters. Neither
-layer automatically restarts failed threads.
+`ThreadTopology::start` validates nonempty process collections and starts workers
+before routers. Startup failure closes and joins the partial topology. Explicit
+shutdown closes the owned sender and joins routers before workers. Drop external
+sender clones before joining; process implementations must return when their
+queues close. Dropping a topology without shutdown detaches its join handles.
+Queue-emptiness checks alone do not establish idle or completed processing.
 
 ## Verification
 
-Run the inline unit tests from the ConTime repository root:
-
-```bash
-cargo test --manifest-path crates/runtime/Cargo.toml
+```sh
+cargo +1.90.0 test -p contime-runtime -p contime
+cargo +1.90.0 clippy -p contime-runtime --all-targets -- -D warnings
+cargo +1.90.0 bench -p contime-runtime --bench runtime
+cargo +1.90.0 bench -p contime-runtime --bench breakdown
+cargo +1.90.0 bench -p contime-runtime --bench batching
 ```
 
-Run the warm end-to-end throughput benchmark:
-
-```bash
-cargo bench --manifest-path crates/runtime/Cargo.toml --bench runtime
-```
-
-Run the channel-stage and batch-size diagnostics:
-
-```bash
-cargo bench --manifest-path crates/runtime/Cargo.toml --bench breakdown
-cargo bench --manifest-path crates/runtime/Cargo.toml --bench batching
-```
-
-Generate a ten-second flamegraph for one topology:
-
-```bash
-CARGO_PROFILE_BENCH_DEBUG=2 cargo bench \
-  --manifest-path crates/runtime/Cargo.toml --bench runtime -- \
-  'runtime/1000_inputs/topology/1_routers_1_workers' --profile-time 10
-```
+Runtime tests retain the admission/frontier, route coverage, packet completion,
+process adapter, startup failure and shutdown regressions. Root integration tests
+continue exercising the public facade and threaded processing end to end.
 
 ## Benchmark Snapshot
 

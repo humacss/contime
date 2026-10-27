@@ -1,7 +1,7 @@
 //! Shared application contracts and synchronous history/storage adapters.
 //!
-//! Managed execution belongs to `contime-runtime`. Core starts no threads,
-//! uses no channel protocol, and imposes no Send/Sync bounds on inputs.
+//! Execution belongs to `contime-manual` or `contime-runtime`. Core starts no
+//! threads, uses no channel protocol, and imposes no Send/Sync bounds on inputs.
 #![deny(missing_docs)]
 mod checkpoint;
 pub mod checkpoints;
