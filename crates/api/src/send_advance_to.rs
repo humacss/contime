@@ -2,22 +2,8 @@ use crossbeam_channel::Sender;
 
 use crate::{AdvanceOutput, ApiError};
 
-trait Deps<O> {
-    type Error;
-
-    fn forward(&self, output: O) -> Result<(), Self::Error>;
-}
-
-struct DefaultDeps<'a, O> {
-    output: &'a Sender<O>,
-}
-
-impl<O> Deps<O> for DefaultDeps<'_, O> {
-    type Error = ApiError;
-
-    fn forward(&self, output: O) -> Result<(), Self::Error> {
-        self.output.send(output).map_err(|_| ApiError::OutputChannelClosed)
-    }
+traitstub::deps! {
+    forward[O](output: O) -> Result<(), source::ApiError>;
 }
 
 /// Queues one advancement request with the caller's completion sender.
@@ -32,12 +18,11 @@ pub fn send_advance_to<O, T>(output: &Sender<O>, time: T, completion: Sender<()>
 where
     O: AdvanceOutput<T>,
 {
-    send_with_deps(&DefaultDeps { output }, time, completion)
+    send_advance_to_with_deps::<O, T>(&Deps(|message| output.send(message).map_err(|_| ApiError::OutputChannelClosed)), time, completion)
 }
 
-fn send_with_deps<D, O, T>(deps: &D, time: T, completion: Sender<()>) -> Result<(), D::Error>
+fn send_advance_to_with_deps<O, T>(deps: &impl calls::forward<O>, time: T, completion: Sender<()>) -> Result<(), ApiError>
 where
-    D: Deps<O>,
     O: AdvanceOutput<T>,
 {
     deps.forward(O::advance(time, completion))
@@ -50,7 +35,11 @@ mod tests {
     use criterion::Criterion;
     use crossbeam_channel::{unbounded, Sender, TryRecvError};
 
-    use crate::{AdvanceOutput, ApiError};
+    use super::*;
+
+    traitstub::stubs! {
+        forward => |_| Ok(());
+    }
 
     struct AdvanceMessage {
         time: u64,
@@ -61,6 +50,13 @@ mod tests {
         fn advance(time: u64, completion: Sender<()>) -> Self {
             Self { time, completion }
         }
+    }
+
+    #[test]
+    fn shared_defaults_complete_without_retaining_the_sender() {
+        let (completion, done) = unbounded();
+        assert_eq!(send_advance_to_with_deps::<AdvanceMessage, _>(&Defs, 50, completion), Ok(()));
+        assert_eq!(done.try_recv(), Err(TryRecvError::Disconnected));
     }
 
     #[test]
