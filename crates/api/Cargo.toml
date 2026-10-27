@@ -15,6 +15,7 @@ categories = ["data-structures", "concurrency"]
 include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [dependencies]
+traitstub = { path = "../../../../timeless-4d-games/traitstub" }
 crossbeam-channel = "0.5"
 
 [dev-dependencies]

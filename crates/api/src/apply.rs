@@ -2,32 +2,10 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::types::{ApiError, ApplyOutput, ApplyResponse, RejectionMessage};
 
-trait Deps<O, I, R> {
-    type Error;
-
-    fn send<Input, Inputs>(&self, inputs: Inputs, rejection_sender: Sender<RejectionMessage<R>>) -> Result<(), Self::Error>
-    where
-        Inputs: IntoIterator<Item = Input>,
-        Input: Into<I>;
-}
-
-struct DefaultDeps<'a, O> {
-    output: &'a Sender<O>,
-}
-
-impl<O, I, R> Deps<O, I, R> for DefaultDeps<'_, O>
-where
-    O: ApplyOutput<I, R>,
-{
-    type Error = ApiError;
-
-    fn send<Input, Inputs>(&self, inputs: Inputs, rejection_sender: Sender<RejectionMessage<R>>) -> Result<(), Self::Error>
-    where
-        Inputs: IntoIterator<Item = Input>,
-        Input: Into<I>,
-    {
-        crate::send::send(self.output, inputs, rejection_sender)
-    }
+traitstub::deps! {
+    send[R, Inputs](inputs: Inputs, rejection_sender: crossbeam_channel::Sender<source::RejectionMessage<R>>)
+        -> Result<(), source::ApiError>
+        where [Inputs: IntoIterator];
 }
 
 /// Sends inputs and collects rejections until all downstream request handles close.
@@ -46,14 +24,12 @@ where
     O: ApplyOutput<I, R>,
     R: Ord,
 {
-    apply_with_deps(&DefaultDeps { output }, inputs)
+    apply_with_deps(&Deps(|inputs, rejection_sender| crate::send::send::<O, I, R, Input, Inputs>(output, inputs, rejection_sender)), inputs)
 }
 
-fn apply_with_deps<D, O, I, R, Input, Inputs>(deps: &D, inputs: Inputs) -> Result<ApplyResponse<R>, D::Error>
+fn apply_with_deps<R, Inputs>(deps: &impl calls::send<R, Inputs>, inputs: Inputs) -> Result<ApplyResponse<R>, ApiError>
 where
-    D: Deps<O, I, R>,
-    Inputs: IntoIterator<Item = Input>,
-    Input: Into<I>,
+    Inputs: IntoIterator,
     R: Ord,
 {
     let (rejection_sender, rejection_receiver) = unbounded();
@@ -74,15 +50,11 @@ where
 #[cfg(test)]
 mod tests {
     use criterion::Criterion;
-    use crossbeam_channel::Sender;
     use std::cell::RefCell;
     use std::hint::black_box;
 
-    use super::{apply_with_deps, Deps};
-    use crate::types::RejectionMessage;
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct StubError;
+    use super::*;
+    use crate::types::InputBatch;
 
     #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq)]
     enum TestReason {
@@ -90,91 +62,90 @@ mod tests {
         MemoryFull,
     }
 
-    struct StubDeps {
-        received_inputs: RefCell<Vec<u128>>,
-        responses: Vec<RejectionMessage<TestReason>>,
-    }
-
-    impl Deps<(), u128, TestReason> for StubDeps {
-        type Error = StubError;
-
-        fn send<Input, Inputs>(&self, inputs: Inputs, rejection_sender: Sender<RejectionMessage<TestReason>>) -> Result<(), Self::Error>
-        where
-            Inputs: IntoIterator<Item = Input>,
-            Input: Into<u128>,
-        {
-            self.received_inputs.borrow_mut().extend(inputs.into_iter().map(Into::into));
-            for response in &self.responses {
-                rejection_sender.send(response.clone()).unwrap();
-            }
-            Ok(())
-        }
-    }
-
-    struct FailingDeps;
-
-    impl Deps<(), u128, TestReason> for FailingDeps {
-        type Error = StubError;
-
-        fn send<Input, Inputs>(&self, _inputs: Inputs, _rejection_sender: Sender<RejectionMessage<TestReason>>) -> Result<(), Self::Error>
-        where
-            Inputs: IntoIterator<Item = Input>,
-            Input: Into<u128>,
-        {
-            Err(StubError)
-        }
-    }
-
-    struct NoopDeps;
-
-    impl Deps<(), (), TestReason> for NoopDeps {
-        type Error = StubError;
-
-        fn send<Input, Inputs>(&self, _inputs: Inputs, _rejection_sender: Sender<RejectionMessage<TestReason>>) -> Result<(), Self::Error>
-        where
-            Inputs: IntoIterator<Item = Input>,
-            Input: Into<()>,
-        {
-            Ok(())
-        }
+    traitstub::stubs! {
+        send => |_, _| Ok(());
     }
 
     #[test]
     fn apply_forwards_inputs_to_send() {
-        let deps = StubDeps { received_inputs: RefCell::new(Vec::new()), responses: Vec::new() };
+        let received_inputs = RefCell::new(Vec::new());
+        let deps = traitstub::defs! {
+            send => |inputs: [u128; 3], _: Sender<RejectionMessage<TestReason>>| {
+                received_inputs.borrow_mut().extend(inputs);
+                Ok(())
+            };
+        };
 
         let result = apply_with_deps(&deps, [3_u128, 5, 8]).unwrap();
 
         assert!(result.is_empty());
-        assert_eq!(*deps.received_inputs.borrow(), vec![3, 5, 8]);
+        assert_eq!(*received_inputs.borrow(), vec![3, 5, 8]);
     }
 
     #[test]
     fn apply_sorts_and_deduplicates_rejections() {
         let duplicate = RejectionMessage { event_id: 7, reason: TestReason::MemoryFull };
         let earlier = RejectionMessage { event_id: 3, reason: TestReason::BeforeHistoryHorizon };
-        let deps =
-            StubDeps { received_inputs: RefCell::new(Vec::new()), responses: vec![duplicate.clone(), duplicate.clone(), earlier.clone()] };
+        let same_event = RejectionMessage { event_id: 7, reason: TestReason::BeforeHistoryHorizon };
+        let responses = [duplicate.clone(), duplicate.clone(), same_event.clone(), earlier.clone()];
+        let deps = traitstub::defs! {
+            send => |_: [u128; 1], rejection_sender: Sender<RejectionMessage<TestReason>>| {
+                for response in &responses {
+                    rejection_sender.send(response.clone()).unwrap();
+                }
+                Ok(())
+            };
+        };
 
         let result = apply_with_deps(&deps, [11_u128]).unwrap();
 
-        assert_eq!(result, vec![earlier, duplicate]);
+        assert_eq!(result, vec![earlier, same_event, duplicate]);
     }
 
     #[test]
     fn apply_returns_an_empty_response_when_send_reports_no_rejections() {
-        let deps = StubDeps { received_inputs: RefCell::new(Vec::new()), responses: Vec::new() };
-
-        let result = apply_with_deps(&deps, [13_u128]).unwrap();
-
+        let result = apply_with_deps::<TestReason, _>(&Defs, [13_u128]).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn apply_propagates_send_errors() {
-        let result = apply_with_deps(&FailingDeps, [13_u128]);
+        let deps = traitstub::defs! {
+            send => |_: [u128; 1], _: Sender<RejectionMessage<TestReason>>| Err(ApiError::OutputChannelClosed);
+        };
+        assert_eq!(apply_with_deps(&deps, [13_u128]), Err(ApiError::OutputChannelClosed));
+    }
 
-        assert_eq!(result, Err(StubError));
+    #[test]
+    fn public_apply_converts_inputs_and_collects_real_rejections() {
+        let (output, requests) = unbounded::<InputBatch<u128, TestReason>>();
+        let inputs = [3_u64, 5, 8];
+        std::thread::scope(|scope| {
+            let downstream = scope.spawn(move || {
+                let request = requests.recv().unwrap();
+                assert_eq!(request.inputs, vec![3_u128, 5, 8]);
+                for event_id in [8, 3, 8] {
+                    request.rejection_sender.send(RejectionMessage { event_id, reason: TestReason::MemoryFull }).unwrap();
+                }
+            });
+            let result = apply(&output, inputs.iter().copied()).unwrap();
+            assert_eq!(
+                result,
+                vec![
+                    RejectionMessage { event_id: 3, reason: TestReason::MemoryFull },
+                    RejectionMessage { event_id: 8, reason: TestReason::MemoryFull },
+                ]
+            );
+            downstream.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn public_apply_preserves_empty_input_and_closed_output_behavior() {
+        let (output, requests) = unbounded::<InputBatch<u128, TestReason>>();
+        drop(requests);
+        assert_eq!(apply(&output, [] as [u128; 0]), Ok(Vec::new()));
+        assert_eq!(apply(&output, [3_u128]), Err(ApiError::OutputChannelClosed));
     }
 
     #[test]
@@ -183,7 +154,7 @@ mod tests {
         let mut criterion = Criterion::default();
 
         criterion.bench_function("api/apply/no_rejections", |bencher| {
-            bencher.iter(|| black_box(apply_with_deps(&NoopDeps, [()]).unwrap()));
+            bencher.iter(|| black_box(apply_with_deps::<TestReason, _>(&Defs, [()]).unwrap()));
         });
 
         criterion.final_summary();

@@ -2,22 +2,8 @@ use crossbeam_channel::Sender;
 
 use crate::types::{ApiError, ApplyOutput, RejectionMessage};
 
-trait Deps<O> {
-    type Error;
-
-    fn forward(&self, output: O) -> Result<(), Self::Error>;
-}
-
-struct DefaultDeps<'a, O> {
-    output: &'a Sender<O>,
-}
-
-impl<O> Deps<O> for DefaultDeps<'_, O> {
-    type Error = ApiError;
-
-    fn forward(&self, output: O) -> Result<(), Self::Error> {
-        self.output.send(output).map_err(|_| ApiError::OutputChannelClosed)
-    }
+traitstub::deps! {
+    forward[O](output: O) -> Result<(), source::ApiError>;
 }
 
 /// Converts inputs into the caller-selected ownership type and forwards one batch.
@@ -40,16 +26,19 @@ where
     Input: Into<I>,
     O: ApplyOutput<I, R>,
 {
-    send_with_deps(&DefaultDeps { output }, inputs, rejection_sender)
+    send_with_deps::<O, I, R, Input, Inputs>(
+        &Deps(|message| output.send(message).map_err(|_| ApiError::OutputChannelClosed)),
+        inputs,
+        rejection_sender,
+    )
 }
 
-fn send_with_deps<D, O, I, R, Input, Inputs>(
-    deps: &D,
+fn send_with_deps<O, I, R, Input, Inputs>(
+    deps: &impl calls::forward<O>,
     inputs: Inputs,
     rejection_sender: Sender<RejectionMessage<R>>,
-) -> Result<(), D::Error>
+) -> Result<(), ApiError>
 where
-    D: Deps<O>,
     Inputs: IntoIterator<Item = Input>,
     Input: Into<I>,
     O: ApplyOutput<I, R>,
@@ -71,7 +60,7 @@ mod tests {
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::{unbounded, TryRecvError};
 
-    use super::{send, send_with_deps, Deps};
+    use super::{calls, send, send_with_deps, Deps};
     use crate::types::{ApiError, ApplyOutput, InputBatch, RejectionMessage};
 
     #[repr(C)]
@@ -125,29 +114,16 @@ mod tests {
         });
     }
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct StubError;
-
-    struct StubDeps {
-        batches: RefCell<Vec<InputBatch<u128, ()>>>,
+    traitstub::stubs! {
+        forward => |_| Ok(());
     }
 
-    impl Deps<InputBatch<u128, ()>> for StubDeps {
-        type Error = StubError;
-
-        fn forward(&self, batch: InputBatch<u128, ()>) -> Result<(), Self::Error> {
-            self.batches.borrow_mut().push(batch);
-            Ok(())
-        }
-    }
-
-    struct FailingDeps;
-
-    impl Deps<InputBatch<u128, ()>> for FailingDeps {
-        type Error = StubError;
-
-        fn forward(&self, _batch: InputBatch<u128, ()>) -> Result<(), Self::Error> {
-            Err(StubError)
+    fn recording_batches(batches: &RefCell<Vec<InputBatch<u128, ()>>>) -> impl calls::forward<InputBatch<u128, ()>> + '_ {
+        traitstub::defs! {
+            forward => |batch| {
+                batches.borrow_mut().push(batch);
+                Ok(())
+            };
         }
     }
 
@@ -192,34 +168,35 @@ mod tests {
 
     #[test]
     fn send_forwards_all_inputs_in_one_batch() {
-        let deps = StubDeps { batches: RefCell::new(Vec::new()) };
+        let batches = RefCell::new(Vec::new());
+        let deps = recording_batches(&batches);
         let (rejection_sender, _rejection_receiver) = unbounded();
 
         send_with_deps(&deps, [3_u128, 5, 8], rejection_sender).unwrap();
 
-        let batches = deps.batches.borrow();
+        let batches = batches.borrow();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].inputs, vec![3, 5, 8]);
     }
 
     #[test]
     fn rejection_channel_closes_after_the_input_batch_is_dropped() {
-        let deps = StubDeps { batches: RefCell::new(Vec::new()) };
+        let batches = RefCell::new(Vec::new());
+        let deps = recording_batches(&batches);
         let (rejection_sender, rejection_receiver) = unbounded();
 
         send_with_deps(&deps, [3_u128, 5, 8], rejection_sender).unwrap();
         assert_eq!(rejection_receiver.try_recv(), Err(TryRecvError::Empty));
 
-        deps.batches.borrow_mut().clear();
+        batches.borrow_mut().clear();
         assert_eq!(rejection_receiver.try_recv(), Err(TryRecvError::Disconnected));
     }
 
     #[test]
     fn empty_send_drops_the_original_rejection_sender() {
-        let deps = StubDeps { batches: RefCell::new(Vec::new()) };
         let (rejection_sender, rejection_receiver) = unbounded();
 
-        send_with_deps(&deps, [] as [u128; 0], rejection_sender).unwrap();
+        send_with_deps::<InputBatch<u128, ()>, _, _, _, _>(&Defs, [] as [u128; 0], rejection_sender).unwrap();
 
         assert_eq!(rejection_receiver.try_recv(), Err(TryRecvError::Disconnected));
     }
@@ -228,9 +205,12 @@ mod tests {
     fn send_propagates_dependency_errors() {
         let (rejection_sender, _rejection_receiver) = unbounded();
 
-        let result = send_with_deps(&FailingDeps, [3_u128], rejection_sender);
+        let deps = traitstub::defs! {
+            forward => |_: InputBatch<u128, ()>| Err(ApiError::OutputChannelClosed);
+        };
+        let result = send_with_deps(&deps, [3_u128], rejection_sender);
 
-        assert_eq!(result, Err(StubError));
+        assert_eq!(result, Err(ApiError::OutputChannelClosed));
     }
 
     #[test]
