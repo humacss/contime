@@ -10,7 +10,12 @@ impl<I, S, W> ConTime<I, S, W>
 where
     I: crate::ThreadInput,
 {
-    /// Low-level enqueue with a caller-owned rejection stream. Closure of this
+    /// Enqueues a submission with a caller-owned rejection stream.
+    ///
+    /// The iterator length is independent of internal transport packet sizes.
+    /// Requests retain their own rejection destination even when transported
+    /// together. Splitting one request retains completion ownership across all
+    /// its parts and affected workers. Closure of this
     /// stream acknowledges insertion, not completion of scheduled replay.
     /// Prefer [`Self::apply`] with [`Self::errors`] for ordinary submissions.
     pub fn send(

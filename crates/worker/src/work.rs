@@ -236,6 +236,11 @@ where
     /// Storage, listener, and coordination callback panics also propagate.
     pub fn handle(&mut self, message: M) {
         match message.into_kind() {
+            WorkInputKind::ApplyPacket(batches) => {
+                for batch in batches {
+                    self.apply_batch(batch);
+                }
+            }
             WorkInputKind::Apply(batch) => {
                 self.apply_batch(batch);
             }

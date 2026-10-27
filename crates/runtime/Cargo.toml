@@ -15,6 +15,7 @@ categories = ["data-structures", "concurrency"]
 include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [dependencies]
+contime-batcher = { path = "../batcher", version = "0.1.0" }
 contime-core = { path = "../core", version = "0.1.0" }
 contime-api = { path = "../api", version = "0.1.0" }
 contime-events = { path = "../events", version = "0.1.0" }

@@ -223,6 +223,8 @@ impl<I> EventQueryResponse<I> for crossbeam_channel::Sender<Vec<I>> {
 pub enum WorkInputKind<A, SQ, EQ, SL, AD> {
     /// Inserts a complete batch and releases its completion before replay.
     Apply(A),
+    /// Inserts adjacent segments, releasing each response independently before replay.
+    ApplyPacket(Vec<A>),
     /// Reconstructs snapshots without publishing effects or advancing replay.
     SnapshotQuery(SQ),
     /// Reads retained events without altering the schedule.

@@ -119,6 +119,9 @@ where
 {
     /// Submit an external batch for admission and routing.
     Apply(RouterBatch<I>),
+    /// Already-admitted transport segments retaining independent response ownership.
+    /// The native coordinator creates bounded packets; public admissions use `Apply`.
+    ApplyPacket(Vec<RouterBatch<I>>),
     /// Reconstruct requested snapshots at one timestamp without publishing effects.
     SnapshotQuery(SnapshotQuery<I::Time, S>),
     /// Read retained events from one snapshot history.
@@ -198,6 +201,9 @@ where
 {
     /// Insert the routes belonging to this worker and schedule affected histories.
     Apply(WorkerBatch<I>),
+    /// Insert independent request segments before granting a replay opportunity.
+    /// Each segment releases only its own insertion-completion ownership.
+    ApplyPacket(Vec<WorkerBatch<I>>),
     /// Reconstruct snapshots without publishing live replay effects.
     SnapshotQuery(SnapshotQuery<I::Time, S>),
     /// Read the retained events in one owned history.

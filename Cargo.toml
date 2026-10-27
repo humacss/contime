@@ -87,6 +87,10 @@ name = "incremental"
 required-features = ["runtime"]
 
 [[test]]
+name = "internal_batching"
+required-features = ["runtime"]
+
+[[test]]
 name = "listen"
 required-features = ["runtime"]
 

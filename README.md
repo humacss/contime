@@ -39,6 +39,8 @@ Provide time-travel queries without needing a full persistent event store.
 
 A running application usually submits events as they arrive and queries state when it needs to display or use it. It does not wait for every submission to finish before doing anything else.
 
+Submit one event or an iterator of events with `apply`; use `send` when you need a request-specific rejection stream and insertion response. ConTime manages internal transport batching independently: it splits large submissions and combines adjacent submissions already waiting in the queue. The isolated `contime-batcher` crate manages this packetization after admission and before routing. It never waits to fill a batch. Each request keeps its own rejection destination and completion ownership; internal packet boundaries do not change event timestamps or canonical replay order. Gathering is bounded so queries and coordination can make progress, but gathering and dispatch still consume CPU time.
+
 This walkthrough starts an in-memory ConTime engine with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
 
 The Rust blocks form one complete program, in order. The same program is available as [`examples/counter.rs`](https://github.com/humacss/contime/blob/main/examples/counter.rs). Run it from a ConTime checkout with:

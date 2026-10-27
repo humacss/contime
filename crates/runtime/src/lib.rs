@@ -5,6 +5,7 @@
 //! [`ThreadTopology`] is the low-level generic topology used by process adapters
 //! and diagnostics; it does not interpret messages or coordinate admission.
 #![deny(missing_docs)]
+mod batching;
 mod checkpoint;
 mod coordinator;
 mod frontier;

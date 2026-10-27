@@ -182,6 +182,7 @@ where
     ) -> RouteInputKind<RouterBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, SnapshotListen<I::Time>, Advance<I::Time>> {
         match self {
             Self::Apply(batch) => RouteInputKind::Apply(batch),
+            Self::ApplyPacket(batches) => RouteInputKind::ApplyPacket(batches),
             Self::SnapshotQuery(query) => RouteInputKind::SnapshotQuery(query),
             Self::EventQuery(query) => RouteInputKind::EventQuery(query),
             Self::SnapshotListen(registration) => RouteInputKind::SnapshotListen(registration),
@@ -235,6 +236,25 @@ where
 
     fn create(inputs: Vec<Self::Route>, completion: CompletionHandle) -> Self {
         Self::Apply(WorkerBatch { routes: inputs, completion })
+    }
+    fn coalesce(messages: Vec<Self>) -> Vec<Self> {
+        if messages.len() < 2 || !messages.iter().all(|m| matches!(m, Self::Apply(_))) {
+            return messages;
+        }
+        let mut segments: Vec<WorkerBatch<I>> = Vec::new();
+        for message in messages {
+            let Self::Apply(batch) = message else { unreachable!() };
+            if let Some(last) = segments.last_mut().filter(|last| last.completion.sender.same_channel(&batch.completion.sender)) {
+                last.routes.extend(batch.routes);
+            } else {
+                segments.push(batch);
+            }
+        }
+        if segments.len() == 1 {
+            vec![Self::Apply(segments.pop().unwrap())]
+        } else {
+            vec![Self::ApplyPacket(segments)]
+        }
     }
 }
 
@@ -358,6 +378,7 @@ where
     ) -> WorkInputKind<WorkerBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, SnapshotListen<I::Time>, Advance<I::Time>> {
         match self {
             Self::Apply(batch) => WorkInputKind::Apply(batch),
+            Self::ApplyPacket(batches) => WorkInputKind::ApplyPacket(batches),
             Self::SnapshotQuery(query) => WorkInputKind::SnapshotQuery(query),
             Self::EventQuery(query) => WorkInputKind::EventQuery(query),
             Self::SnapshotListen(registration) => WorkInputKind::SnapshotListen(registration),

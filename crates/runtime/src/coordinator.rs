@@ -6,7 +6,7 @@ use contime_worker::AdvanceTime;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::frontier::Frontier;
-use crate::{Advance, ProgressObservation, ProgressPolicy, RejectionMessage, RejectionReason, RouterBatch, RouterMessage, ThreadInput};
+use crate::{Advance, ProgressObservation, ProgressPolicy, RejectionMessage, RejectionReason, RouterBatch, RouterMessage};
 
 /// Configuration for the admission coordinator run by the owning orchestrator.
 pub struct Settings<T> {
@@ -36,7 +36,7 @@ pub struct Settings<T> {
 /// # Panics
 ///
 /// Panics if `settings.workers` is zero.
-pub fn run<I: ThreadInput, S, P: ProgressPolicy<I::Time>>(
+pub fn run<I: crate::ThreadInput, S, P: ProgressPolicy<I::Time>>(
     input: Arc<Receiver<RouterMessage<I, S>>>,
     output: Sender<RouterMessage<I, S>>,
     controls: Vec<Sender<contime_router::Flush>>,
@@ -58,6 +58,7 @@ pub fn run<I: ThreadInput, S, P: ProgressPolicy<I::Time>>(
     let mut horizon_listeners: Vec<Sender<I::Time>> = Vec::new();
     let mut observation_pending = true;
     let mut observing = None;
+    let mut pending = None;
     loop {
         let pruning = frontier.requested() > frontier.safe();
         let observation_limit = if observation_pending && !frontier.measuring() && resolving.is_none() {
@@ -90,6 +91,7 @@ pub fn run<I: ThreadInput, S, P: ProgressPolicy<I::Time>>(
             || frontier.measuring()
             || observation_pending
             || resolving.is_some()
+            || pending.is_some()
             || !input.is_empty()
             || !observations.is_empty();
         if working != busy {
@@ -110,7 +112,7 @@ pub fn run<I: ThreadInput, S, P: ProgressPolicy<I::Time>>(
         ready.recv(&timer);
         // Publish working before removing a queued message, so idle observers
         // cannot mistake a handoff for an empty pipeline.
-        let selected = ready.ready();
+        let selected = if pending.is_some() { message_index } else { ready.ready() };
         if selected == resolution_index {
             // Every routed completion owner has finished forwarding (or released
             // an unchanged horizon). Do not overlap measurement rounds.
@@ -149,7 +151,7 @@ pub fn run<I: ThreadInput, S, P: ProgressPolicy<I::Time>>(
         if selected != message_index {
             continue;
         }
-        let message = match input.try_recv() {
+        let message = match pending.take().map_or_else(|| input.try_recv(), Ok) {
             Ok(message) => message,
             Err(crossbeam_channel::TryRecvError::Empty) => continue,
             Err(crossbeam_channel::TryRecvError::Disconnected) => return,
@@ -173,9 +175,24 @@ pub fn run<I: ThreadInput, S, P: ProgressPolicy<I::Time>>(
                 None
             }
             RouterMessage::Apply(batch) => {
-                let admitted = admit(batch, None, &mut frontier);
-                observation_pending |= admitted.is_some();
-                admitted
+                let started = Instant::now();
+                let result = crate::batching::drain(
+                    batch,
+                    &input,
+                    &output,
+                    |batch| {
+                        let Some(RouterMessage::Apply(batch)) = admit::<I, S>(batch, None, &mut frontier) else { return None };
+                        policy.invalidated();
+                        observation_pending = true;
+                        Some(batch)
+                    },
+                    || started.elapsed() < crate::batching::GATHER_WORK,
+                );
+                match result {
+                    Ok(boundary) => pending = boundary,
+                    Err(()) => return,
+                }
+                continue;
             }
             RouterMessage::Internal { source, batch } => {
                 let admitted = admit(batch, Some(source), &mut frontier);
@@ -207,17 +224,20 @@ pub fn run<I: ThreadInput, S, P: ProgressPolicy<I::Time>>(
             other => Some(other),
         };
         if let Some(message) = forwarded {
-            if matches!(&message, RouterMessage::Apply(_)) {
+            if let RouterMessage::Apply(batch) = message {
                 policy.invalidated();
-            }
-            if output.send(message).is_err() {
+                let mut batcher = crate::batching::batcher(&output, crate::batching::MAX_EVENTS);
+                if batcher.push(batch).and_then(|_| batcher.flush()).is_err() {
+                    return;
+                }
+            } else if output.send(message).is_err() {
                 return;
             }
         }
     }
 }
 
-pub(crate) fn admit<I: ThreadInput, S>(
+pub(crate) fn admit<I: crate::ThreadInput, S>(
     mut batch: RouterBatch<I>,
     source: Option<I::Time>,
     frontier: &mut Frontier<I::Time>,
@@ -250,6 +270,7 @@ mod tests {
     use super::*;
     use crate::types::testing::Time;
     use crate::CompletionHandle;
+    use crate::Input;
 
     struct Event(Time);
 
@@ -260,7 +281,7 @@ mod tests {
             self.0
         }
     }
-    impl crate::Input for Event {
+    impl Input for Event {
         fn event_id(&self) -> u128 {
             self.0 .0 as u128
         }

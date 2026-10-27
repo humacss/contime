@@ -65,6 +65,13 @@ pub trait WorkerOutput<I, C>: Sized {
 
     /// Consumes the final nonempty worker partition and its completion share.
     fn create(inputs: Vec<Self::Route>, completion: C) -> Self;
+
+    /// Packs apply messages constructed by `create` for one worker into transports.
+    /// The default preserves individual messages. Adapters can group segments while
+    /// preserving each segment's rejection destination and completion ownership.
+    fn coalesce(messages: Vec<Self>) -> Vec<Self> {
+        messages
+    }
 }
 
 impl<I, C> WorkerOutput<I, C> for WorkerBatch<I, C> {
@@ -188,6 +195,8 @@ pub trait CoordinationOutput<T, C>: Sized {
 pub enum RouteInputKind<A, SQ, EQ, SL, AD> {
     /// Partitions an input batch by snapshot ownership.
     Apply(A),
+    /// Partitions adjacent admitted segments while retaining their completion handles.
+    ApplyPacket(Vec<A>),
     /// Partitions a point-in-time snapshot query by ownership.
     SnapshotQuery(SQ),
     /// Routes an event-history range query to one worker.

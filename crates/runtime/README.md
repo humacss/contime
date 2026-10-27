@@ -34,6 +34,16 @@ The topology declares local `Router` and `Worker` traits. Managed process
 adapters in this crate implement those contracts and connect the shared Core
 storage adapter to the router and worker crates.
 
+## Internal transport batching
+
+The admission coordinator uses `contime-batcher` after admission and before
+routing. It splits large submissions and combines adjacent requests already in
+the queue, without waiting for more arrivals. Gathering stops at control messages
+and is bounded by request count and CPU time. Routing preserves each request's
+rejection destination and insertion-completion ownership, including across
+multiple workers. Internal packet boundaries do not change timestamps or
+canonical replay order.
+
 ## Topology
 
 - Every router competes for work from one shared input receiver.

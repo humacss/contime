@@ -180,6 +180,7 @@ where
             };
             match message.into_kind() {
                 RouteInputKind::Apply(batch) => route_batch(&self.placement, batch, &deps)?,
+                RouteInputKind::ApplyPacket(batches) => route_packet(&self.placement, batches, &deps)?,
                 RouteInputKind::SnapshotQuery(query) => crate::route_snapshot_query(self.placement, query, self.worker_outputs)?,
                 RouteInputKind::EventQuery(query) => crate::route_event_query(self.placement, query, self.worker_outputs)?,
                 RouteInputKind::SnapshotListen(registration) => {
@@ -243,22 +244,37 @@ where
     B::Completion: Clone,
     W: WorkerOutput<B::Input, B::Completion>,
 {
+    let mut partitions = (0..deps.worker_count()).map(|_| None).collect::<Vec<_>>();
+    route_partitioned(placement, batch, deps, &mut partitions)
+}
+
+fn route_partitioned<D, B, W>(
+    placement: &Placement,
+    batch: B,
+    deps: &D,
+    worker_inputs: &mut [Option<Vec<W::Route>>],
+) -> Result<(), RouterError>
+where
+    D: Deps<W>,
+    B: RouteInputBatch,
+    B::Input: RoutableInput + Clone,
+    B::Completion: Clone,
+    W: WorkerOutput<B::Input, B::Completion>,
+{
     let worker_count = deps.worker_count();
     let (inputs, batch_completion) = batch.into_parts();
     let base_capacity = inputs.len().div_ceil(worker_count);
     let estimated_capacity = base_capacity.saturating_add(base_capacity / 4).saturating_add(1);
-    let mut worker_inputs = Vec::with_capacity(worker_count);
-    worker_inputs.resize_with(worker_count, || None::<Vec<W::Route>>);
 
     for input in inputs {
         let mut pending_snapshot_id = None;
         input.snapshot_ids(&mut |snapshot_id| {
             if let Some(previous_snapshot_id) = pending_snapshot_id.replace(snapshot_id) {
-                push_route(&mut worker_inputs, placement, worker_count, estimated_capacity, previous_snapshot_id, input.clone());
+                push_route(worker_inputs, placement, worker_count, estimated_capacity, previous_snapshot_id, input.clone());
             }
         });
         if let Some(final_snapshot_id) = pending_snapshot_id {
-            push_route(&mut worker_inputs, placement, worker_count, estimated_capacity, final_snapshot_id, input);
+            push_route(worker_inputs, placement, worker_count, estimated_capacity, final_snapshot_id, input);
         }
     }
 
@@ -266,8 +282,8 @@ where
     let mut remaining_workers = affected_workers;
     let mut completion = Some(batch_completion);
 
-    for (worker_index, inputs) in worker_inputs.into_iter().enumerate() {
-        let Some(inputs) = inputs else {
+    for (worker_index, inputs) in worker_inputs.iter_mut().enumerate() {
+        let Some(inputs) = inputs.take() else {
             continue;
         };
         remaining_workers -= 1;
@@ -279,6 +295,38 @@ where
         deps.send(worker_index, W::create(inputs, worker_completion)).map_err(|()| RouterError::WorkerUnavailable { worker_index })?;
     }
 
+    Ok(())
+}
+
+// Collect segments per worker, then let its adapter choose a transport envelope.
+fn route_packet<D, B, W>(placement: &Placement, batches: Vec<B>, deps: &D) -> Result<(), RouterError>
+where
+    D: Deps<W>,
+    B: RouteInputBatch,
+    B::Input: RoutableInput + Clone,
+    B::Completion: Clone,
+    W: WorkerOutput<B::Input, B::Completion>,
+{
+    struct Collect<W>(std::cell::RefCell<Vec<Vec<W>>>);
+    impl<W> Deps<W> for Collect<W> {
+        fn worker_count(&self) -> usize {
+            self.0.borrow().len()
+        }
+        fn send(&self, index: usize, message: W) -> Result<(), ()> {
+            self.0.borrow_mut()[index].push(message);
+            Ok(())
+        }
+    }
+    let collected = Collect(std::cell::RefCell::new((0..deps.worker_count()).map(|_| Vec::new()).collect()));
+    let mut partitions = (0..deps.worker_count()).map(|_| None).collect::<Vec<_>>();
+    for batch in batches {
+        route_partitioned(placement, batch, &collected, &mut partitions)?;
+    }
+    for (worker_index, messages) in collected.0.into_inner().into_iter().enumerate() {
+        for message in W::coalesce(messages) {
+            deps.send(worker_index, message).map_err(|_| RouterError::WorkerUnavailable { worker_index })?;
+        }
+    }
     Ok(())
 }
 

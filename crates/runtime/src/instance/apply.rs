@@ -8,7 +8,12 @@ impl<I, S, W> ConTime<I, S, W>
 where
     I: crate::ThreadInput,
 {
-    /// Enqueues external inputs without waiting for admission or replay.
+    /// Enqueues an external submission without waiting for admission or replay.
+    ///
+    /// Pass one event or any iterator of events. Submission boundaries do not
+    /// select internal transport packet sizes: the native coordinator splits
+    /// large submissions and combines already-queued ones without waiting for
+    /// additional arrivals. Event timestamps and canonical replay order are unchanged.
     /// Observe rejected inputs through [`Self::errors`]. Use [`Self::send`] with
     /// a request-scoped response channel when insertion acknowledgement is needed;
     /// that acknowledgement does not establish completed replay. Idle waiting is
