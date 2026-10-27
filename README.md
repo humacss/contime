@@ -73,6 +73,13 @@ reconstructing snapshots. Collection and rate calculation are separate from
 presentation; the crate has no UI dependencies. Reports are observations of
 individual workers, not a synchronized global snapshot or completion fence.
 
+The optional `simulator` feature exposes `contime::simulator`. Its seeded
+`EventStream` iterator creates events and assigns their snapshot-identifying
+fields through two caller-provided functions. The crate also provides
+caller-driven adaptive admission and query validation tools using monitor
+observations. It starts no threads and changes no execution or replay rules.
+See the [simulator guide](crates/simulator/README.md) for the APIs and examples.
+
 ### Caller-driven processing
 
 For applications that own their loop, use:

@@ -65,3 +65,6 @@ pub use contime_runtime::{
 /// Worker observations and application accounting, separate from presentation.
 #[cfg(feature = "monitor")]
 pub use contime_monitor as monitor;
+/// Caller-driven load simulation and adaptive Maximum admission.
+#[cfg(feature = "simulator")]
+pub use contime_simulator as simulator;
