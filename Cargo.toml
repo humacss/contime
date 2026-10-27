@@ -71,7 +71,7 @@ required-features = ["runtime"]
 
 [workspace]
 resolver = "2"
-exclude = ["examples/environments/wasi", "examples/environments/browser"]
+exclude = ["examples/environments/wasi", "examples/environments/browser", "benches/scaling"]
 members = [
     "crates/api",
     "crates/batcher",
