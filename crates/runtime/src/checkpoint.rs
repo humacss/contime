@@ -41,6 +41,10 @@ where
     fn process_until(&mut self, time: &I::Time, context: &mut W) {
         self.inner.process_until(time, context);
     }
+    #[cfg(feature = "counters")]
+    fn process_until_counted(&mut self, time: &I::Time, context: &mut W) -> Option<u64> {
+        self.inner.process_until_counted(time, context)
+    }
     fn query(&mut self, time: I::Time, context: &mut W) -> Option<Box<S>> {
         self.inner.query(time, context)
     }
@@ -283,5 +287,45 @@ mod tests {
         assert_eq!(actual.compacted + actual.recent, expected_sum);
         assert_eq!(context.forwards, expected_hooks);
         assert_eq!(context.effects, expected_effects);
+    }
+
+    #[cfg(feature = "counters")]
+    #[test]
+    fn counted_replay_reports_raw_events_despite_partial_wrapper_consumption() {
+        let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 3 } };
+        let mut store = Adapter::create(7, &config, &Time(0));
+        let mut context = Context { limit: Some(1), ..Context::default() };
+        assert_eq!(store.process_until_counted(&Time(20), &mut context), Some(0));
+        for input in [event(1, 10, 1), event(2, 10, 2), event(3, 20, 4)] {
+            store.insert(input, &Time(0));
+        }
+        assert_eq!(store.process_until_counted(&Time(20), &mut context), Some(3));
+        assert_eq!(store.process_until_counted(&Time(20), &mut context), Some(0));
+        assert_eq!(context.effects, vec![Time(10), Time(20)]);
+        assert!(!store.insert(event(1, 10, 1), &Time(0)).changed);
+        assert_eq!(store.process_until_counted(&Time(20), &mut context), Some(0));
+
+        store.insert(event(4, 15, 8), &Time(0));
+        assert_eq!(store.process_until_counted(&Time(20), &mut context), Some(4));
+        assert_eq!(store.query(Time(20), &mut context).unwrap().recent, 13);
+    }
+
+    #[cfg(feature = "counters")]
+    #[test]
+    fn counted_replay_excludes_silent_query_forward_and_prune() {
+        let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 1 } };
+        let mut store = Adapter::create(7, &config, &Time(0));
+        let mut context = Context::default();
+        store.insert(event(1, 10, 1), &Time(0));
+        store.insert(event(2, 20, 2), &Time(0));
+        assert_eq!(store.query(Time(20), &mut context).unwrap().recent, 3);
+        store.forward(&Time(20), &mut context);
+        store.prune();
+        assert!(context.effects.is_empty());
+        assert_eq!(store.process_until_counted(&Time(20), &mut context), Some(1));
+        assert_eq!(context.effects, vec![Time(20)]);
+        // Existing replay at the horizon deliberately starts at its predecessor.
+        assert_eq!(store.process_until_counted(&Time(20), &mut context), Some(1));
+        assert_eq!(store.process_until_counted(&Time(30), &mut context), Some(0));
     }
 }

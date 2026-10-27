@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use contime_worker::{
-    work_messages, AdvanceInput, ApplyBatch, Completion, EventInsert, EventQueryInput, EventQueryResponse, RoutedInput,
+    work_messages, AdvanceInput, ApplyBatch, Completion, EventInsert, EventQueryInput, EventQueryResponse, MessageWorker, RoutedInput,
     SnapshotListenInput, SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput, WorkInputKind,
 };
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughput};
@@ -82,6 +82,12 @@ impl SnapshotStore<TestEvent> for TestStore {
             }
         }
     }
+    #[cfg(feature = "counters")]
+    fn process_until_counted(&mut self, time: &Time, context: &mut Context) -> Option<u64> {
+        let before = self.observed.processed.get();
+        self.process_until(time, context);
+        Some(self.observed.processed.get() - before)
+    }
     fn query(&mut self, _: Time, _: &mut Context) -> Option<Box<u64>> {
         Some(Box::new(self.sum))
     }
@@ -151,12 +157,12 @@ impl SnapshotListener<Time> for Listener {
         true
     }
 }
-struct Listen;
+struct Listen(Vec<u128>);
 impl SnapshotListenInput for Listen {
     type Time = Time;
     type Listener = Listener;
     fn into_parts(self) -> (Time, Vec<u128>, Listener) {
-        (0, vec![], Listener)
+        (0, self.0, Listener)
     }
 }
 struct Advance(Time);
@@ -294,5 +300,62 @@ fn benchmark_messages(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_messages);
+// Keep construction and store setup outside capture timing. Half the histories
+// are due and half future-only; metadata cases own listeners but no stores.
+fn status_fixture(slots: u64, metadata_only: bool) -> (MessageWorker<'static, Message, TestStore>, Rc<Observed>) {
+    let observed = Rc::new(Observed::default());
+    let context = Context { sender: None, stages: VecDeque::new(), next_stage: u64::MAX, events_per_round: 0 };
+    let mut worker = MessageWorker::new_inline(observed.clone(), context);
+    if metadata_only {
+        worker.handle(Message(Kind::SnapshotListen(Listen((0..slots as u128).collect()))));
+    } else {
+        let inputs = (0..slots)
+            .map(|id| RoutedInput { snapshot_id: id as u128, input: TestEvent { time: if id % 2 == 0 { 1 } else { 2 }, value: 1 } })
+            .collect();
+        worker.handle(Message(Kind::Apply(ApplyBatch { inputs, completion: Done })));
+        worker.handle(Message(Kind::Advance(Advance(1))));
+    }
+    let report = worker.status(3);
+    assert_eq!(report.worker_id, 3);
+    assert_eq!(report.history_stores, if metadata_only { 0 } else { slots as usize });
+    assert_eq!(report.metadata_only, if metadata_only { slots as usize } else { 0 });
+    #[cfg(feature = "counters")]
+    assert_eq!(
+        report.counters,
+        Some(contime_worker::WorkerCounters { inserted_applications: if metadata_only { 0 } else { slots }, ..Default::default() })
+    );
+    #[cfg(not(feature = "counters"))]
+    assert_eq!(report.counters, None);
+    assert_eq!(report.pending_histories, report.history_stores);
+    assert_eq!(report.due_histories, if metadata_only { 0 } else { slots.div_ceil(2) as usize });
+    assert_eq!((observed.processed.get(), observed.queries.get(), observed.forwarded.get(), observed.pruned.get()), (0, 0, 0, 0));
+    (worker, observed)
+}
+
+fn benchmark_status(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("worker/status");
+    group.sample_size(20).warm_up_time(Duration::from_millis(200)).measurement_time(Duration::from_secs(1));
+    for slots in [0, 1, 128, 4096] {
+        for metadata_only in [false, true] {
+            let (mut worker, observed) = status_fixture(slots, metadata_only);
+            let kind = if metadata_only { "metadata" } else { "stores" };
+            let expected = worker.status(3);
+            group.bench_function(format!("capture/{kind}/{slots}"), |bencher| {
+                bencher.iter(|| black_box(black_box(&worker).status(black_box(3))));
+            });
+            let (response, received) = unbounded();
+            group.bench_function(format!("request_response/{kind}/{slots}"), |bencher| {
+                bencher.iter(|| {
+                    worker.handle(Message(Kind::Status { worker_id: 3, response: response.clone() }));
+                    black_box(received.try_recv().unwrap());
+                });
+            });
+            assert_eq!(worker.status(3), expected);
+            assert_eq!((observed.processed.get(), observed.queries.get(), observed.forwarded.get(), observed.pruned.get()), (0, 0, 0, 0));
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, benchmark_messages, benchmark_status);
 criterion_main!(benches);

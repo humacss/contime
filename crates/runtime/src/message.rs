@@ -377,6 +377,7 @@ where
         self,
     ) -> WorkInputKind<WorkerBatch<I>, SnapshotQuery<I::Time, S>, EventQuery<I::Time, I>, SnapshotListen<I::Time>, Advance<I::Time>> {
         match self {
+            Self::Status { worker_id, response } => WorkInputKind::Status { worker_id, response },
             Self::Apply(batch) => WorkInputKind::Apply(batch),
             Self::ApplyPacket(batches) => WorkInputKind::ApplyPacket(batches),
             Self::SnapshotQuery(query) => WorkInputKind::SnapshotQuery(query),

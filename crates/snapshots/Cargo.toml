@@ -18,6 +18,9 @@ include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "
 name = "api"
 harness = false
 
+[features]
+counters = []
+
 [dependencies]
 
 [dev-dependencies]

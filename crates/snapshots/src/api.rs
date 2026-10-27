@@ -110,6 +110,24 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> SnapshotStore<S, H> {
         crate::replay::replay(&mut self.store, context, time)
     }
 
+    /// Processes through the inclusive target and returns raw canonical events
+    /// traversed by this replay operation, including events drained after a partial
+    /// application callback and repeated prefixes rebuilt after late insertion.
+    /// Queries and retention forwarding do not contribute to this count.
+    ///
+    /// Uses the same replay and checkpoint placement as [`Self::process_until`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NoCheckpoint`] under the same conditions as [`Self::process_until`].
+    #[cfg(feature = "counters")]
+    pub fn process_until_counted<C>(&mut self, time: S::Time, context: &C) -> Result<u64, NoCheckpoint>
+    where
+        H::Event: Apply<Checkpoint<S>, C>,
+    {
+        crate::replay::replay_counted(&mut self.store, context, time)
+    }
+
     /// Forwards through the horizon's predecessor, then publishes the horizon.
     /// The hook may compact the snapshot while preserving observable state.
     /// Events and obsolete checkpoints are not physically removed.

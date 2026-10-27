@@ -59,5 +59,9 @@ pub mod manual;
 #[cfg(feature = "runtime")]
 pub use contime_runtime::{
     ApiError, ApplyResponse, ConTime, ConTimeConfig, IdleError, Placement, ProgressObservation, ProgressPolicy, RejectionMessage,
-    SharedEvent, ShutdownReport, SnapshotListenerMessage, StartError, ThreadInput, ThreadOutcome,
+    SharedEvent, ShutdownReport, SnapshotListenerMessage, StartError, ThreadInput, ThreadOutcome, WorkerCounters, WorkerStatus,
 };
+
+/// Worker observations and application accounting, separate from presentation.
+#[cfg(feature = "monitor")]
+pub use contime_monitor as monitor;

@@ -44,6 +44,25 @@ rejection destination and insertion-completion ownership, including across
 multiple workers. Internal packet boundaries do not change timestamps or
 canonical replay order.
 
+## Worker observations
+
+`request_worker_status()` queues a read-only request directly to each worker and
+returns a dedicated response stream. `worker_count()` gives the expected number
+of reports. Each report describes its worker when that worker handles the request;
+it is not a synchronized global snapshot or an admission/replay completion fence.
+
+Reports distinguish actual history stores from listener-only metadata, pending
+histories from histories due at the processing target, and the admission horizon
+from completed pruning. Due work may still be blocked by coordination. Counts
+refer to histories, not events or snapshot reconstructions. Capturing a report
+scans existing history slots and due schedule entries without reading stored
+application data, replaying events, advancing time, or adding per-event counters.
+
+The `contime-monitor` runtime adapter collects complete worker sets without
+blocking and exposes immutable readings separately from any presentation layer.
+Dropping a response receiver never blocks a worker. Status requests share normal
+worker queues, so collection can be delayed by queued work.
+
 ## Topology
 
 - Every router competes for work from one shared input receiver.
@@ -211,3 +230,37 @@ billion events/s, or about 64% of that direct ceiling. Relative to the complete
 one-worker topology, it scales by 2.79x. The remaining gap includes the cost of
 sending and receiving 4,000 batches, queue synchronization, completion
 observation, and thread scheduling and contention.
+
+## Optional counter comparison
+
+`benches/counters.rs` compares the same native workload in separate builds with
+and without `counters`. Each trial submits 32,768 sorted events across 64 histories
+using one router and either one or four workers, in submissions of one or 1,024
+events. The tiny snapshot sums varying event payloads and records event count.
+Timing includes public submission and waiting for completed live replay. Fresh
+runtime startup, target setup, input preparation, state/status validation, and
+shutdown are excluded. No query or retention application runs inside timing.
+Counter-enabled trials verify exact inserted and replay totals after the drain;
+both builds verify snapshot counts and sums outside timing. This is controlled
+local throughput, including transport and idle-observation costs, not a production
+capacity estimate or a guarantee of zero counter overhead.
+
+```sh
+cargo bench -p contime-runtime --bench counters -- --test
+cargo bench -p contime-runtime --bench counters --features counters -- --test
+cargo bench -p contime-runtime --bench counters -- --save-baseline counters_off
+cargo bench -p contime-runtime --bench counters --features counters -- --baseline counters_off
+```
+
+Two additional one-worker, single-event-submission cases exercise bounded late
+arrival (each window of 256 source events arrives in reverse order) and 50%
+duplicates (each unique event is submitted twice consecutively). Their benchmark
+group is `native_counter_source_submissions`; throughput counts all 32,768 source
+submissions, including duplicate attempts. The duplicate case admits 16,384 unique
+event applications. Both validate final states and accepted counts outside timing.
+Late replay can exceed accepted events because it rebuilds prefixes; its exact
+amount depends on progress between arrivals. Duplicate replay equals unique
+accepted events. These supplement the four ordered cases.
+
+Run measured builds sequentially with no other benchmark running; repeat in the
+opposite order to expose changes in current machine load.

@@ -68,7 +68,7 @@ where
                 })
             })
             .collect();
-        let runtime = crate::ThreadTopology::start(routers, workers)?;
+        let (runtime, worker_inputs) = crate::ThreadTopology::start_with_worker_inputs(routers, workers)?;
         let mut queues = runtime.queue_checks().to_vec();
         let weak = std::sync::Arc::downgrade(&incoming);
         queues.push(std::sync::Arc::new(move || weak.upgrade().is_none_or(|queue| queue.is_empty())));
@@ -90,11 +90,12 @@ where
         }) {
             Ok(coordinator) => coordinator,
             Err(source) => {
+                drop(worker_inputs);
                 runtime.shutdown();
                 return Err(crate::StartError::ThreadSpawn { stage: crate::RuntimeStage::Admission, source });
             }
         };
-        Ok(Self { runtime, input, coordinator, errors, error_sender, subscriptions, queues, types: PhantomData })
+        Ok(Self { runtime, input, worker_inputs, coordinator, errors, error_sender, subscriptions, queues, types: PhantomData })
     }
 }
 

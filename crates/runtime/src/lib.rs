@@ -27,7 +27,7 @@ pub use contime_api::{ApiError, ApplyResponse, RejectionMessage};
 pub use contime_core::{checkpoints, lanes, Input, RejectionReason};
 pub use contime_progress::{ProgressObservation, ProgressPolicy};
 pub use contime_router::Placement;
-pub use contime_worker::AdvanceTime;
+pub use contime_worker::{AdvanceTime, WorkerCounters, WorkerStatus};
 pub use instance::{ConTime, ConTimeConfig, IdleError};
 /// A managed background ConTime instance.
 pub type Runtime<I, S, W> = ConTime<I, S, W>;

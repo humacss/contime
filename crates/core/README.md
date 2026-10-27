@@ -30,6 +30,13 @@ Those observations never enter retained history. Applications may also use the
 shared synchronous adapter directly with thread-local state and their own
 scheduling of storage operations.
 
+The optional `counters` feature enables worker counters and the native storage's
+exact counted replay method. It counts raw canonical events traversed during each
+live replay call, including rebuilt prefixes after late input and events skipped
+by an application wrapper. Silent queries and retention forwarding are excluded.
+Worker scheduling and the existing `process_until` method are unchanged.
+
+
 ## Verification
 
 ```sh

@@ -22,6 +22,30 @@ where
     Ok(())
 }
 
+/// Retains replay and reports the raw canonical events traversed by this call.
+#[cfg(feature = "counters")]
+pub fn replay_counted<S, H, C>(store: &mut Store<S, H>, context: &C, time: S::Time) -> Result<u64, NoCheckpoint>
+where
+    S: Snapshot,
+    H: EventStore<Time = S::Time>,
+    H::Event: Apply<Checkpoint<S>, C>,
+{
+    let mut playback = store.play(&time)?;
+    let starting_count = playback.checkpoint.history_event_count;
+    loop {
+        {
+            let (checkpoint, events, lookahead) = playback.begin_with_lookahead();
+            let mut events = events.take_while(|event| event.time() <= time).peekable();
+            if events.peek().is_none() {
+                break;
+            }
+            crate::apply::apply_with_lookahead(checkpoint, events, lookahead, context);
+        }
+        retain(&mut playback);
+    }
+    Ok(playback.checkpoint.history_event_count.saturating_sub(starting_count))
+}
+
 // Replay chooses placement; Commit only performs the requested writes.
 fn retain<S: Snapshot, H: EventStore<Time = S::Time>>(playback: &mut Playback<'_, S, H>) {
     let index = playback.checkpoint_index;

@@ -219,8 +219,89 @@ impl<I> EventQueryResponse<I> for crossbeam_channel::Sender<Vec<I>> {
     }
 }
 
+/// Cumulative event-to-history application counts for one worker.
+///
+/// These count canonical insertions and live replay traversals, including repeated
+/// replay after late input. Queries and retention forwarding are excluded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkerCounters {
+    /// Accepted changes to individual histories, excluding duplicates/rejections.
+    pub inserted_applications: u64,
+    /// Live replay traversals, or `None` after a store cannot report its count.
+    pub replay_applications: Option<u64>,
+    /// At least one available cumulative count overflowed and was clamped.
+    pub saturated: bool,
+}
+
+impl Default for WorkerCounters {
+    fn default() -> Self {
+        Self { inserted_applications: 0, replay_applications: Some(0), saturated: false }
+    }
+}
+
+#[cfg(feature = "counters")]
+impl WorkerCounters {
+    pub(crate) fn add_inserted(&mut self, count: u64) {
+        self.inserted_applications = Self::add(self.inserted_applications, count, &mut self.saturated);
+    }
+
+    pub(crate) fn add_replay(&mut self, count: Option<u64>) {
+        self.replay_applications = match (self.replay_applications, count) {
+            (Some(total), Some(count)) => Some(Self::add(total, count, &mut self.saturated)),
+            _ => None,
+        };
+    }
+
+    fn add(total: u64, count: u64, saturated: &mut bool) -> u64 {
+        match total.checked_add(count) {
+            Some(total) => total,
+            None => {
+                *saturated = true;
+                u64::MAX
+            }
+        }
+    }
+}
+
+/// Read-only gauges captured between operations on one worker.
+///
+/// Gauges describe orchestration state; optional counters describe cumulative
+/// event-to-history applications. Reports from separate workers need not describe the same instant.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkerStatus<T> {
+    /// Identifier supplied by the status request's topology owner.
+    pub worker_id: usize,
+    /// Entries owning an initialized history store.
+    pub history_stores: usize,
+    /// Entries with notification metadata but no initialized history store.
+    pub metadata_only: usize,
+    /// Histories scheduled for replay, including future work and blocked work.
+    pub pending_histories: usize,
+    /// Scheduled histories at or before the processing target.
+    /// Pruning or coordination may still prevent them from running.
+    pub due_histories: usize,
+    /// Accepted processing target; this does not mean replay has reached it.
+    pub processing_target: T,
+    /// Accepted admission horizon; pruning through it may still be queued.
+    pub admission_horizon: T,
+    /// Queued pruning passes, including a partly serviced oldest pass.
+    pub pending_prune_passes: usize,
+    /// Reported coordination round whose resolution is needed before replay.
+    pub awaiting_resolution: Option<u64>,
+    /// Optional cumulative counts; `None` when the `counters` feature is disabled.
+    pub counters: Option<WorkerCounters>,
+}
+
 /// Operations serviced serially by one worker’s message loop.
-pub enum WorkInputKind<A, SQ, EQ, SL, AD> {
+pub enum WorkInputKind<A, SQ, EQ, SL, AD: AdvanceInput> {
+    /// Captures orchestration gauges without querying stores or driving work.
+    /// A full or disconnected response channel drops the report without blocking.
+    Status {
+        /// Topology owner’s worker index, copied into the report.
+        worker_id: usize,
+        /// Receives one report with a nonblocking send.
+        response: crossbeam_channel::Sender<WorkerStatus<AD::Time>>,
+    },
     /// Inserts a complete batch and releases its completion before replay.
     Apply(A),
     /// Inserts adjacent segments, releasing each response independently before replay.
@@ -262,7 +343,7 @@ pub trait WorkInput {
     /// Listener collection payload implementing [`SnapshotListenInput`].
     type SnapshotListen;
     /// Target or pruning payload implementing [`AdvanceInput`].
-    type Advance;
+    type Advance: AdvanceInput;
 
     /// Consumes the message and transfers its operation payload.
     // Keep the five caller-selected message types explicit at this boundary.
@@ -311,6 +392,16 @@ pub trait SnapshotStore<I>: Sized {
     /// Process all remaining timestamp batches through time, inclusively.
     /// On return, `earliest_replay_time()` must be `None` or later than `time`.
     fn process_until(&mut self, time: &Self::Time, context: &mut Self::Context);
+    /// Processes the same inclusive endpoint and reports raw live replay traversals.
+    ///
+    /// Include repeated canonical traversals after late insertion; exclude query
+    /// reconstruction and retention forwarding. `None` means counting is unavailable.
+    /// The default preserves custom stores by calling [`Self::process_until`].
+    #[cfg(feature = "counters")]
+    fn process_until_counted(&mut self, time: &Self::Time, context: &mut Self::Context) -> Option<u64> {
+        self.process_until(time, context);
+        None
+    }
     /// Reconstruct fresh state through `time`, including events exactly at it,
     /// without publishing effects or changing replay progress or scheduled work.
     /// Return `None` when retained state cannot reconstruct the requested time.
@@ -337,5 +428,48 @@ pub(crate) struct StoreSlot<S> {
 impl<S> StoreSlot<S> {
     pub(crate) fn metadata_only() -> Self {
         Self { store: None, notification_ids: Vec::new() }
+    }
+}
+
+#[cfg(all(test, feature = "counters"))]
+mod counter_tests {
+    use super::WorkerCounters;
+
+    #[test]
+    fn cumulative_counts_saturate_and_keep_the_overflow_signal() {
+        let mut counters =
+            WorkerCounters { inserted_applications: u64::MAX - 1, replay_applications: Some(u64::MAX - 1), saturated: false };
+        counters.add_inserted(1);
+        counters.add_replay(Some(1));
+        assert!(!counters.saturated, "reaching the maximum exactly is representable");
+        counters.add_inserted(1);
+        counters.add_replay(Some(2));
+        assert_eq!(counters.inserted_applications, u64::MAX);
+        assert_eq!(counters.replay_applications, Some(u64::MAX));
+        assert!(counters.saturated);
+        counters.add_replay(None);
+        counters.add_replay(Some(1));
+        counters.add_inserted(0);
+        assert_eq!(counters.replay_applications, None);
+        assert!(counters.saturated);
+    }
+
+    #[test]
+    fn replay_overflow_independently_marks_saturation() {
+        let mut counters = WorkerCounters { replay_applications: Some(u64::MAX), ..Default::default() };
+        counters.add_replay(Some(1));
+        assert_eq!(counters.inserted_applications, 0);
+        assert_eq!(counters.replay_applications, Some(u64::MAX));
+        assert!(counters.saturated);
+    }
+
+    #[test]
+    fn unknown_replay_is_sticky_without_claiming_overflow() {
+        let mut counters = WorkerCounters::default();
+        counters.add_replay(Some(4));
+        counters.add_replay(None);
+        counters.add_replay(Some(7));
+        assert_eq!(counters.replay_applications, None);
+        assert!(!counters.saturated);
     }
 }

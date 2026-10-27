@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use contime_worker::{
     work_messages, AdvanceInput, ApplyBatch, Coordination, EventInsert, EventQueryInput, RoutedInput, SnapshotListenInput,
-    SnapshotListener, SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind,
+    SnapshotListener, SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind, WorkerStatus,
 };
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -132,6 +132,9 @@ impl AdvanceInput for Advance {
 }
 enum Message {
     Apply(ApplyBatch<Event, Sender<Vec<u128>>>),
+    Packet(Vec<ApplyBatch<Event, Sender<Vec<u128>>>>),
+    Status(usize, Sender<WorkerStatus<u64>>),
+    Listen(Listen),
     Query(Query),
     Events(EventQuery),
     Advance(Advance),
@@ -148,6 +151,9 @@ impl WorkInput for Message {
     fn into_kind(self) -> WorkInputKind<ApplyBatch<Event, Sender<Vec<u128>>>, Query, EventQuery, Listen, Advance> {
         match self {
             Self::Apply(batch) => WorkInputKind::Apply(batch),
+            Self::Packet(batches) => WorkInputKind::ApplyPacket(batches),
+            Self::Status(worker_id, response) => WorkInputKind::Status { worker_id, response },
+            Self::Listen(listen) => WorkInputKind::SnapshotListen(listen),
             Self::Query(query) => WorkInputKind::SnapshotQuery(query),
             Self::Events(query) => WorkInputKind::EventQuery(query),
             Self::Advance(advance) => WorkInputKind::Advance(advance),
@@ -592,4 +598,309 @@ fn completed_history_reopens_for_late_same_time_input_but_not_a_duplicate() {
     assert_eq!((corrected.id, corrected.ids), (7, vec![1, 2, 3]));
     assert!(!worker.step());
     assert!(observed.is_empty());
+}
+
+#[test]
+fn status_distinguishes_metadata_stores_future_work_and_completed_replay() {
+    let (input, messages) = unbounded();
+    let (steps, observed) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let mut worker =
+        contime_worker::MessageWorker::<Message, TestStore>::new(&messages, &registrations, (), Context { steps, gate: None }, None);
+    let empty = WorkerStatus {
+        worker_id: 4,
+        history_stores: 0,
+        metadata_only: 0,
+        pending_histories: 0,
+        due_histories: 0,
+        processing_target: 0,
+        admission_horizon: 0,
+        pending_prune_passes: 0,
+        awaiting_resolution: None,
+        counters: cfg!(feature = "counters").then(Default::default),
+    };
+    assert_eq!(worker.status(4), empty);
+    worker.handle(Message::Listen(Listen));
+    assert_eq!(worker.status(4), WorkerStatus { metadata_only: 1, ..empty.clone() });
+    apply(&input, &[(7, 1, 10), (9, 2, 50), (11, 3, 20)]);
+    worker.handle(messages.try_recv().unwrap());
+    worker.handle(Message::Advance(Advance(20, unbounded().0)));
+    let pending = WorkerStatus {
+        counters: cfg!(feature = "counters").then_some(contime_worker::WorkerCounters { inserted_applications: 3, ..Default::default() }),
+        history_stores: 3,
+        pending_histories: 3,
+        due_histories: 2,
+        processing_target: 20,
+        ..empty
+    };
+    assert_eq!(worker.status(4), pending);
+    let (response, result) = unbounded();
+    worker.handle(Message::Status(4, response));
+    assert_eq!(result.try_recv().unwrap(), pending);
+    assert_eq!(worker.status(4), pending, "a status request does not change scheduling");
+    assert!(observed.is_empty(), "status must not execute store replay or reconstruction");
+    while worker.step() {}
+    assert_eq!(observed.try_iter().count(), 2);
+    assert_eq!(
+        worker.status(4),
+        WorkerStatus {
+            counters: cfg!(feature = "counters").then_some(contime_worker::WorkerCounters {
+                inserted_applications: 3,
+                replay_applications: None,
+                saturated: false
+            }),
+            pending_histories: 1,
+            due_histories: 0,
+            ..pending
+        }
+    );
+}
+
+#[test]
+fn status_reports_pruning_and_coordination_without_servicing_them() {
+    let (input, messages) = unbounded();
+    let (steps, observed) = unbounded();
+    let (reports, report_rx) = unbounded();
+    let (pruned, pruned_rx) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let coordination = Coordination {
+        router_count: 1,
+        report: Box::new(move |round, earliest| reports.send((round, earliest)).unwrap()),
+        pruned: Box::new(move |horizon| pruned.send(horizon).unwrap()),
+    };
+    let mut worker = contime_worker::MessageWorker::<Message, TestStore>::new(
+        &messages,
+        &registrations,
+        (),
+        Context { steps, gate: None },
+        Some(coordination),
+    );
+    apply(&input, &[(7, 1, 10), (9, 2, 20)]);
+    worker.handle(messages.try_recv().unwrap());
+    worker.handle(Message::Advance(Advance(20, unbounded().0)));
+    worker.handle(Message::Fence(6, 0));
+    assert_eq!(report_rx.try_recv().unwrap(), (6, Some(10)));
+    let blocked = worker.status(1);
+    assert_eq!((blocked.pending_histories, blocked.due_histories, blocked.awaiting_resolution), (2, 2, Some(6)));
+    let (response, result) = unbounded();
+    worker.handle(Message::Status(1, response));
+    assert_eq!(result.try_recv().unwrap(), blocked);
+    assert!(!worker.step());
+    assert!(observed.is_empty());
+    assert!(report_rx.is_empty(), "status must not publish a coordination report");
+    worker.handle(Message::Resolve(6, Advance(5, unbounded().0)));
+    worker.handle(Message::Prune(Advance(6, unbounded().0)));
+    let pruning = worker.status(1);
+    assert_eq!((pruning.admission_horizon, pruning.pending_prune_passes, pruning.awaiting_resolution), (6, 2, None));
+    let (response, result) = unbounded();
+    worker.handle(Message::Status(1, response));
+    assert_eq!(result.try_recv().unwrap(), pruning);
+    assert!(pruned_rx.is_empty(), "status must not service a prune pass");
+    assert_eq!(worker.status(1), pruning);
+    while worker.prune_step() {}
+    assert_eq!(pruned_rx.try_iter().collect::<Vec<_>>(), [5, 6]);
+    assert_eq!(worker.status(1).pending_prune_passes, 0);
+}
+
+#[test]
+fn full_and_disconnected_status_receivers_do_not_block_or_change_state() {
+    let (steps, _) = unbounded();
+    let mut worker = contime_worker::MessageWorker::<Message, TestStore>::new_inline((), Context { steps, gate: None });
+    let initial = worker.status(0);
+    let (response, result) = crossbeam_channel::bounded(1);
+    response.send(initial.clone()).unwrap();
+    worker.handle(Message::Status(0, response));
+    assert_eq!(result.try_recv().unwrap(), initial);
+    assert_eq!(result.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected));
+    let (response, result) = crossbeam_channel::bounded(1);
+    drop(result);
+    worker.handle(Message::Status(0, response));
+    assert_eq!(worker.status(0), initial);
+}
+
+#[test]
+fn threaded_worker_services_status_without_advancing_future_inputs() {
+    let (input, messages) = unbounded();
+    let (steps, observed) = unbounded();
+    apply(&input, &[(7, 1, 10)]);
+    let (response, result) = unbounded();
+    input.send(Message::Status(3, response)).unwrap();
+    drop(input);
+    let worker = spawn(messages, steps, None, crossbeam_channel::never(), None);
+    let status = receive(&result);
+    worker.join().unwrap();
+    assert_eq!((status.worker_id, status.history_stores, status.pending_histories, status.due_histories), (3, 1, 1, 0));
+    assert!(observed.is_empty());
+}
+
+#[test]
+fn status_never_calls_storage_read_replay_or_retention_hooks() {
+    // This adapter permits insertion but makes every storage observation and
+    // execution hook fail, including the scheduler's earliest-time lookup.
+    struct InsertionOnly(TestStore);
+    impl SnapshotStore<Event> for InsertionOnly {
+        type Config = ();
+        type Context = Context;
+        type Time = u64;
+        type Snapshot = Snapshot;
+        type Rejection = u128;
+
+        fn create(id: u128, config: &(), horizon: &u64) -> Self {
+            Self(TestStore::create(id, config, horizon))
+        }
+        fn insert(&mut self, event: Event, horizon: &u64) -> EventInsert<u128> {
+            self.0.insert(event, horizon)
+        }
+        fn event_time(event: &Event) -> u64 {
+            TestStore::event_time(event)
+        }
+        fn earliest_replay_time(&self) -> Option<u64> {
+            panic!("status must not inspect storage replay state")
+        }
+        fn process_until(&mut self, _: &u64, _: &mut Context) {
+            panic!("status must not replay events")
+        }
+        fn query(&mut self, _: u64, _: &mut Context) -> Option<Box<Snapshot>> {
+            panic!("status must not reconstruct snapshots")
+        }
+        fn query_events(&self, _: &u64, _: &u64) -> Vec<Event> {
+            panic!("status must not read events")
+        }
+        fn forward(&mut self, _: &u64, _: &mut Context) {
+            panic!("status must not forward histories")
+        }
+        fn prune(&mut self) {
+            panic!("status must not prune histories")
+        }
+    }
+    let (steps, _) = unbounded();
+    let mut worker = contime_worker::MessageWorker::<Message, InsertionOnly>::new_inline((), Context { steps, gate: None });
+    worker.handle(Message::Apply(ApplyBatch {
+        inputs: vec![RoutedInput { snapshot_id: 7, input: Event { id: 1, time: 10 } }],
+        completion: unbounded().0,
+    }));
+    worker.handle(Message::Advance(Advance(20, unbounded().0)));
+    worker.handle(Message::Prune(Advance(5, unbounded().0)));
+    let before = worker.status(0);
+    let (response, result) = unbounded();
+    worker.handle(Message::Status(0, response));
+    assert_eq!(result.try_recv().unwrap(), before);
+    assert_eq!((before.history_stores, before.due_histories, before.pending_prune_passes), (1, 1, 1));
+    assert_eq!(worker.status(0), before);
+}
+
+#[test]
+fn counters_default_and_disabled_status_have_stable_shape() {
+    let counters = contime_worker::WorkerCounters::default();
+    let copied = counters;
+    assert_eq!(copied.inserted_applications, 0);
+    assert_eq!(copied.replay_applications, Some(0));
+    assert!(!copied.saturated);
+    let (steps, _observed) = unbounded();
+    let worker = contime_worker::MessageWorker::<Message, TestStore>::new_inline((), Context { steps, gate: None });
+    assert_eq!(worker.status(0).counters, cfg!(feature = "counters").then_some(counters));
+}
+
+fn batch(values: &[(u128, u128, u64)]) -> ApplyBatch<Event, Sender<Vec<u128>>> {
+    ApplyBatch {
+        inputs: values.iter().map(|&(snapshot_id, id, time)| RoutedInput { snapshot_id, input: Event { id, time } }).collect(),
+        completion: unbounded().0,
+    }
+}
+
+#[test]
+fn packet_insertion_counts_canonical_changes_and_excludes_duplicates_and_rejections() {
+    let (steps, _observed) = unbounded();
+    let mut worker = contime_worker::MessageWorker::<Message, TestStore>::new_inline((), Context { steps, gate: None });
+    worker.handle(Message::Prune(Advance(10, unbounded().0)));
+    while worker.prune_step() {}
+    worker.handle(Message::Packet(vec![batch(&[(7, 1, 10), (7, 1, 10)]), batch(&[(9, 1, 10), (7, 2, 9)])]));
+    assert_eq!(
+        worker.status(0).counters,
+        cfg!(feature = "counters").then_some(contime_worker::WorkerCounters { inserted_applications: 2, ..Default::default() })
+    );
+}
+
+#[cfg(feature = "counters")]
+#[test]
+fn uncounted_custom_store_marks_replay_unknown_only_when_it_runs() {
+    let (steps, observed) = unbounded();
+    let mut worker = contime_worker::MessageWorker::<Message, TestStore>::new_inline((), Context { steps, gate: None });
+    worker.handle(Message::Apply(batch(&[(7, 1, 10)])));
+    assert_eq!(worker.status(0).counters.unwrap().replay_applications, Some(0));
+    worker.handle(Message::Advance(Advance(10, unbounded().0)));
+    assert!(worker.step());
+    assert_eq!(observed.try_iter().count(), 1, "default counted method executes normal processing");
+    assert_eq!(worker.status(0).counters.unwrap().replay_applications, None);
+}
+
+#[cfg(feature = "counters")]
+struct CountedStore(TestStore);
+
+#[cfg(feature = "counters")]
+impl SnapshotStore<Event> for CountedStore {
+    type Config = ();
+    type Context = Context;
+    type Time = u64;
+    type Snapshot = Snapshot;
+    type Rejection = u128;
+    fn create(id: u128, config: &(), horizon: &u64) -> Self {
+        Self(TestStore::create(id, config, horizon))
+    }
+    fn insert(&mut self, event: Event, horizon: &u64) -> EventInsert<u128> {
+        self.0.insert(event, horizon)
+    }
+    fn event_time(event: &Event) -> u64 {
+        event.time
+    }
+    fn earliest_replay_time(&self) -> Option<u64> {
+        self.0.earliest_replay_time()
+    }
+    fn process_until(&mut self, time: &u64, context: &mut Context) {
+        self.0.process_until(time, context);
+    }
+    fn process_until_counted(&mut self, time: &u64, context: &mut Context) -> Option<u64> {
+        // This stub reconstructs from its origin on every processing call.
+        let count = self.0.events.iter().filter(|event| event.time <= *time).count() as u64;
+        self.process_until(time, context);
+        Some(count)
+    }
+    fn query(&mut self, time: u64, context: &mut Context) -> Option<Box<Snapshot>> {
+        self.0.query(time, context)
+    }
+    fn query_events(&self, from: &u64, to: &u64) -> Vec<Event> {
+        self.0.query_events(from, to)
+    }
+    fn forward(&mut self, horizon: &u64, context: &mut Context) {
+        self.0.forward(horizon, context);
+    }
+    fn prune(&mut self) {
+        self.0.prune();
+    }
+}
+
+#[cfg(feature = "counters")]
+#[test]
+fn counted_replay_includes_late_reconstruction_and_excludes_queries_and_pruning() {
+    let (steps, observed) = unbounded();
+    let mut worker = contime_worker::MessageWorker::<Message, CountedStore>::new_inline((), Context { steps, gate: None });
+    worker.handle(Message::Apply(batch(&[(7, 1, 10), (7, 2, 20)])));
+    worker.handle(Message::Advance(Advance(20, unbounded().0)));
+    assert!(worker.step());
+    assert_eq!(worker.status(0).counters.unwrap().replay_applications, Some(2));
+    worker.handle(Message::Apply(batch(&[(7, 3, 10), (7, 1, 10)])));
+    assert!(worker.step());
+    assert!(!worker.step());
+    let before = worker.status(0).counters.unwrap();
+    assert_eq!(before, contime_worker::WorkerCounters { inserted_applications: 3, replay_applications: Some(5), saturated: false });
+    let (response, result) = unbounded();
+    worker.handle(Message::Query(Query(response)));
+    assert_eq!(result.try_recv().unwrap()[0].ids.len(), 3);
+    let (response, result) = unbounded();
+    worker.handle(Message::Events(EventQuery(response)));
+    assert_eq!(result.try_recv().unwrap().len(), 3);
+    worker.handle(Message::Prune(Advance(20, unbounded().0)));
+    while worker.prune_step() {}
+    assert_eq!(worker.status(0).counters, Some(before));
+    assert_eq!(observed.try_iter().count(), 2);
 }

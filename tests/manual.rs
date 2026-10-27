@@ -166,3 +166,41 @@ fn process_handles_one_queued_operation_then_returns_to_the_host() {
     assert_eq!(*callbacks.borrow(), [1, 2]);
     assert!(!contime.process().unwrap());
 }
+
+#[test]
+fn worker_status_observes_manual_work_without_driving_it() {
+    let mut engine = engine(8);
+    engine.apply([event(1, 5, 50, &[1, 2])]).unwrap();
+    engine.advance_to(Time(10)).unwrap();
+    let queued = engine.queued();
+    for _ in 0..2 {
+        let status = engine.worker_status();
+        assert_eq!(status.worker_id, 0);
+        assert_eq!(status.history_stores, 0);
+        assert_eq!(status.processing_target.0, 0);
+        assert_eq!(engine.queued(), queued);
+        #[cfg(feature = "counters")]
+        assert_eq!(status.counters.unwrap().inserted_applications, 0);
+        #[cfg(not(feature = "counters"))]
+        assert!(status.counters.is_none());
+    }
+    assert!(engine.process().unwrap()); // insertion only
+    let status = engine.worker_status();
+    assert_eq!(status.history_stores, 2);
+    #[cfg(feature = "counters")]
+    {
+        let counters = status.counters.unwrap();
+        assert_eq!(counters.inserted_applications, 2);
+        assert_eq!(counters.replay_applications, Some(0));
+    }
+    process(&mut engine);
+    let status = engine.worker_status();
+    assert_eq!(status.processing_target.0, 10);
+    assert_eq!(status.pending_histories, 0);
+    assert_eq!(status.due_histories, 0);
+    #[cfg(feature = "counters")]
+    assert_eq!(status.counters.unwrap().replay_applications, Some(2));
+    engine.prune_before(Time(6)).unwrap();
+    process(&mut engine);
+    assert_eq!(engine.worker_status().admission_horizon.0, 6);
+}

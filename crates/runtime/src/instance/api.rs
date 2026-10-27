@@ -30,6 +30,7 @@ where
 {
     pub(crate) runtime: crate::ThreadTopology<RouterMessage<I, S>, contime_router::RouterError, std::convert::Infallible>,
     pub(crate) input: Sender<RouterMessage<I, S>>,
+    pub(crate) worker_inputs: Vec<Sender<crate::WorkerMessage<I, S>>>,
     pub(crate) coordinator: std::thread::JoinHandle<()>,
     pub(crate) errors: Receiver<contime_api::RejectionMessage<RejectionReason>>,
     pub(crate) error_sender: Sender<contime_api::RejectionMessage<RejectionReason>>,

@@ -61,6 +61,18 @@ fastrand = "2"
 
 ConTime supports Rust 1.90 or newer. The default `runtime` feature starts managed background processing. For caller-driven processing, enable `manual` with default features disabled; both features can also be enabled together. `fastrand` only varies the example's event intervals and increments; it is not required by ConTime. For local development, you can instead use `contime = { path = "/path/to/contime" }`.
 
+The optional `counters` feature records worker-owned insertion and live replay
+application totals. It is disabled by default. With `monitor` enabled, totals and
+observed rates are available through worker status; one source event targeting
+three snapshots counts as three applications. Queries and retention reconstruction
+are excluded. See the [monitor guide](crates/monitor/README.md) for counter and rate semantics.
+
+The optional `monitor` feature exposes `contime::monitor`. With Runtime enabled,
+`WorkerMonitor::attach(&contime)` collects read-only worker reports without
+reconstructing snapshots. Collection and rate calculation are separate from
+presentation; the crate has no UI dependencies. Reports are observations of
+individual workers, not a synchronized global snapshot or completion fence.
+
 ### Caller-driven processing
 
 For applications that own their loop, use:

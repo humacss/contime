@@ -2,7 +2,7 @@ use std::io;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use crossbeam_channel::unbounded;
+use crossbeam_channel::{unbounded, Sender};
 
 use crate::{Router, RuntimeStage, StartError, ThreadTopology, Worker};
 
@@ -16,6 +16,8 @@ trait Deps {
 struct DefaultDeps;
 
 type StartedRuntime<R, W> = ThreadTopology<<R as Router>::Input, <R as Router>::Error, <W as Worker>::Error>;
+
+type StartedWithInputs<R, W> = (StartedRuntime<R, W>, Vec<Sender<<W as Worker>::Input>>);
 
 impl Deps for DefaultDeps {
     fn spawn<T, F>(&self, name: String, run: F) -> io::Result<JoinHandle<T>>
@@ -49,9 +51,26 @@ impl ThreadTopology<(), (), ()> {
     {
         start_with_deps(&DefaultDeps, routers, workers)
     }
+
+    pub(crate) fn start_with_worker_inputs<R, W>(routers: Vec<R>, workers: Vec<W>) -> Result<StartedWithInputs<R, W>, StartError>
+    where
+        R: Router<WorkerInput = W::Input>,
+        W: Worker,
+    {
+        start_with_inputs_and_deps(&DefaultDeps, routers, workers)
+    }
 }
 
 fn start_with_deps<D, R, W>(deps: &D, routers: Vec<R>, workers: Vec<W>) -> Result<StartedRuntime<R, W>, StartError>
+where
+    D: Deps,
+    R: Router<WorkerInput = W::Input>,
+    W: Worker,
+{
+    start_with_inputs_and_deps(deps, routers, workers).map(|(runtime, _inputs)| runtime)
+}
+
+fn start_with_inputs_and_deps<D, R, W>(deps: &D, routers: Vec<R>, workers: Vec<W>) -> Result<StartedWithInputs<R, W>, StartError>
 where
     D: Deps,
     R: Router<WorkerInput = W::Input>,
@@ -114,8 +133,7 @@ where
     }
 
     drop(input_receiver);
-    drop(worker_senders);
-    Ok(ThreadTopology { input: input_sender, routers: router_handles, workers: worker_handles, queue_checks })
+    Ok((ThreadTopology { input: input_sender, routers: router_handles, workers: worker_handles, queue_checks }, worker_senders))
 }
 
 fn join_ignoring_outcomes<E>(handles: Vec<JoinHandle<Result<(), E>>>) {

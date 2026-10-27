@@ -137,6 +137,12 @@ where
         self.queue.push_back(message);
         Ok(())
     }
+    /// Inspect the existing worker without processing messages or advancing work.
+    /// The caller's worker identifier is copied into the report. Like the worker's
+    /// own status operation, this scans history slots and the due schedule prefix.
+    pub fn status(&self, worker_id: usize) -> contime_worker::WorkerStatus<S::Time> {
+        self.worker.status(worker_id)
+    }
     /// Queued messages, including a held prune request; excludes scheduled replay.
     pub fn queued(&self) -> usize {
         self.queue.len() + usize::from(self.held_prune.is_some())

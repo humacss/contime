@@ -25,6 +25,6 @@ mod work;
 pub use types::{
     AdvanceInput, AdvanceTime, ApplyBatch, ApplyInput, Completion, Coordination, EventInsert, EventQueryInput, EventQueryResponse,
     RouteInput, RoutedInput, SnapshotListenInput, SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput,
-    WorkInputKind,
+    WorkInputKind, WorkerCounters, WorkerStatus,
 };
 pub use work::{work_messages, MessageWorker};

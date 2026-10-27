@@ -71,6 +71,40 @@ handling. Completion and idle wait for the whole pass. The completed-horizon
 callback runs only after every history and retention hook succeeds. A failed
 hook or dropped completion sender never reports successful pruning.
 
+## Worker status
+
+`MessageWorker::status(worker_id)` captures worker orchestration gauges.
+`WorkInputKind::Status` requests the same report through the message loop with
+an explicitly supplied worker index and Crossbeam response sender. Sending the
+report never blocks: a full or disconnected response channel drops it.
+
+`WorkerStatus` distinguishes initialized history stores from listener-only
+metadata, counts pending and currently due histories, and reports the accepted
+processing target, admission horizon, queued pruning passes, and awaited
+coordination round. Due work can still be blocked by pruning or coordination.
+The horizon records accepted admission policy, not completed pruning. These
+are history gauges, not retained-event counts.
+
+The optional `counters` feature adds cumulative event-to-history application
+counts to `WorkerStatus::counters`. It is disabled by default; the status field
+always exists and is `None` in disabled builds. `WorkerCounters` is always
+available. Insertions count accepted canonical changes, excluding duplicates and
+rejections. Live replay counts raw canonical traversals, including repeated
+prefix replay after late input, and excludes queries and retention forwarding.
+These are per-history applications, so one input routed to several histories
+contributes several insertions. Counts saturate at `u64::MAX` and retain a
+`saturated` signal after overflow.
+
+Custom stores can implement `SnapshotStore::process_until_counted` when enabled.
+Its default calls normal processing and returns `None`; once any operation
+cannot report a replay count, that worker's replay total remains unavailable.
+No clock or rates are maintained by the worker.
+
+Capture scans the history slots and due schedule prefix without calling stores,
+reconstructing snapshots, processing events, pruning, or publishing hooks.
+Reports from separate workers are not a single atomic system snapshot, and a
+status request does not fence inputs still queued elsewhere in the topology.
+
 ## Synchronous driving
 
 `MessageWorker::new` constructs the same state used by `work_messages` without

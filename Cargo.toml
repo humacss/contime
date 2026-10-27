@@ -16,10 +16,13 @@ include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "
 
 [features]
 default = ["runtime"]
-runtime = ["dep:contime-runtime"]
+runtime = ["dep:contime-runtime", "contime-monitor?/runtime"]
+monitor = ["dep:contime-monitor", "contime-monitor/workers"]
+counters = ["contime-core/counters", "contime-runtime?/counters", "contime-monitor?/counters"]
 manual = ["dep:contime-manual", "dep:contime-api", "dep:contime-worker", "contime-api/manual"]
 
 [dependencies]
+contime-monitor = { path = "crates/monitor", version = "0.1.0", optional = true }
 contime-api = { path = "crates/api", version = "0.1.0", optional = true }
 contime-worker = { path = "crates/worker", version = "0.1.0", optional = true }
 contime-manual = { path = "crates/manual", version = "0.1.0", optional = true }
@@ -68,6 +71,7 @@ members = [
     "crates/events",
     "crates/lanes",
     "crates/manual",
+    "crates/monitor",
     "crates/progress",
     "crates/router",
     "crates/runtime",

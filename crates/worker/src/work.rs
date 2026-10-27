@@ -8,8 +8,11 @@ use crate::listen::NotificationCollections;
 use crate::query::{query_events, query_snapshots};
 use crate::types::{
     AdvanceInput, ApplyInput, Completion, Coordination, EventQueryInput, EventQueryResponse, ReplayUpdate, RouteInput, SnapshotListenInput,
-    SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, StoreSlot, WorkInput, WorkInputKind,
+    SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, StoreSlot, WorkInput, WorkInputKind, WorkerStatus,
 };
+
+#[cfg(feature = "counters")]
+use crate::WorkerCounters;
 
 type ApplyRoute<M> = <<M as WorkInput>::Apply as ApplyInput>::Route;
 type ApplyCompletion<M> = <<M as WorkInput>::Apply as ApplyInput>::Completion;
@@ -88,6 +91,8 @@ where
     reported_round: Option<u64>,
     awaiting_resolution: Option<u64>,
     process_before_report: bool,
+    #[cfg(feature = "counters")]
+    counters: WorkerCounters,
 }
 
 impl<'a, M, S> MessageWorker<'a, M, S>
@@ -153,6 +158,8 @@ where
             reported_round: None,
             awaiting_resolution: None,
             process_before_report: false,
+            #[cfg(feature = "counters")]
+            counters: WorkerCounters::default(),
             store_config,
             store_context,
         }
@@ -236,14 +243,15 @@ where
     /// Storage, listener, and coordination callback panics also propagate.
     pub fn handle(&mut self, message: M) {
         match message.into_kind() {
+            WorkInputKind::Status { worker_id, response } => {
+                let _ = response.try_send(self.status(worker_id));
+            }
             WorkInputKind::ApplyPacket(batches) => {
                 for batch in batches {
                     self.apply_batch(batch);
                 }
             }
-            WorkInputKind::Apply(batch) => {
-                self.apply_batch(batch);
-            }
+            WorkInputKind::Apply(batch) => self.apply_batch(batch),
             WorkInputKind::SnapshotQuery(query) => {
                 query_snapshots::<_, ApplyEvent<M>, _>(query, &mut self.snapshots, &mut self.store_context)
             }
@@ -271,6 +279,30 @@ where
         }
     }
 
+    /// Captures existing orchestration state without invoking store operations.
+    ///
+    /// Scans history slots and the due prefix of the replay schedule. This does
+    /// not drive replay, prune, reconstruct snapshots, or publish notifications.
+    /// The supplied identifier is copied unchanged; an inline host may use zero.
+    pub fn status(&self, worker_id: usize) -> WorkerStatus<S::Time> {
+        let history_stores = self.snapshots.values().filter(|slot| slot.store.is_some()).count();
+        WorkerStatus {
+            worker_id,
+            history_stores,
+            metadata_only: self.snapshots.len() - history_stores,
+            pending_histories: self.pending.len(),
+            due_histories: self.schedule.iter().take_while(|(time, _)| time <= &self.current_time).count(),
+            processing_target: self.current_time.clone(),
+            admission_horizon: self.horizon.clone(),
+            pending_prune_passes: self.pending_prunes.len(),
+            awaiting_resolution: self.awaiting_resolution,
+            #[cfg(feature = "counters")]
+            counters: Some(self.counters),
+            #[cfg(not(feature = "counters"))]
+            counters: None,
+        }
+    }
+
     fn queue_prune(&mut self, prune: M::Advance) {
         let (horizon, completion) = prune.into_parts();
         if horizon > self.horizon {
@@ -286,6 +318,8 @@ where
     fn apply_batch(&mut self, batch: M::Apply) {
         let (routes, completion) = batch.into_parts();
         let mut rejections = Vec::new();
+        #[cfg(feature = "counters")]
+        let mut inserted = 0u64;
         for route in routes {
             let (snapshot_id, input) = route.into_parts();
             let time = S::event_time(&input);
@@ -294,10 +328,16 @@ where
             let result = store.insert(input, &self.horizon);
             rejections.extend(result.rejections);
             if result.changed {
+                #[cfg(feature = "counters")]
+                {
+                    inserted += 1;
+                }
                 let pending = self.pending.get(&snapshot_id).cloned().map_or(time.clone(), |old| old.min(time));
                 self.schedule_at(snapshot_id, pending);
             }
         }
+        #[cfg(feature = "counters")]
+        self.counters.add_inserted(inserted);
         if !rejections.is_empty() {
             completion.reject(rejections);
         }
@@ -351,7 +391,10 @@ where
         self.pending.remove(&snapshot_id);
         let slot = self.snapshots.get_mut(&snapshot_id).expect("scheduled history exists");
         let store = slot.store.as_mut().expect("scheduled store exists");
+        #[cfg(not(feature = "counters"))]
         store.process_until(&end, &mut self.store_context);
+        #[cfg(feature = "counters")]
+        self.counters.add_replay(store.process_until_counted(&end, &mut self.store_context));
         if let Some(next) = store.earliest_replay_time() {
             assert!(next > end, "storage must finish replay through the inclusive processing endpoint");
             self.schedule_at(snapshot_id, next);

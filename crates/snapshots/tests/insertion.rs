@@ -275,3 +275,51 @@ fn boundary_inputs_survive_replay_before_each_prune(#[case] interval: u64) {
         assert_eq!(store.query(Time(later_time), &calls).unwrap().sum, total);
     }
 }
+
+#[cfg(feature = "counters")]
+#[rstest::rstest]
+#[case::every_event(1, 3)]
+#[case::partial_intervals(3, 5)]
+#[case::unbounded(0, 5)]
+fn counted_replay_measures_each_operation_and_rebuilt_prefix(#[case] interval: u64, #[case] late_count: u64) {
+    let mut store = SnapshotStore::new(TestEventStore::default(), TestSnapshot::default(), interval);
+    let calls = Cell::new(0);
+    for id in 1..=4 {
+        store.insert(TestEvent { id, time: Time(id * 10), value: id });
+    }
+    assert_eq!(store.process_until_counted(Time(0), &calls), Ok(0));
+    assert_eq!(store.process_until_counted(Time(20), &calls), Ok(2));
+    assert_eq!(store.query(Time(40), &calls).unwrap().sum, 10);
+    assert_eq!(store.process_until_counted(Time(40), &calls), Ok(2));
+    assert_eq!(store.process_until_counted(Time(40), &calls), Ok(0));
+    assert_eq!(store.insert(TestEvent { id: 1, time: Time(5), value: 99 }), Insert::Duplicate);
+    assert_eq!(store.process_until_counted(Time(40), &calls), Ok(0));
+
+    assert_eq!(store.insert(TestEvent { id: 5, time: Time(25), value: 5 }), Insert::Inserted);
+    assert_eq!(store.query(Time(40), &calls).unwrap().sum, 15);
+    assert_eq!(store.process_until_counted(Time(40), &calls), Ok(late_count));
+    assert_eq!(store.process_until_counted(Time(40), &calls), Ok(0));
+    assert_eq!(store.query(Time(40), &calls).unwrap().sum, 15);
+}
+
+#[cfg(feature = "counters")]
+#[rstest::rstest]
+#[case::deferred_pruning(false)]
+#[case::physical_pruning(true)]
+fn counted_replay_excludes_query_and_forwarding_work(#[case] prune: bool) {
+    let mut store = SnapshotStore::new(TestEventStore::default(), TestSnapshot::default(), 1);
+    let calls = Cell::new(0);
+    for id in 1..=4 {
+        store.insert(TestEvent { id, time: Time(id * 10), value: id });
+    }
+    assert_eq!(store.query(Time(40), &calls).unwrap().sum, 10);
+    store.forward(Time(30), &calls, |_, _, _| {}).unwrap();
+    if prune {
+        store.prune();
+        store.prune();
+    }
+    assert!(store.process_until_counted(Time(29), &calls).is_err());
+    assert_eq!(store.process_until_counted(Time(40), &calls), Ok(2));
+    assert_eq!(store.process_until_counted(Time(40), &calls), Ok(0));
+    assert_eq!(store.query(Time(40), &calls).unwrap().sum, 10);
+}

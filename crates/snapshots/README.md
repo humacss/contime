@@ -37,6 +37,14 @@ crate or execution topology.
 - `prune` physically removes obsolete history after forwarding, preserving the
   predecessor checkpoint. Repeating cleanup is harmless.
 
+The optional `counters` feature adds `process_until_counted`, which performs the
+same replay and returns the number of raw canonical events traversed during that
+call. The count includes drained events ignored by application logic and prefixes
+reconstructed after late insertion. Query and forwarding work are excluded. It
+uses the working checkpoint's existing event-count delta without another history
+scan. `process_until` keeps its existing API and behavior.
+
+
 The initial snapshot precedes the supplied events, including those at its own
 timestamp, which becomes the initial horizon. A target before retained history
 returns `NoCheckpoint`. Forwarding also fails if its horizon has no predecessor,

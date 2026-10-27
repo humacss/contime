@@ -210,6 +210,13 @@ where
     EventQuery(EventQuery<I::Time, I>),
     /// Install this worker's portion of a replay listener registration.
     SnapshotListen(SnapshotListen<I::Time>),
+    /// Observe worker-owned state without advancing replay or retention.
+    Status {
+        /// Zero-based worker index in this runtime.
+        worker_id: usize,
+        /// Dedicated response stream; disconnected receivers are ignored.
+        response: Sender<contime_worker::WorkerStatus<I::Time>>,
+    },
     /// Raise this worker's processing target.
     Advance(Advance<I::Time>),
     /// Move retained history to a coordinator-proven safe boundary.

@@ -60,3 +60,8 @@ cargo +1.90.0 clippy -p contime-manual -p contime-worker --all-targets -- -D war
 
 For wasm32-unknown-unknown, enable the entropy backend required by the
 worker's AHash dependency.
+
+`status(worker_id)` reads the existing worker gauges and optional counters without
+processing work. The root Manual instance exposes it as `worker_status()` with
+worker ID zero. Reading status scans history slots and the due schedule prefix;
+it neither reconstructs snapshots nor changes replay or pruning.

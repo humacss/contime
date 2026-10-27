@@ -130,6 +130,13 @@ where
     pub fn process_with_clock(&mut self, budget: FrameBudget, clock: impl FnMut() -> Duration) -> Result<FrameReport, ProcessError> {
         self.driver.process_with_clock(budget, clock)
     }
+    /// Inspect this instance's one worker (ID zero) without processing work.
+    /// Reports existing orchestration gauges and optional `counters` metrics.
+    /// This scans history slots and the due schedule prefix; it neither queries
+    /// snapshot state nor changes the queue, replay, target, or pruning horizon.
+    pub fn worker_status(&self) -> contime_worker::WorkerStatus<I::Time> {
+        self.driver.status(0)
+    }
     /// Queued messages, including a held prune request; excludes scheduled replay.
     pub fn queued(&self) -> usize {
         self.driver.queued()

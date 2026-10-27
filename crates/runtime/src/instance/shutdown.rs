@@ -15,6 +15,7 @@ where
     /// Idle waits are helpers for controlled tests and benchmarks only.
     pub fn shutdown(self) -> crate::ShutdownReport<contime_router::RouterError, Infallible> {
         let _ = self.input.send(crate::RouterMessage::Shutdown);
+        drop(self.worker_inputs);
         let _ = self.coordinator.join();
         self.runtime.shutdown()
     }
