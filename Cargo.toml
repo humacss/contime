@@ -14,9 +14,17 @@ keywords = ["events", "history", "replay", "snapshots"]
 categories = ["data-structures", "concurrency"]
 include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
+[features]
+default = ["runtime"]
+runtime = ["dep:contime-runtime"]
+manual = ["dep:contime-manual", "dep:contime-api", "dep:contime-worker", "contime-api/manual"]
+
 [dependencies]
+contime-api = { path = "crates/api", version = "0.1.0", optional = true }
+contime-worker = { path = "crates/worker", version = "0.1.0", optional = true }
+contime-manual = { path = "crates/manual", version = "0.1.0", optional = true }
 contime-core = { path = "crates/core", version = "0.1.0" }
-contime-runtime = { path = "crates/runtime", version = "0.1.0" }
+contime-runtime = { path = "crates/runtime", version = "0.1.0", optional = true }
 
 [dev-dependencies]
 contime-api = { path = "crates/api", version = "0.1.0" }
@@ -34,18 +42,22 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "apply"
 harness = false
+required-features = ["runtime"]
 
 [[bench]]
 name = "query"
 harness = false
+required-features = ["runtime"]
 
 [[bench]]
 name = "advance"
 harness = false
+required-features = ["runtime"]
 
 [[bench]]
 name = "listen"
 harness = false
+required-features = ["runtime"]
 
 [workspace]
 resolver = "2"
@@ -55,6 +67,7 @@ members = [
     "crates/core",
     "crates/events",
     "crates/lanes",
+    "crates/manual",
     "crates/progress",
     "crates/router",
     "crates/runtime",
@@ -64,3 +77,51 @@ members = [
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[test]]
+name = "advance"
+required-features = ["runtime"]
+
+[[test]]
+name = "incremental"
+required-features = ["runtime"]
+
+[[test]]
+name = "listen"
+required-features = ["runtime"]
+
+[[test]]
+name = "manual"
+required-features = ["manual"]
+
+[[test]]
+name = "progress"
+required-features = ["runtime"]
+
+[[test]]
+name = "query"
+required-features = ["runtime"]
+
+[[test]]
+name = "replay_boundary"
+required-features = ["runtime"]
+
+[[test]]
+name = "replay_frontier"
+required-features = ["runtime"]
+
+[[example]]
+name = "counter"
+required-features = ["runtime"]
+
+[[example]]
+name = "chain_hash"
+required-features = ["runtime"]
+
+[[example]]
+name = "ordered_values"
+required-features = ["runtime"]
+
+[[example]]
+name = "sensor_readings"
+required-features = ["runtime"]

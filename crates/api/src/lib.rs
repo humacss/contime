@@ -55,3 +55,8 @@ pub use types::{
     AdvanceOutput, ApiError, ApplyOutput, ApplyResponse, EventQueryOutput, InputBatch, RejectionMessage, SnapshotListenOutput,
     SnapshotQueryOutput,
 };
+
+/// Local callback-based request adapters for caller-driven worker processing.
+/// This module owns no worker, storage, queue or processing loop.
+#[cfg(feature = "manual")]
+pub mod manual;

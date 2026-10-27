@@ -57,7 +57,27 @@ contime = "0.1.0"
 fastrand = "2"
 ```
 
-ConTime supports Rust 1.90 or newer and currently has no optional Cargo features. `fastrand` only varies the example's event intervals and increments; it is not required by ConTime. For local development, you can instead use `contime = { path = "/path/to/contime" }`.
+ConTime supports Rust 1.90 or newer. The default `runtime` feature starts managed background processing. For caller-driven processing, enable `manual` with default features disabled; both features can also be enabled together. `fastrand` only varies the example's event intervals and increments; it is not required by ConTime. For local development, you can instead use `contime = { path = "/path/to/contime" }`.
+
+### Caller-driven processing
+
+For applications that own their loop, use:
+
+```toml
+contime = { version = "0.1", default-features = false, features = ["manual"] }
+```
+
+`contime::manual::ManualConTime` uses the same event and snapshot contracts as
+Runtime and starts no background threads. Enqueue `apply`, `advance_to`, and
+`query_at` operations, then call `process()` between other host work. Query
+callbacks execute on the calling thread and may capture thread-local state.
+
+`process_with_clock` optionally repeats complete steps up to a maximum time/work
+allowance. It returns early when no work is ready and never sleeps to fill the
+allowance. One complete operation may exceed the soft time limit. Retention is
+explicit through `prune_before`; regularly drain `take_rejections()` to inspect
+insertion failures. See the [Manual guide](crates/manual/README.md) for contracts
+and limitations.
 
 ### Define Time
 
@@ -374,9 +394,10 @@ Advancement requests are asynchronous. Processing observations and pruning notif
 
 | Crate | Responsibility |
 | --- | --- |
-| `contime` (root) | Public facade re-exporting the managed instance and shared contracts |
+| `contime` (root) | Public facade for managed or caller-driven processing and shared contracts |
 | [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Shared application contracts and synchronous storage adapters |
-| [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input batching and request boundaries |
+| [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input requests, responses, and optional local callback adapters |
+| [`contime-manual`](crates/manual/README.md) | Caller-driven processing of one worker between complete operations |
 | [`contime-router`](https://github.com/humacss/contime/blob/main/crates/router/README.md) | Deterministic routing to worker-owned histories |
 | [`contime-runtime`](https://github.com/humacss/contime/blob/main/crates/runtime/README.md) | Managed instance, admission coordination, protocol adapters, thread topology, and shutdown |
 | [`contime-worker`](https://github.com/humacss/contime/blob/main/crates/worker/README.md) | History ownership and incremental replay scheduling |

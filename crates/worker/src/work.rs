@@ -70,8 +70,8 @@ where
     M::SnapshotListen: SnapshotListenInput<Time = S::Time>,
     M::Advance: AdvanceInput<Time = S::Time>,
 {
-    input: &'a Receiver<M>,
-    registrations: &'a Receiver<crossbeam_channel::Sender<bool>>,
+    input: Option<&'a Receiver<M>>,
+    registrations: Option<&'a Receiver<crossbeam_channel::Sender<bool>>>,
     snapshots: AHashMap<u128, StoreSlot<S>>,
     listeners: NotificationCollections<S::Time, <M::SnapshotListen as SnapshotListenInput>::Listener>,
     activity_listeners: Vec<crossbeam_channel::Sender<bool>>,
@@ -117,6 +117,25 @@ where
         store_context: S::Context,
         coordination: Option<Coordination<S::Time>>,
     ) -> Self {
+        Self::build(Some(input), Some(registrations), store_config, store_context, coordination)
+    }
+
+    /// Constructs channel-free state for an inline host. No receive loop runs.
+    /// Deliver messages with `handle`, then drive `prune_step` and `step`.
+    pub fn new_inline(store_config: S::Config, store_context: S::Context) -> MessageWorker<'static, M, S>
+    where
+        M: 'static,
+    {
+        MessageWorker::build(None, None, store_config, store_context, None)
+    }
+
+    fn build(
+        input: Option<&'a Receiver<M>>,
+        registrations: Option<&'a Receiver<crossbeam_channel::Sender<bool>>>,
+        store_config: S::Config,
+        store_context: S::Context,
+        coordination: Option<Coordination<S::Time>>,
+    ) -> Self {
         Self {
             input,
             registrations,
@@ -141,12 +160,14 @@ where
 
     /// Waits and reports activity without consuming work.
     fn activity_loop(&mut self) {
+        let input = self.input.expect("receive loop requires channel bindings");
+        let registrations = self.registrations.expect("receive loop requires channel bindings");
         let mut ready = crossbeam_channel::Select::new();
-        let work_ready = ready.recv(self.input);
-        let subscription = ready.recv(self.registrations);
+        let work_ready = ready.recv(input);
+        let subscription = ready.recv(registrations);
         loop {
             if ready.ready() != work_ready {
-                match self.registrations.try_recv() {
+                match registrations.try_recv() {
                     Ok(listener) => {
                         if listener.send(false).is_ok() {
                             self.activity_listeners.push(listener);
@@ -167,10 +188,11 @@ where
 
     /// Drains each ready batch before giving scheduled work a processing turn.
     fn work_loop(&mut self) -> TryRecvError {
-        let mut batch_size = self.input.len().max(1);
+        let input = self.input.expect("receive loop requires channel bindings");
+        let mut batch_size = input.len().max(1);
         let mut remaining = batch_size;
         loop {
-            let message = match self.input.try_recv() {
+            let message = match input.try_recv() {
                 Ok(message) => message,
                 Err(reason) => {
                     if self.prune_step() || self.step() {
@@ -191,11 +213,11 @@ where
                     }
                     // Replay callbacks may enqueue queries or late inputs.
                     // Service them before starting another replay step.
-                    if !self.input.is_empty() {
+                    if !input.is_empty() {
                         break;
                     }
                 }
-                batch_size = self.input.len().max(1);
+                batch_size = input.len().max(1);
                 remaining = batch_size;
             }
         }

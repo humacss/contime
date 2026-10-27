@@ -1,0 +1,21 @@
+[package]
+name = "contime-manual"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+publish = ["crates-io"]
+license = "MIT"
+description = "Caller-driven execution of one ConTime worker"
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-manual"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/tests/**", "!**/docs/**"]
+
+[dependencies]
+contime-worker = { path = "../worker", version = "0.1.0" }
+
+[dev-dependencies]
+crossbeam-channel = "0.5"

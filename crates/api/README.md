@@ -132,3 +132,16 @@ round trip to a minimal downstream thread and synchronous result collection:
 The snapshot fixture allocates one boxed value per result downstream. The event
 fixture returns one contiguous vector, so the difference primarily describes
 result ownership and allocation rather than request construction.
+
+## Caller-driven request adapters
+
+The optional `manual` feature adds local callback-based adapters implementing
+`contime-worker` request and response contracts. It owns no worker, storage,
+queue or processing loop. Enabling this feature adds a dependency on
+`contime-worker`; the default channel helpers retain their existing contracts.
+
+Callbacks run synchronously once a worker begins processing their request and
+may capture thread-local state. Empty processed queries invoke their callback
+with an empty vector. Dropping an unprocessed request does not invoke its
+callback, and unwinding does not report successful empty completion. Callbacks
+must not block waiting for the same worker.

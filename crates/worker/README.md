@@ -74,7 +74,10 @@ hook or dropped completion sender never reports successful pruning.
 ## Synchronous driving
 
 `MessageWorker::new` constructs the same state used by `work_messages` without
-spawning threads. `handle` delivers a message, `step` processes a scheduled
+spawning threads. `MessageWorker::new_inline` constructs that state without
+channel bindings, for owned state in an application host loop. Both constructors
+use the same message handling, replay scheduling and pruning methods.
+`handle` delivers a message, `step` processes a scheduled
 snapshot, and `prune_step` forwards/prunes a history. A driver must preserve
 normal priority: delivered messages, pending pruning, then replay. Runtime's
 controlled frontier tests use this interface with real storage adapters.
