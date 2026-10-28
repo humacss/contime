@@ -37,6 +37,11 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+      - name: Install native graphics build dependencies
+        # The shared renderer tests compile Bevy's X11 and Wayland backends.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pkg-config libx11-dev libwayland-dev libxkbcommon-dev
       - name: Install Rust and WebAssembly target
         run: |
           rustup toolchain install 1.90.0 --profile minimal --target wasm32-unknown-unknown

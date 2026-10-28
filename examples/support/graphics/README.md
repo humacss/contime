@@ -37,6 +37,13 @@ Install Rust 1.95 for presentation and its browser target when needed:
 rustup toolchain install 1.95.0 --profile minimal --target wasm32-unknown-unknown
 ```
 
+On Ubuntu, native builds and renderer tests also need the X11 and Wayland
+build dependencies for the enabled window backends:
+
+```sh
+sudo apt-get install pkg-config libx11-dev libwayland-dev libxkbcommon-dev
+```
+
 The launcher reports missing tools; it does not install them. Browser bindings
 also need the wasm-bindgen CLI matching the example manifests.
 
