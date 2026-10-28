@@ -16,6 +16,7 @@ categories = ["data-structures", "concurrency"]
 include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [dependencies]
+traitstub = "0.1.0"
 crossbeam-channel = "0.5"
 
 [dev-dependencies]

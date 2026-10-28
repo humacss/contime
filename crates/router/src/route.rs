@@ -6,23 +6,13 @@ use crate::types::{
 };
 use crate::{CoordinationOutput, Flush, Placement};
 
-trait Deps<W> {
-    fn worker_count(&self) -> usize;
-    fn send(&self, worker_index: usize, batch: W) -> Result<(), ()>;
+traitstub::deps! {
+    worker_count() -> usize;
+    send[W](worker_index: usize, batch: W) -> Result<(), ()>;
 }
 
-struct DefaultDeps<'a, W> {
-    worker_outputs: &'a [Sender<W>],
-}
-
-impl<W> Deps<W> for DefaultDeps<'_, W> {
-    fn worker_count(&self) -> usize {
-        self.worker_outputs.len()
-    }
-
-    fn send(&self, worker_index: usize, batch: W) -> Result<(), ()> {
-        self.worker_outputs[worker_index].send(batch).map_err(|_| ())
-    }
+fn worker_deps<W>(worker_outputs: &[Sender<W>]) -> impl calls::worker_count + calls::send<W> + '_ {
+    Deps(|| worker_outputs.len(), |worker_index: usize, batch| worker_outputs[worker_index].send(batch).map_err(|_| ()))
 }
 
 /// Runs apply-only routing on the calling thread until the input disconnects.
@@ -44,7 +34,7 @@ where
     B::Completion: Clone,
     W: WorkerOutput<B::Input, B::Completion>,
 {
-    route_with_deps(placement, input, &DefaultDeps { worker_outputs })
+    route_with_deps(placement, input, &worker_deps(worker_outputs))
 }
 
 /// Dispatches unified work and coordination messages until the work input disconnects.
@@ -169,7 +159,7 @@ where
 
     /// Drains and routes available messages without waiting.
     fn route_pending(&mut self) -> Result<crossbeam_channel::TryRecvError, RouterError> {
-        let deps = DefaultDeps { worker_outputs: self.worker_outputs };
+        let deps = worker_deps(self.worker_outputs);
         loop {
             for flush in self.controls.try_iter() {
                 self.flush(flush)?;
@@ -220,7 +210,7 @@ where
 
 fn route_with_deps<D, B, W>(placement: Placement, input: Receiver<B>, deps: &D) -> Result<(), RouterError>
 where
-    D: Deps<W>,
+    D: calls::worker_count + calls::send<W>,
     B: RouteInputBatch,
     B::Input: RoutableInput + Clone,
     B::Completion: Clone,
@@ -238,7 +228,7 @@ where
 
 fn route_batch<D, B, W>(placement: &Placement, batch: B, deps: &D) -> Result<(), RouterError>
 where
-    D: Deps<W>,
+    D: calls::worker_count + calls::send<W>,
     B: RouteInputBatch,
     B::Input: RoutableInput + Clone,
     B::Completion: Clone,
@@ -255,7 +245,7 @@ fn route_partitioned<D, B, W>(
     worker_inputs: &mut [Option<Vec<W::Route>>],
 ) -> Result<(), RouterError>
 where
-    D: Deps<W>,
+    D: calls::worker_count + calls::send<W>,
     B: RouteInputBatch,
     B::Input: RoutableInput + Clone,
     B::Completion: Clone,
@@ -301,28 +291,27 @@ where
 // Collect segments per worker, then let its adapter choose a transport envelope.
 fn route_packet<D, B, W>(placement: &Placement, batches: Vec<B>, deps: &D) -> Result<(), RouterError>
 where
-    D: Deps<W>,
+    D: calls::worker_count + calls::send<W>,
     B: RouteInputBatch,
     B::Input: RoutableInput + Clone,
     B::Completion: Clone,
     W: WorkerOutput<B::Input, B::Completion>,
 {
-    struct Collect<W>(std::cell::RefCell<Vec<Vec<W>>>);
-    impl<W> Deps<W> for Collect<W> {
-        fn worker_count(&self) -> usize {
-            self.0.borrow().len()
-        }
-        fn send(&self, index: usize, message: W) -> Result<(), ()> {
-            self.0.borrow_mut()[index].push(message);
-            Ok(())
+    let collected = std::cell::RefCell::new((0..deps.worker_count()).map(|_| Vec::new()).collect::<Vec<Vec<W>>>());
+    {
+        let collector = Deps(
+            || collected.borrow().len(),
+            |index: usize, message| {
+                collected.borrow_mut()[index].push(message);
+                Ok(())
+            },
+        );
+        let mut partitions = (0..deps.worker_count()).map(|_| None).collect::<Vec<_>>();
+        for batch in batches {
+            route_partitioned(placement, batch, &collector, &mut partitions)?;
         }
     }
-    let collected = Collect(std::cell::RefCell::new((0..deps.worker_count()).map(|_| Vec::new()).collect()));
-    let mut partitions = (0..deps.worker_count()).map(|_| None).collect::<Vec<_>>();
-    for batch in batches {
-        route_partitioned(placement, batch, &collected, &mut partitions)?;
-    }
-    for (worker_index, messages) in collected.0.into_inner().into_iter().enumerate() {
+    for (worker_index, messages) in collected.into_inner().into_iter().enumerate() {
         for message in W::coalesce(messages) {
             deps.send(worker_index, message).map_err(|_| RouterError::WorkerUnavailable { worker_index })?;
         }
@@ -346,6 +335,7 @@ fn push_route<I, R>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::hint::black_box;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -353,7 +343,12 @@ mod tests {
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::{unbounded, Receiver, Sender};
 
-    use super::route;
+    use super::{calls, route, route_with_deps, Deps};
+
+    traitstub::stubs! {
+        worker_count => || 1;
+        send => |_, _| Ok(());
+    }
     use crate::Placement;
     use crate::{InputBatch, RoutableInput, RouteInputBatch, RouteOutput, RouterError, WorkerBatch, WorkerOutput};
 
@@ -484,21 +479,18 @@ mod tests {
         input_sender.send(InputBatch { inputs, completion: () }).unwrap();
         drop(input_sender);
 
-        let mut worker_outputs = Vec::with_capacity(worker_count);
-        let mut worker_receivers = Vec::with_capacity(worker_count);
-        for _ in 0..worker_count {
-            let (worker_sender, worker_receiver) = unbounded();
-            worker_outputs.push(worker_sender);
-            worker_receivers.push(worker_receiver);
+        let batches = RefCell::new(Vec::<(usize, WorkerBatch<TestInput, ()>)>::new());
+        {
+            let deps = traitstub::defs! {
+                worker_count => || worker_count;
+                send => |worker_index, batch| {
+                    batches.borrow_mut().push((worker_index, batch));
+                    Ok(())
+                };
+            };
+            route_with_deps(placement, input_receiver, &deps).unwrap();
         }
-
-        route(placement, input_receiver, &worker_outputs).unwrap();
-
-        worker_receivers
-            .into_iter()
-            .enumerate()
-            .flat_map(|(worker_index, receiver)| receiver.try_iter().map(move |batch| (worker_index, batch)).collect::<Vec<_>>())
-            .collect()
+        batches.into_inner()
     }
 
     fn snapshot_id_for_worker(placement: Placement, worker_count: usize, target_worker: usize) -> u128 {
@@ -527,10 +519,9 @@ mod tests {
     #[test]
     fn route_stops_normally_when_input_disconnects() {
         let (input_sender, input_receiver) = unbounded::<InputBatch<TestInput, ()>>();
-        let (worker_sender, _worker_receiver) = unbounded::<WorkerBatch<TestInput, ()>>();
         drop(input_sender);
 
-        let result = route(crate::Placement::default(), input_receiver, &[worker_sender]);
+        let result = route_with_deps::<_, _, WorkerBatch<TestInput, ()>>(crate::Placement::default(), input_receiver, &Stubs);
 
         assert_eq!(result, Ok(()));
     }

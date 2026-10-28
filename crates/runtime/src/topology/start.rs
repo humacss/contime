@@ -1,4 +1,3 @@
-use std::io;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -6,28 +5,15 @@ use crossbeam_channel::{unbounded, Sender};
 
 use crate::{Router, RuntimeStage, StartError, ThreadTopology, Worker};
 
-trait Deps {
-    fn spawn<T, F>(&self, name: String, run: F) -> io::Result<JoinHandle<T>>
-    where
-        T: Send + 'static,
-        F: FnOnce() -> T + Send + 'static;
+traitstub::deps! {
+    spawn[T, F](name: String, run: F) -> std::io::Result<std::thread::JoinHandle<T>>
+        where [T: Send + 'static, F: FnOnce() -> T + Send + 'static],
+        |name, run| std::thread::Builder::new().name(name).spawn(run);
 }
-
-struct DefaultDeps;
 
 type StartedRuntime<R, W> = ThreadTopology<<R as Router>::Input, <R as Router>::Error, <W as Worker>::Error>;
 
 type StartedWithInputs<R, W> = (StartedRuntime<R, W>, Vec<Sender<<W as Worker>::Input>>);
-
-impl Deps for DefaultDeps {
-    fn spawn<T, F>(&self, name: String, run: F) -> io::Result<JoinHandle<T>>
-    where
-        T: Send + 'static,
-        F: FnOnce() -> T + Send + 'static,
-    {
-        std::thread::Builder::new().name(name).spawn(run)
-    }
-}
 
 impl ThreadTopology<(), (), ()> {
     /// Takes ownership of the supplied processes and starts workers, then routers.
@@ -49,7 +35,7 @@ impl ThreadTopology<(), (), ()> {
         R: Router<WorkerInput = W::Input>,
         W: Worker,
     {
-        start_with_deps(&DefaultDeps, routers, workers)
+        start_with_deps(&Deps, routers, workers)
     }
 
     pub(crate) fn start_with_worker_inputs<R, W>(routers: Vec<R>, workers: Vec<W>) -> Result<StartedWithInputs<R, W>, StartError>
@@ -57,7 +43,7 @@ impl ThreadTopology<(), (), ()> {
         R: Router<WorkerInput = W::Input>,
         W: Worker,
     {
-        start_with_inputs_and_deps(&DefaultDeps, routers, workers)
+        start_with_inputs_and_deps(&Deps, routers, workers)
     }
 }
 
@@ -152,6 +138,10 @@ mod tests {
     use crossbeam_channel::{unbounded, Receiver, Sender};
 
     use super::{start_with_deps, Deps};
+
+    traitstub::stubs! {
+        spawn(name, run) => std::thread::Builder::new().name(name).spawn(run);
+    }
     use crate::{Router, StartError, ThreadTopology, Worker};
 
     struct TestRouter;
@@ -209,7 +199,7 @@ mod tests {
 
     #[test]
     fn startup_preserves_the_supplied_process_counts() {
-        let runtime = ThreadTopology::start(vec![TestRouter, TestRouter], vec![TestWorker, TestWorker, TestWorker, TestWorker]).unwrap();
+        let runtime = start_with_deps(&Stubs, vec![TestRouter, TestRouter], vec![TestWorker, TestWorker, TestWorker, TestWorker]).unwrap();
 
         let report = runtime.shutdown();
 

@@ -19,6 +19,7 @@ include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "
 counters = ["contime-worker/counters", "contime-core/counters"]
 
 [dependencies]
+traitstub = "0.1.0"
 contime-batcher = { path = "../batcher", version = "0.1.0" }
 contime-core = { path = "../core", version = "0.1.0" }
 contime-api = { path = "../api", version = "0.1.0" }
