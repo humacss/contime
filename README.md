@@ -1,7 +1,12 @@
 [![Crates.io](https://img.shields.io/crates/v/contime.svg)](https://crates.io/crates/contime)
 [![Docs](https://docs.rs/contime/badge.svg)](https://docs.rs/contime)
+[![CI](https://github.com/humacss/contime/actions/workflows/ci.yml/badge.svg)](https://github.com/humacss/contime/actions/workflows/ci.yml)
+[![Qlty | Maintainability](https://qlty.sh/gh/humacss/projects/contime/maintainability.svg)](https://qlty.sh/gh/humacss/projects/contime)
+[![Qlty | Code Coverage](https://qlty.sh/gh/humacss/projects/contime/coverage.svg)](https://qlty.sh/gh/humacss/projects/contime)
 
 # contime
+
+> **Work in progress:** ConTime is still being developed for my own use. There is more cleanup to do, and the API needs further refinement before it is ready for general adoption. You are welcome to try it, but expect changes and rough edges.
 
 `contime` is an in-memory Rust workspace that builds queryable continuous-time state from unreliable event streams.
 
@@ -552,7 +557,15 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 Build the Rust API documentation with `cargo doc --workspace --no-deps --open`
 for completion boundaries and public contracts. Each crate README describes
-its focused tests and benchmarks.
+its focused tests and benchmarks. Recorded component results stay in those
+READMEs; public pipeline and terminal-presentation results are in
+[`benches/README.md`](benches/README.md).
+
+The [coverage workflow](.github/workflows/coverage.yml) combines workspace tests
+with default and optional features, Manual-only tests, and example verification
+tests. It reports library coverage to [Qlty](https://qlty.sh/gh/humacss/projects/contime),
+excluding test, benchmark, and example source. Browser and WASI packages are
+separate workspaces and are not included in this native coverage report.
 
 ## License
 

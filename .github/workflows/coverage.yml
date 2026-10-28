@@ -1,0 +1,66 @@
+name: Coverage
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: Workspace coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install Rust coverage tools
+        run: rustup toolchain install 1.90.0 --profile minimal --component llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@f9ee2b3488b5862cca1caf86effaa61f55953001 # cargo-llvm-cov
+        with:
+          tool: cargo-llvm-cov@0.8.2
+      - name: Clear previous coverage data
+        run: cargo +1.90.0 llvm-cov clean --workspace
+      # Accumulate profiles across feature combinations, including counters disabled.
+      # Benchmarks and interactive examples must not run as coverage tests.
+      - name: Cover default features
+        run: cargo +1.90.0 llvm-cov --workspace --lib --tests --no-report
+      - name: Cover optional features
+        run: cargo +1.90.0 llvm-cov --workspace --all-features --lib --tests --no-report
+      - name: Cover Manual without managed Runtime
+        run: cargo +1.90.0 llvm-cov -p contime --no-default-features --features manual --test manual --no-report
+      - name: Cover example verification tests
+        run: cargo +1.90.0 llvm-cov -p contime --all-features --examples --no-report
+      - name: Export library coverage
+        run: >-
+          cargo +1.90.0 llvm-cov report --package '*' --lcov
+          --ignore-filename-regex '(^|/)(tests|benches|examples)/'
+          --output-path target/lcov.info
+      - name: Save coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-lcov
+          path: target/lcov.info
+          if-no-files-found: error
+      # Enable humacss/contime as a project in Qlty Cloud; no coverage secret is needed.
+      - name: Upload coverage to Qlty
+        # Fork pull requests still generate a report, but cannot obtain an OIDC token.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: qltysh/qlty-action/coverage@ebcd284bf32e36a030afe15f1e136c7be08b9506 # v2.5.0
+        with:
+          oidc: true
+          files: target/lcov.info
+          skip-errors: false

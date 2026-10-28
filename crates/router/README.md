@@ -12,7 +12,9 @@ placement and worker counts across every operation in a topology.
 
 Horizon advancement is broadcast directly to every worker without snapshot
 hashing or route-vector allocation. The final worker takes the original time
-and completion handle; earlier workers receive clones.
+and completion handle; earlier workers receive clones. Local full-channel
+measurements recorded on 2026-09-01 were 237.5 ns for one worker, 626.3 ns for
+four workers, and 2.275 us for sixteen workers.
 
 The broadcast does not establish a barrier with apply batches being processed
 by another router. With multiple routers, an earlier apply and a later advance
@@ -110,9 +112,305 @@ inside this crate.
 
 ## Benchmarks
 
-The `router` benchmark covers routing with different worker counts, event sizes,
-ownership strategies and fanout. The `query` benchmark measures snapshot-query
-partitioning and event-query dispatch. Receivers remain alive without processing
-worker messages, so these measure dispatch rather than application throughput.
-Run the commands in Verification above. Compare matching fixtures and include
-allocation and output-lifetime differences when interpreting results.
+The measurements below describe the historical seeded-hash implementation.
+They are retained as a baseline, not measurements of the new modulus placement.
+
+Timestamped collection routing results recorded on 2026-09-02:
+
+| Snapshot IDs | Workers | Total | Amortized | Throughput |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 1 | 2.1067 us | 2.107 ns/ID | 474.7 million IDs/s |
+| 1,000 | 8 | 3.4233 us | 3.423 ns/ID | 292.1 million IDs/s |
+
+The fixture includes one seeded ownership lookup per ID, worker partition
+allocation, one listener clone per additional affected worker, and one real
+Crossbeam send per affected worker. Listener registration and notifications in
+the workers are excluded.
+
+Query routing results recorded on 2026-09-01:
+
+| Workload | 1 worker | 8 workers | 10 workers |
+| --- | ---: | ---: | ---: |
+| 1 snapshot ID | 164.05 ns | 586.15 ns | 888.58 ns |
+| 10 snapshot IDs | 198.86 ns | 902.59 ns | 995.44 ns |
+| 100 snapshot IDs | 404.68 ns | 1.342 us | 1.418 us |
+| 1,000 snapshot IDs | 2.502 us | 3.630 us | 4.216 us |
+| One event-history query | 74.15 ns | 513.43 ns | 513.39 ns |
+
+Snapshot-query routing includes worker partition allocation, one hash per ID
+when multiple workers exist, response-sender cloning across affected workers,
+and one real Crossbeam send per affected worker. Event queries hash one snapshot
+ID and send exactly one message.
+
+The following measurement was recorded locally in release mode on 2026-08-28:
+
+| Benchmark | Time | Amortized per item |
+| --- | ---: | ---: |
+| `router/1000_inputs/8_workers` | 4.1140–4.1542 µs | approximately 4.14 ns |
+| `hash/1000_snapshot_ids/8_workers` | 924.89–927.89 ns | approximately 0.926 ns |
+
+Using the benchmark medians, hashing accounts for approximately **22.4%** of
+the complete routing time: 926.17 ns of 4.1373 µs. The remaining routing work
+accounts for approximately 3.211 µs, or 77.6%.
+
+The unit fixture uses seed `7`, one batch containing 1,000 Arc-owned,
+single-destination inputs, eight worker outputs, and a real Crossbeam
+completion sender. Input construction and all channel construction happen
+outside the timed routine. Worker processing is not part of this crate and is
+also excluded.
+
+The measurement includes:
+
+- receiving the already-enqueued input batch;
+- deriving the private AHash state from the seed;
+- visiting and hashing all 1,000 snapshot IDs;
+- allocating the worker-slot and affected-worker vectors;
+- moving routed inputs directly into final worker batches;
+- cloning the completion sender once per additional affected worker;
+- sending one batch through each affected worker's real Crossbeam channel;
+- observing normal shutdown when the input channel disconnects.
+
+The isolated hash measurement includes creating the seeded AHash state once,
+hashing 1,000 `u128` snapshot IDs, reducing each hash to one of eight worker
+indexes, and accumulating the results so the optimizer must retain the work.
+The snapshot-ID vector is constructed outside the timed routine.
+
+### Sustained routing
+
+The executable generic benchmark prepares 100 complete batches of 1,000 inputs
+before timing begins. It compares direct ownership with a benchmark-local
+consumer `Arc` wrapper. Fixture construction and initial Arc allocation remain
+outside the timed routine.
+
+| Event bytes | Routes per event | Owned total | Owned per route | Shared total | Shared per route |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 32 | 1 | 428.62 µs | 4.286 ns | 340.39 µs | 3.404 ns |
+| 32 | 2 | 1.0614 ms | 5.307 ns | 925.87 µs | 4.629 ns |
+| 32 | 3 | 1.5979 ms | 5.326 ns | 1.6710 ms | 5.570 ns |
+| 64 | 1 | 982.04 µs | 9.820 ns | 725.70 µs | 7.257 ns |
+| 64 | 2 | 2.0099 ms | 10.050 ns | 1.3855 ms | 6.928 ns |
+| 64 | 3 | 3.1067 ms | 10.356 ns | 2.0264 ms | 6.755 ns |
+| 208 | 1 | 2.3360 ms | 23.360 ns | 816.35 µs | 8.164 ns |
+| 208 | 2 | 4.8476 ms | 24.238 ns | 1.4892 ms | 7.446 ns |
+| 208 | 3 | 7.8331 ms | 26.110 ns | 2.2846 ms | 7.615 ns |
+| 1,008 | 1 | 8.4624 ms | 84.624 ns | 721.59 µs | 7.216 ns |
+| 1,008 | 2 | 15.766 ms | 78.830 ns | 1.3907 ms | 6.954 ns |
+| 1,008 | 3 | 26.022 ms | 86.740 ns | 2.2119 ms | 7.373 ns |
+
+`SnapshotIds` has one-, two-, and three-ID variants, so snapshot-ID count is
+the route count without a separate field. The payload lengths are 0, 144, and
+944 bytes; together with snapshot routing data and alignment they produce
+events of exactly 64, 208, and 1,008 bytes. Compile-time assertions prevent
+these sizes from drifting. Within each event-size group, payload bytes and ID
+values are identical except for the deliberately selected snapshot-ID variant.
+The paired shared case changes only event ownership.
+
+The 32-byte event is a separate compact fixture
+containing one `u128` snapshot ID and 16 payload bytes. Its owned routed record
+was 48 bytes and the corresponding shared routed record was 32 bytes. At this
+boundary the two ownership strategies were effectively tied.
+
+Owned cost scales with both event size and emitted routes. Shared routed
+records remain pointer-sized regardless of the underlying event size. At 1,008
+bytes, owned routing costs approximately 79–87 ns per route while shared
+routing remains approximately 7 ns per route. The 32-byte results are close
+enough that ordinary measurement and layout effects can outweigh either
+ownership strategy.
+
+The following table records the previous Arc-only reference run. It remains
+useful for implementation-drift comparisons, while the matrix above is the
+current executable ownership comparison:
+
+| Event bytes | Workers | Routes/event | Total | ns/input | ns/route | Input events/s | Routes/s |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 32 | 8 | 1 | 343.19 µs | 3.4319 | 3.4319 | 291,383,782 | 291,383,782 |
+| 32 | 8 | 2 | 902.23 µs | 9.0223 | 4.5111 | 110,836,483 | 221,672,966 |
+| 32 | 8 | 3 | 1.5887 ms | 15.8870 | 5.2957 | 62,944,546 | 188,833,638 |
+| 64 | 8 | 1 | 738.57 µs | 7.3857 | 7.3857 | 135,396,780 | 135,396,780 |
+| 64 | 8 | 2 | 1.4013 ms | 14.0130 | 7.0065 | 71,362,306 | 142,724,613 |
+| 64 | 8 | 3 | 2.1455 ms | 21.4550 | 7.1517 | 46,609,182 | 139,827,546 |
+| 208 | 8 | 1 | 801.99 µs | 8.0199 | 8.0199 | 124,689,834 | 124,689,834 |
+| 208 | 8 | 2 | 1.4978 ms | 14.9780 | 7.4890 | 66,764,588 | 133,529,176 |
+| 208 | 8 | 3 | 2.2585 ms | 22.5850 | 7.5283 | 44,277,175 | 132,831,525 |
+| 1,008 | 8 | 1 | 720.91 µs | 7.2091 | 7.2091 | 138,713,570 | 138,713,570 |
+| 1,008 | 8 | 2 | 1.3842 ms | 13.8420 | 6.9210 | 72,243,895 | 144,487,791 |
+| 1,008 | 8 | 3 | 2.1995 ms | 21.9950 | 7.3317 | 45,464,878 | 136,394,635 |
+| 64 | 1 | 1 | 584.48 µs | 5.8448 | 5.8448 | 171,092,253 | 171,092,253 |
+
+The generic integration matrix contains four exact event sizes and one, two,
+and three routes per event. The compact 32-byte event stores a first snapshot
+ID, 15 payload bytes, and a one-byte route count; compile-time assertions keep
+its size fixed while it emits consecutive snapshot IDs. The 64-, 208-, and
+1,008-byte fixtures store their snapshot IDs directly.
+
+Input-event throughput necessarily falls as each event fans out further. Route
+throughput is the more stable measure of router work: the 64-byte-and-larger
+two- and three-route cases sustain approximately 133–144 million emitted
+snapshot routes per second. Event payload size has little effect after the Arc
+boundary because routed records move the same pointer-sized handle.
+
+When exactly one worker is configured, worker selection returns index zero
+without hashing the snapshot ID. The router still uses the same snapshot
+visitation, flattening, allocation, completion, and sending logic. The original
+pre-Arc-boundary experiment changed the median from 719.47 µs to 580.80 µs, a
+19.4% improvement. In the complete current suite, the direct Arc fixture
+measures 584.48 µs for one worker and 738.57 µs for eight workers with one
+route per event.
+
+Payload construction, initial `Arc` allocation, input-batch cloning, and worker
+execution are outside the timed routine. The results isolate routing after the
+caller has selected an ownership strategy.
+
+### `Arc::new`
+
+The isolated allocation benchmark constructs each value before timing, then
+times only `Arc::new(value)`. Criterion destroys the returned `Arc` after the
+timer stops, so these measurements include allocating the reference-counted
+block and moving the value into it, but exclude final destruction and
+deallocation:
+
+| Value bytes | `Arc::new` |
+| ---: | ---: |
+| 32 | 13.985 ns |
+| 64 | 14.839 ns |
+| 208 | 22.550 ns |
+| 1,008 | 74.646 ns |
+
+An `Arc` handle is one pointer. On this 64-bit target its allocation also
+stores two pointer-sized atomic counters alongside the value, before allocator
+metadata and padding.
+
+Worker receivers remain alive but do not process messages during the timed
+routine. This keeps the benchmark scoped to the router while allowing
+Crossbeam's queue-block allocations to amortize across the 100 batches.
+Fixture construction, output destruction, and worker execution are excluded.
+
+### Sustained-routing flame graph
+
+The following historical profile predates the same-event comparison and uses
+the earlier 32-byte single-route fixture. The 1,000 Hz, ten-second profile
+recorded 10,653 samples. The primary measured
+router subtree contained 6,481 samples:
+
+| Router operation | Samples | Share of router subtree |
+| --- | ---: | ---: |
+| Allocate per-worker destination vectors | 6,000 | 92.6% |
+| Send worker batches through Crossbeam | 246 | 3.8% |
+| Deallocate consumed input vectors | 139 | 2.1% |
+| Remaining routing work | 96 | 1.5% |
+
+Of the 246 Crossbeam-send samples, 236 were in its queue-block allocation.
+The benchmark allocates one destination vector per affected worker per batch:
+eight workers across 100 batches produce 800 destination-vector allocations.
+Each vector reserves 157 routed inputs, so the profile identifies allocation,
+not hashing or channel bookkeeping, as the dominant sampled router cost.
+
+These percentages describe samples from an instrumented profiling run, not
+the uninstrumented Criterion timing model. They identify the hot call stacks;
+the regular benchmark remains the source for absolute latency.
+
+## Full benchmark run — 2026-10-28
+
+Measured on Apple M3 Pro (11 logical CPUs), Rust 1.90.0, optimized Cargo bench
+profile, with unpinned threads and normal desktop background activity. All groups
+ran sequentially after compilation. Existing warm-up, sample-count and measurement
+settings were retained; no shortened timing overrides were used. These are local
+measurements, not production-capacity guarantees. The workspace lockfile uses
+Criterion 0.5.1, Crossbeam channel 0.5.15 and Crossbeam utils 0.8.21.
+Earlier dated results above
+remain historical records and may use different fixtures or settings.
+
+Tables report the **median time per benchmark iteration**, with its bootstrap
+95% confidence interval. Rates are derived from that median only where the
+benchmark declares a throughput unit; that unit may be source events, target
+applications, snapshots, bytes, or bookkeeping calls. It is not automatically
+ConTime's event-processing capacity. Thread-startup and allocation boundaries
+remain those defined in each benchmark source.
+
+Feature variants were measured in separate sequential runs, not interleaved
+paired trials; changing background load can affect their differences.
+
+Feature sets: `all-features` is the workspace feature union, including optional
+worker counters; `default` disables optional counters; `status-no-counters`
+enables Monitor's `runtime` feature without counters. Each table states the
+actual sample count. Inline tests may contain multiple Criterion cases.
+
+### `advance` · criterion · all-features
+
+| Benchmark | Median | 95% interval | Samples | Declared-unit rate |
+| --- | ---: | ---: | ---: | ---: |
+| `router/advance/workers/1` | 184.185 ns | 183.412 ns–185.547 ns | 100 | 5.429 M elements/s |
+| `router/advance/workers/16` | 1.871 µs | 1.838 µs–1.895 µs | 100 | 8.554 M elements/s |
+| `router/advance/workers/4` | 478.591 ns | 477.657 ns–480.736 ns | 100 | 8.358 M elements/s |
+
+### `query` · criterion · all-features
+
+| Benchmark | Median | 95% interval | Samples | Declared-unit rate |
+| --- | ---: | ---: | ---: | ---: |
+| `router/query/event/1` | 59.833 ns | 58.888 ns–61.053 ns | 100 | — |
+| `router/query/event/10` | 682.192 ns | 665.630 ns–714.188 ns | 100 | — |
+| `router/query/event/2` | 169.532 ns | 151.700 ns–184.155 ns | 100 | — |
+| `router/query/event/4` | 282.577 ns | 260.913 ns–294.560 ns | 100 | — |
+| `router/query/event/8` | 534.374 ns | 432.696 ns–585.714 ns | 100 | — |
+| `router/query/snapshots/10_workers/1` | 604.610 ns | 557.218 ns–623.112 ns | 100 | — |
+| `router/query/snapshots/10_workers/10` | 838.713 ns | 812.067 ns–873.030 ns | 100 | — |
+| `router/query/snapshots/10_workers/100` | 1.247 µs | 1.227 µs–1.262 µs | 100 | — |
+| `router/query/snapshots/10_workers/1000` | 3.826 µs | 3.807 µs–3.862 µs | 100 | — |
+| `router/query/snapshots/1_workers/1` | 141.280 ns | 138.410 ns–142.862 ns | 100 | — |
+| `router/query/snapshots/1_workers/10` | 187.755 ns | 184.602 ns–192.781 ns | 100 | — |
+| `router/query/snapshots/1_workers/100` | 445.362 ns | 444.487 ns–447.102 ns | 100 | — |
+| `router/query/snapshots/1_workers/1000` | 3.168 µs | 3.161 µs–3.179 µs | 100 | — |
+| `router/query/snapshots/2_workers/1` | 198.270 ns | 192.362 ns–200.716 ns | 100 | — |
+| `router/query/snapshots/2_workers/10` | 266.820 ns | 260.882 ns–271.493 ns | 100 | — |
+| `router/query/snapshots/2_workers/100` | 539.653 ns | 536.891 ns–542.006 ns | 100 | — |
+| `router/query/snapshots/2_workers/1000` | 3.255 µs | 3.229 µs–3.341 µs | 100 | — |
+| `router/query/snapshots/4_workers/1` | 327.225 ns | 306.232 ns–333.989 ns | 100 | — |
+| `router/query/snapshots/4_workers/10` | 510.344 ns | 499.811 ns–519.107 ns | 100 | — |
+| `router/query/snapshots/4_workers/100` | 763.095 ns | 734.781 ns–773.206 ns | 100 | — |
+| `router/query/snapshots/4_workers/1000` | 3.774 µs | 3.765 µs–3.792 µs | 100 | — |
+| `router/query/snapshots/8_workers/1` | 581.879 ns | 504.497 ns–610.006 ns | 100 | — |
+| `router/query/snapshots/8_workers/10` | 848.848 ns | 802.813 ns–899.298 ns | 100 | — |
+| `router/query/snapshots/8_workers/100` | 1.214 µs | 1.175 µs–1.239 µs | 100 | — |
+| `router/query/snapshots/8_workers/1000` | 4.102 µs | 4.053 µs–4.134 µs | 100 | — |
+
+### `router` · criterion · all-features
+
+| Benchmark | Median | 95% interval | Samples | Declared-unit rate |
+| --- | ---: | ---: | ---: | ---: |
+| `arc_new/1008_bytes` | 57.662 ns | 56.448 ns–59.190 ns | 50 | — |
+| `arc_new/208_bytes` | 16.782 ns | 16.166 ns–17.947 ns | 50 | — |
+| `arc_new/32_bytes` | 11.305 ns | 11.117 ns–11.746 ns | 50 | — |
+| `arc_new/64_bytes` | 12.568 ns | 11.948 ns–12.906 ns | 50 | — |
+| `router/100_batches/1000_inputs/1008_byte_events/8_workers/owned/1_route` | 7.303 ms | 7.282 ms–7.340 ms | 50 | — |
+| `router/100_batches/1000_inputs/1008_byte_events/8_workers/owned/2_routes` | 13.300 ms | 13.066 ms–13.697 ms | 50 | — |
+| `router/100_batches/1000_inputs/1008_byte_events/8_workers/owned/3_routes` | 21.248 ms | 21.114 ms–21.553 ms | 50 | — |
+| `router/100_batches/1000_inputs/1008_byte_events/8_workers/shared/1_route` | 614.472 µs | 602.403 µs–636.414 µs | 50 | — |
+| `router/100_batches/1000_inputs/1008_byte_events/8_workers/shared/2_routes` | 1.155 ms | 1.139 ms–1.177 ms | 50 | — |
+| `router/100_batches/1000_inputs/1008_byte_events/8_workers/shared/3_routes` | 1.839 ms | 1.828 ms–1.868 ms | 50 | — |
+| `router/100_batches/1000_inputs/208_byte_events/8_workers/owned/1_route` | 2.197 ms | 2.195 ms–2.200 ms | 50 | — |
+| `router/100_batches/1000_inputs/208_byte_events/8_workers/owned/2_routes` | 4.209 ms | 4.207 ms–4.214 ms | 50 | — |
+| `router/100_batches/1000_inputs/208_byte_events/8_workers/owned/3_routes` | 6.482 ms | 6.460 ms–6.557 ms | 50 | — |
+| `router/100_batches/1000_inputs/208_byte_events/8_workers/shared/1_route` | 677.838 µs | 674.307 µs–680.456 µs | 50 | — |
+| `router/100_batches/1000_inputs/208_byte_events/8_workers/shared/2_routes` | 1.268 ms | 1.225 ms–1.273 ms | 50 | — |
+| `router/100_batches/1000_inputs/208_byte_events/8_workers/shared/3_routes` | 1.903 ms | 1.898 ms–1.922 ms | 50 | — |
+| `router/100_batches/1000_inputs/32_byte_events/8_workers/owned/1_route` | 419.837 µs | 416.531 µs–423.793 µs | 50 | — |
+| `router/100_batches/1000_inputs/32_byte_events/8_workers/owned/2_routes` | 1.092 ms | 1.085 ms–1.111 ms | 50 | — |
+| `router/100_batches/1000_inputs/32_byte_events/8_workers/owned/3_routes` | 1.819 ms | 1.761 ms–1.860 ms | 50 | — |
+| `router/100_batches/1000_inputs/32_byte_events/8_workers/shared/1_route` | 368.287 µs | 366.769 µs–370.318 µs | 50 | — |
+| `router/100_batches/1000_inputs/32_byte_events/8_workers/shared/2_routes` | 915.104 µs | 905.954 µs–969.022 µs | 50 | — |
+| `router/100_batches/1000_inputs/32_byte_events/8_workers/shared/3_routes` | 1.600 ms | 1.563 ms–1.668 ms | 50 | — |
+| `router/100_batches/1000_inputs/64_byte_events/1_worker/1_route` | 858.092 µs | 856.403 µs–859.292 µs | 50 | — |
+| `router/100_batches/1000_inputs/64_byte_events/8_workers/owned/1_route` | 971.787 µs | 967.897 µs–974.294 µs | 50 | — |
+| `router/100_batches/1000_inputs/64_byte_events/8_workers/owned/2_routes` | 1.811 ms | 1.772 ms–1.875 ms | 50 | — |
+| `router/100_batches/1000_inputs/64_byte_events/8_workers/owned/3_routes` | 2.656 ms | 2.654 ms–2.661 ms | 50 | — |
+| `router/100_batches/1000_inputs/64_byte_events/8_workers/shared/1_route` | 611.180 µs | 605.629 µs–626.218 µs | 50 | — |
+| `router/100_batches/1000_inputs/64_byte_events/8_workers/shared/2_routes` | 1.166 ms | 1.164 ms–1.170 ms | 50 | — |
+| `router/100_batches/1000_inputs/64_byte_events/8_workers/shared/3_routes` | 1.777 ms | 1.773 ms–1.793 ms | 50 | — |
+
+### `contime_router` · inline · all-features
+
+| Benchmark | Median | 95% interval | Samples | Declared-unit rate |
+| --- | ---: | ---: | ---: | ---: |
+| `router/1000_inputs/8_workers` | 5.395 µs | 5.259 µs–5.595 µs | 100 | — |
+| `router/listen/1000_ids/1_workers` | 2.117 µs | 2.115 µs–2.118 µs | 100 | — |
+| `router/listen/1000_ids/8_workers` | 2.894 µs | 2.857 µs–2.990 µs | 100 | — |
