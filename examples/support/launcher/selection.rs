@@ -9,7 +9,7 @@ pub enum Environment {
 impl Environment {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Terminal => "Native (terminal)",
+            Self::Terminal => "Native",
             Self::Wasm => "WebAssembly / WASI",
             Self::WasmThreads => "WebAssembly / WASI Threads",
             Self::Browser => "Browser (WebAssembly)",

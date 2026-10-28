@@ -20,12 +20,12 @@ use std::{
 const TOOLCHAIN: &str = "1.90.0";
 #[derive(Debug)]
 pub struct CommandSpec {
-    program: OsString,
-    args: Vec<OsString>,
-    cwd: PathBuf,
+    pub(super) program: OsString,
+    pub(super) args: Vec<OsString>,
+    pub(super) cwd: PathBuf,
 }
 impl CommandSpec {
-    fn new(program: impl Into<OsString>, cwd: &Path, args: impl IntoIterator<Item = impl Into<OsString>>) -> Self {
+    pub(super) fn new(program: impl Into<OsString>, cwd: &Path, args: impl IntoIterator<Item = impl Into<OsString>>) -> Self {
         Self { program: program.into(), args: args.into_iter().map(Into::into).collect(), cwd: cwd.to_path_buf() }
     }
     fn command(&self) -> Command {
@@ -36,7 +36,7 @@ impl CommandSpec {
     pub fn show(&self) {
         println!("  {:?}", self.command());
     }
-    fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(super) fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         let status = self.command().status().map_err(|e| format!("Could not start {:?}: {e}", self.program))?;
         if !status.success() {
             return Err(format!("{:?} exited with {status}", self.program).into());
@@ -249,6 +249,14 @@ pub fn wasi(
     let mut run = wasi_case_command(root, selection, settings, case_arguments);
     if dry {
         build.show();
+        if selection.domain == Domain::Movement && !settings.headless {
+            run.args.extend([
+                "--metrics-stdio".into(),
+                "--control-input".into(),
+                if target == WasmTarget::Threads { "poll".into() } else { "nonblocking".into() },
+            ]);
+            return super::graphics::present(root, run, true, cancelled);
+        }
         run.show();
         return Ok(());
     }
@@ -268,7 +276,14 @@ pub fn wasi(
     let result = (|| {
         build.run()?;
         println!("Running {} execution…", selection.execution.slug());
-        if super::terminal::enabled(settings) {
+        if selection.domain == Domain::Movement && !settings.headless {
+            run.args.extend([
+                "--metrics-stdio".into(),
+                "--control-input".into(),
+                if target == WasmTarget::Threads { "poll".into() } else { "nonblocking".into() },
+            ]);
+            super::graphics::present(root, run, false, cancelled)
+        } else if super::terminal::enabled(settings) {
             run.args.push("--metrics-stdio".into());
             if selection.domain == Domain::Movement {
                 run.args
@@ -300,7 +315,12 @@ pub fn browser(
     let build = portable_build(root, Environment::Browser);
     if dry {
         build.show();
-        bindings_command(root, std::env::var_os("WASM_BINDGEN").unwrap_or_else(|| "wasm-bindgen".into())).show();
+        let generator = std::env::var_os("WASM_BINDGEN").unwrap_or_else(|| "wasm-bindgen".into());
+        bindings_command(root, generator.clone()).show();
+        if domain == Domain::Movement {
+            super::graphics::build(root, true).show();
+            super::graphics::bindings(root, generator).show();
+        }
         println!("  Serve examples/support/composition/browser on 127.0.0.1 with an available port");
         println!(
             "  {} {}",
@@ -317,7 +337,12 @@ pub fn browser(
     println!("Building browser WebAssembly…");
     build.run()?;
     println!("Generating browser bindings…");
-    bindings_command(root, generator).run()?;
+    bindings_command(root, generator.clone()).run()?;
+    if domain == Domain::Movement {
+        println!("Building shared Bevy browser presentation (Rust 1.95)…");
+        super::graphics::build(root, true).run()?;
+        super::graphics::bindings(root, generator).run()?;
+    }
     let server = Server::start(&root.join("examples/support/composition/browser"))?;
     let url = movement.map_or_else(|| settings.url(&server.url(), domain, common), |config| settings.movement_url(&server.url(), config));
     println!("\nBrowser example: {url}\nSettings are fixed for this run. Press Ctrl-C here to stop the server.");

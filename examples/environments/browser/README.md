@@ -3,7 +3,7 @@
 Counter, Chain hash and Client movement share the Manual backend and
 `contime-monitor` worker readings with the terminal hosts. Counter and Chain hash
 also use the shared `contime-simulator` callbacks and Maximum controller. One manual worker runs on the browser main thread; JavaScript
-schedules frames and renders metrics. Rust owns event production, processing,
+schedules workload frames and renders metrics; the shared Bevy renderer draws Client movement. Rust owns event production, processing,
 monitoring and retention. Chain hash reverses generated event groups after recording the canonical reference,
 then validates full digests independently of production feedback.
 
@@ -21,17 +21,21 @@ Relaunch to change the configuration. Runs continue until paused or the page clo
 
 ## Build directly
 
-From this directory:
+From this directory (Rust 1.95 is isolated to the Bevy presentation):
 
 ```sh
 rustup target add wasm32-unknown-unknown --toolchain 1.90.0
 cargo install wasm-bindgen-cli --version 0.2.127 --locked
 cargo +1.90.0 build --target wasm32-unknown-unknown --release
 wasm-bindgen target/wasm32-unknown-unknown/release/contime_browser_example.wasm --target web --out-dir ../../support/composition/browser/pkg
+rustup toolchain install 1.95.0 --profile minimal --target wasm32-unknown-unknown
+cargo +1.95.0 build --manifest-path ../../support/graphics/Cargo.toml --release --lib --target wasm32-unknown-unknown
+wasm-bindgen ../../support/graphics/target/wasm32-unknown-unknown/release/contime_graphics_example.wasm --target web --out-dir ../../support/composition/browser/pkg/graphics
 python3 -m http.server 8766 --bind 127.0.0.1 --directory ../../support/composition/browser
 ```
 
-Open `http://127.0.0.1:8766`. No frontend dependency installation is needed.
+Open `http://127.0.0.1:8766`. No JavaScript package installation is needed. Client movement uses the isolated
+[Bevy presentation](../../support/graphics/README.md).
 Generated bindings, build outputs and lockfiles are ignored.
 
 Each animation frame repeats complete host turns until its time allowance or
@@ -82,7 +86,7 @@ counts calls. Reset clears these fields.
 
 ```sh
 cargo +1.90.0 test
-node --test ../../support/composition/browser/tests/pacing.mjs
+node --test ../../support/composition/browser/tests/*.mjs
 ```
 
 Start with `src/scheduler.rs` for the case-agnostic frame budget.
@@ -112,9 +116,50 @@ The launcher also exposes **Client movement** with the same latency, jitter,
 input cadence, retention and trail settings as Native/WASI. It uses the shared
 movement driver, and the existing scheduler applies its processing time/step
 allowance between complete turns. Click the map to send WASD/arrows and Space;
-input is delayed and replayed in Rust before queried positions reach Canvas.
+input is delayed and replayed in Rust before queried positions reach Bevy.
 All clients are validated even when only a bounded camera-region preview is drawn.
 
 ```sh
 cargo run --release --example launcher -- --environment browser --example client-movement
 ```
+
+## Hosted demo and GitHub Pages
+
+The root README links to the browser client-movement demo on GitHub Pages with
+16 clients and 600 ms average input latency. The recording is also a link to that
+same playable configuration. All processing stays in the visitor's browser.
+
+The [Browser demo workflow](../../../.github/workflows/pages.yml) builds the
+workload with Rust 1.90 and the isolated Bevy renderer with Rust 1.95 and installs the wasm-bindgen CLI version
+specified by this example's manifest. It packages only `index.html`, the UI files,
+and generated browser bindings/WebAssembly. Rust sources, local notes and the
+rest of the repository are excluded from the deployed site.
+
+Pull requests build and upload a Pages artifact without deploying. Relevant
+pushes to `main`, or a manual workflow run on `main`, build and deploy it.
+Manual runs on other branches only build the artifact. To enable hosting when
+ready, select **Settings → Pages → Build and deployment → Source: GitHub Actions**
+in the repository, then run the workflow from `main`. No deployment token secret
+is needed; the deployment job uses GitHub's scoped token and OIDC permissions.
+
+The public address is `https://humacss.github.io/contime/`; the README's startup
+parameters select Client movement. Without parameters, the page opens the
+existing Counter case. UI and WebAssembly imports use relative paths so they work
+under the repository's `/contime/` project-site prefix.
+
+### Movement presentation
+
+The shared Bevy markers ease toward the latest queried positions, without
+extrapolating beyond them or feeding visual state back into ConTime. New markers
+fade in; removed markers fade out. Amber correction rings soften state changes,
+and current cyan paths are drawn over revised paths at exact overlaps. Trails
+remain queried history, rather than interpolated or predicted trajectories.
+The short visual transitions add a little display lag; query results, keyboard
+input delivery, monitoring and independent validation are unchanged. Reduced-motion
+preferences disable these transitions. Pause freezes animation time; Reset drops
+all presentation state before a new run.
+
+The movement case uses a fixed 96 × 56 world-unit arena. Its model stops positions
+at the walls, so queries and late-input replay observe the same collisions on all
+hosts. The browser fits the whole arena into the canvas, rather than following
+the player and letting other clients move off screen.

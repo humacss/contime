@@ -54,6 +54,9 @@ async function browserPage(search) {
             replaceChildren() { this.textContent = ''; } });
     }
     const started = [];
+    const graphicsEvents = [];
+    globalThis.graphicsBindings = { default: async () => {}, start_graphics: () => graphicsEvents.push("start"),
+        update_scene() {}, finish_scene: () => graphicsEvents.push("finish"), set_running: value => graphicsEvents.push(value), reset_scene: () => graphicsEvents.push("reset") };
     globalThis.window = {};
     globalThis.location = { search };
     globalThis.document = { getElementById: id => elements.get(id) };
@@ -66,9 +69,10 @@ async function browserPage(search) {
     const source = (await readFile(new URL('../ui/app.js', import.meta.url), 'utf8'))
         .replace("'./movement.mjs'", JSON.stringify(new URL('../ui/movement.mjs', import.meta.url).href))
         .replace("'./pacing.mjs'", JSON.stringify(new URL('../ui/pacing.mjs', import.meta.url).href))
-        .replace("await import('../pkg/contime_browser_example.js')", 'globalThis.browserBindings');
+        .replace("await import('../pkg/contime_browser_example.js')", 'globalThis.browserBindings')
+        .replace("await import('../pkg/graphics/contime_graphics_example.js')", 'globalThis.graphicsBindings');
     await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#${encodeURIComponent(search)}`);
-    return { elements, started, result: window.contimeExample };
+    return { elements, started, graphicsEvents, result: window.contimeExample };
 }
 test('browser has no settings form or editable configuration controls', async () => {
     const { elements, result } = await browserPage('');
@@ -109,18 +113,12 @@ test('movement URLs preserve spacing and speed through autostart',async()=>{
 });
 
 test('Reset clears results and the previous movement display', async () => {
-    const { elements, result } = await browserPage('?domain=client-movement');
+    const { elements, result, graphicsEvents } = await browserPage('?domain=client-movement');
     assert.equal(result.error, null);
     for (const id of ['submitted', 'visible', 'pending', 'throughput', 'target-rate']) elements.get(id).textContent = '123';
     elements.get('movement-stats').textContent = 'Previous run';
     elements.get('movement-panel').hidden = false;
     elements.get('values-panel').hidden = false;
-    const canvas = elements.get('movement-map');
-    canvas.width = 640; canvas.height = 480;
-    let drawingVisible = true;
-    canvas.getContext = () => ({ clearRect(x, y, width, height) {
-        if (x === 0 && y === 0 && width === canvas.width && height === canvas.height) drawingVisible = false;
-    } });
     elements.get('reset').handlers.click();
     assert.equal(elements.get('state').textContent, 'Ready');
     assert.equal(result.report, null);
@@ -128,5 +126,5 @@ test('Reset clears results and the previous movement display', async () => {
     assert.equal(elements.get('movement-stats').textContent, '');
     assert.equal(elements.get('movement-panel').hidden, true);
     assert.equal(elements.get('values-panel').hidden, true);
-    assert.equal(drawingVisible, false, 'previous movement drawing must be cleared');
+    assert.ok(graphicsEvents.includes('reset'), 'previous Bevy presentation must be cleared');
 });

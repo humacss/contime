@@ -4,4 +4,4 @@
 
 .hashes code { display: block; overflow-wrap: anywhere; font-size: .8rem; }
 
-#movement-map{display:block;width:100%;min-height:240px;background:#152535;border:1px solid #6c8095;border-radius:4px}
+.movement-viewport{position:relative;width:100%;aspect-ratio:5/3;min-height:240px}#movement-map{position:absolute;inset:0;display:block;width:100%;height:100%;background:#152535;border:1px solid #6c8095;border-radius:4px}

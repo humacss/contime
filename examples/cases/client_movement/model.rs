@@ -5,6 +5,8 @@ use contime::{
     Input,
 };
 pub const SECOND: i128 = 1_000_000_000;
+/// Fixed arena half-size in the same fixed-point coordinates as positions.
+pub const ARENA_HALF_EXTENT: [i128; 2] = [48 * SECOND, 28 * SECOND];
 /// Per-run motion values carried by inputs so snapshot creation needs no global configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Motion {
@@ -94,14 +96,22 @@ pub struct Character {
 }
 impl Character {
     pub fn spawn(client_id: u128, motion: Motion) -> Self {
-        let index = client_id.saturating_sub(1) as i128;
+        let index = client_id.saturating_sub(1);
+        let spacing = i128::from(motion.client_spacing) * SECOND;
+        let columns = if spacing == 0 { 1 } else { (2 * (ARENA_HALF_EXTENT[0] / spacing) + 1) as u128 };
+        // Alternate around the origin and wrap excess clients onto the finite grid.
+        let coordinate = |index: u128, half: i128| {
+            if spacing == 0 {
+                return 0;
+            }
+            let index = (index % (2 * (half / spacing) + 1) as u128) as i128;
+            let cell = if index % 2 == 1 { (index + 1) / 2 } else { -(index / 2) };
+            cell * spacing
+        };
         Self {
             client_id,
             motion,
-            position: [
-                (index % 12) * i128::from(motion.client_spacing) * SECOND,
-                (index / 12) * i128::from(motion.client_spacing) * SECOND,
-            ],
+            position: [coordinate(index % columns, ARENA_HALF_EXTENT[0]), coordinate(index / columns, ARENA_HALF_EXTENT[1])],
             ..Self::default()
         }
     }
@@ -109,7 +119,9 @@ impl Character {
     pub fn position_at(&self, time: Time) -> [i128; 2] {
         let elapsed = i128::from(time.0.saturating_sub(self.integrated_at.0));
         let velocity = self.direction.velocity(self.motion.movement_speed);
-        [self.position[0] + velocity[0] * elapsed, self.position[1] + velocity[1] * elapsed]
+        std::array::from_fn(|axis| {
+            (self.position[axis] + velocity[axis] * elapsed).clamp(-ARENA_HALF_EXTENT[axis], ARENA_HALF_EXTENT[axis])
+        })
     }
     /// Integrate the old direction first, then apply the new direction.
     pub fn apply_input(&mut self, event: &MovementInput) {
@@ -164,5 +176,33 @@ mod tests {
         state.apply_input(&input(2, 1_000_000_000, Direction::North));
         state.apply_input(&input(3, 2_000_000_000, Direction::Stop));
         assert_eq!(state.position_at(Time(10_000_000_000)), [19 * SECOND, 10 * SECOND]);
+    }
+    #[test]
+    fn characters_stop_at_each_wall_and_can_turn_back_inward() {
+        let motion = Motion::default();
+        let input =
+            |id, seconds: u64, direction| MovementInput { id, client_id: 1, time: Time(seconds * 1_000_000_000), direction, motion };
+        for (direction, axis, sign) in
+            [(Direction::East, 0, 1), (Direction::West, 0, -1), (Direction::North, 1, 1), (Direction::South, 1, -1)]
+        {
+            let mut character = Character::spawn(1, motion);
+            character.apply_input(&input(1, 0, direction));
+            assert_eq!(character.position_at(Time(u64::MAX))[axis], sign * ARENA_HALF_EXTENT[axis]);
+        }
+        let mut character = Character::spawn(1, motion);
+        character.apply_input(&input(1, 0, Direction::East));
+        character.apply_input(&input(2, 100, Direction::West));
+        assert_eq!(character.position_at(Time(101_000_000_000)), [ARENA_HALF_EXTENT[0] - 6 * SECOND, 0]);
+    }
+    #[test]
+    fn every_spawn_is_inside_the_arena_even_with_extreme_spacing() {
+        for spacing in [0, 4, 8, 9, 1_000_000] {
+            let motion = Motion { client_spacing: spacing, ..Motion::default() };
+            for id in 1..=10_000 {
+                let character = Character::spawn(id, motion);
+                assert!(character.position.iter().zip(ARENA_HALF_EXTENT).all(|(value, bound)| value.abs() <= bound));
+            }
+        }
+        assert_eq!(Character::spawn(1, Motion::default()).position, [0, 0]);
     }
 }

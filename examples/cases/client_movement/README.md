@@ -4,14 +4,15 @@ One event type changes the movement direction of one character snapshot. Client 
 is yours; the other clients are driven by a simulator iterator. Bot and keyboard direction changes keep
 their original timestamps and pass through the same delayed delivery queue.
 Initial stopped characters are seeded before simulated traffic starts.
-There is no network server, client-side prediction, collision system or game framework.
+The example includes simple arena-wall collisions; it has no network server or client-side prediction.
 
 ```sh
 cargo run --release --features monitor,counters --example client_movement
 cargo run --release --features manual,monitor,counters --example client_movement -- --execution manual
 ```
 
-Or choose **Client movement** in the central launcher with Native, WASI, WASI
+The direct commands above retain the terminal view. For the shared Bevy graphics,
+choose **Client movement** in the central launcher with Native, WASI, WASI
 Threads or Browser. The browser uses Manual and its processing budget per frame;
 WASI Threads also supports Runtime. The startup form shows
 client count, workers, input/query frequencies, delivery latency/jitter and trail
@@ -34,8 +35,10 @@ Positions use fixed-point integers. Movement speed defaults to six world units p
 integration timestamp preserves the position anchor when ConTime updates snapshot
 metadata during queries or pruning. Rendering projects the accepted direction
 to the query time; it never applies keyboard input directly to a displayed character.
-By default, characters start four world units apart on a deterministic grid in an
-unbounded 2D world. The spacing and movement speed make delayed turns and
+By default, characters start four world units apart on a deterministic grid in a
+96 × 56 world-unit arena. Positions stop at a wall until a new direction turns
+them inward. Spawns wrap around the finite grid; large client counts or spacing
+can place several characters at the same point. The spacing and movement speed make delayed turns and
 revised paths easier to see.
 
 ## Late inputs and rendering states
@@ -45,7 +48,8 @@ latency with ±300 ms jitter (50–650 ms per input), and up to 20 completed que
 The jitter regularly delivers a newer input before an older input for the same
 character. Delivery is simulated in support; ConTime is unchanged.
 
-The camera follows your queried character (`@`). Letters mark other clients.
+The whole arena stays in view, with walls around its boundary. Your character is
+marked `@`; letters identify other clients.
 Cyan dots show the latest queried paths and draw above old paths. Old points fade
 in amber only where the latest query disagrees for the same client at the same
 historical timestamp; matching points and unmatched sliding-window endpoints are
@@ -55,7 +59,7 @@ may produce one visible correction.
 
 Rendering refreshes independently while queries are pending. A query cycle samples
 the retained trail every 200 ms plus its current endpoint and validates all clients,
-including those outside the viewport. At most 32 old rendering states are kept.
+including those omitted by the bounded visual preview. At most 32 old rendering states are kept.
 Trails live in presentation, not character snapshots.
 
 Worker-monitor readings confirm the submitted prefix before querying. Submissions
@@ -109,8 +113,9 @@ worker `process()` call. Hosts supply elapsed time and keyboard directions;
 none of the browser code sleeps or starts background threads. Configuration and
 case definitions are shared across environments.
 
-Native and WASI use the same terminal map. For WASI the launcher forwards keys to
-the guest's private nonblocking input pipe and draws its bounded reports; all
+The launcher uses the same Bevy presentation for Native, WASI and Browser.
+Direct native example commands retain the terminal map. For WASI the presenter
+forwards keys to the guest's input pipe and draws its bounded reports; all
 simulation, queries and validation remain in WebAssembly. In the browser, click
 the map and use WASD/arrows or Space. Old queried paths fade and revised paths
 appear amber. Visual reports cover the camera region and cap characters/path

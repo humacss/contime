@@ -65,6 +65,7 @@ impl Driver {
             updates: self.updates,
             keyboard_inputs: self.keyboard_inputs,
             center,
+            arena_half_extent: crate::movement_example::model::ARENA_HALF_EXTENT.map(|value| value as f64 / SECOND as f64),
             positions,
             trails,
             preview_limited: limited,

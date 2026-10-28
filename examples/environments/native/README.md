@@ -10,3 +10,9 @@ Case-specific Cargo entry points live in
 The support host attaches simulation, monitoring, validation and presentation.
 Runtime starts background threads; Manual processes one complete operation per
 shared host turn.
+
+Client movement launched through the central launcher uses the shared
+[Bevy presentation](../../support/graphics/README.md), with the portable workload
+compiled natively. ConTime runs in the selected Runtime or Manual mode; only
+queried scene reports cross into the graphics process. Direct terminal and
+headless movement entry points remain available. Other cases retain terminal UI.

@@ -31,8 +31,8 @@
 <tr><th scope="row">Frame budget overruns</th><td id="overruns">0</td></tr>
 </tbody></table>
 <section id="movement-panel" hidden aria-labelledby="movement-title"><h3 id="movement-title">Client movement</h3>
-<canvas id="movement-map" tabindex="0" aria-label="Queried character positions and fading paths; WASD or arrows move, Space stops"></canvas>
-<p id="movement-stats"></p><p class="note">Click the map, then use WASD or arrows to move; Space stops. Inputs use the same simulated latency as bots. Cyan shows queried paths; amber shows revised old paths. The camera follows your queried character.</p></section>
+<div class="movement-viewport"><canvas id="movement-map" tabindex="0" aria-label="Queried character positions and fading paths; WASD or arrows move, Space stops"></canvas></div>
+<p id="movement-stats"></p><p class="note">Click the map, then use WASD or arrows to move; Space stops. Inputs use the same simulated latency as bots. Cyan shows queried paths; amber shows revised old paths. The walls keep every character inside the arena.</p></section>
 <section id="worker-panel" aria-labelledby="worker-title">
 <h3 id="worker-title">Worker monitor</h3>
 <div class="worker-scroll"><table class="worker-table"><caption>Cumulative totals and averages since the first worker reading</caption>

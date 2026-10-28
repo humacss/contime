@@ -1,0 +1,92 @@
+name: Browser demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - src/**
+      - crates/**
+      - examples/**
+      - .github/workflows/pages.yml
+  pull_request:
+    paths:
+      - Cargo.toml
+      - src/**
+      - crates/**
+      - examples/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'production' }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build browser demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install Rust and WebAssembly target
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal --target wasm32-unknown-unknown
+          rustup toolchain install 1.95.0 --profile minimal --target wasm32-unknown-unknown
+      - name: Install matching browser bindings tool
+        # wasm-bindgen requires its CLI and Rust library versions to match.
+        working-directory: examples/environments/browser
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["target"]["cfg(target_arch = \"wasm32\")"]["dependencies"]["wasm-bindgen"].removeprefix("="))')
+          cargo +1.90.0 install wasm-bindgen-cli --version "$version" --locked
+      - name: Test browser presentation and startup
+        run: node --test examples/support/composition/browser/tests/*.mjs
+      - name: Build WebAssembly
+        working-directory: examples/environments/browser
+        run: cargo +1.90.0 build --release --target wasm32-unknown-unknown
+      - name: Test shared Bevy presentation
+        run: cargo +1.95.0 test --manifest-path examples/support/graphics/Cargo.toml --lib
+      - name: Build shared Bevy WebAssembly presentation
+        run: cargo +1.95.0 build --manifest-path examples/support/graphics/Cargo.toml --release --lib --target wasm32-unknown-unknown
+      - name: Assemble public demo
+        working-directory: examples/environments/browser
+        run: |
+          site="$RUNNER_TEMP/contime-pages"
+          mkdir -p "$site/ui"
+          wasm-bindgen target/wasm32-unknown-unknown/release/contime_browser_example.wasm --target web --out-dir "$site/pkg"
+          wasm-bindgen ../../support/graphics/target/wasm32-unknown-unknown/release/contime_graphics_example.wasm --target web --out-dir "$site/pkg/graphics"
+          cp ../../support/composition/browser/index.html "$site/"
+          cp ../../support/composition/browser/ui/*.css ../../support/composition/browser/ui/*.js ../../support/composition/browser/ui/*.mjs "$site/ui/"
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        with:
+          path: ${{ runner.temp }}/contime-pages
+
+  deploy:
+    name: Deploy browser demo
+    needs: build
+    # Pull requests and manual runs on other branches only build an artifact.
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

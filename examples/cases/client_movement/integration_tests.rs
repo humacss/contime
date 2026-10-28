@@ -82,3 +82,41 @@ fn manual_repairs_an_old_turn_after_queries_and_retains_the_correct_path() {
     let options = Options { snapshots: 1, retention_ms: 2000, checkpoint_interval: 1, ..Default::default() };
     verify(backend::Manual::<MovementExample>::new(&options).unwrap());
 }
+
+fn verify_walls<B: Backend<MovementExample>>(backend: B) {
+    let input = |id, seconds: u64, direction| MovementInput {
+        id,
+        client_id: 1,
+        time: Time(seconds * 1_000_000_000 + 1),
+        direction,
+        motion: Motion { client_spacing: 4, movement_speed: 10 },
+    };
+    let query_time = Time(25_000_000_001);
+    backend.submit(vec![input(1, 0, Direction::East), input(3, 20, Direction::Stop)]).unwrap();
+    backend.advance(query_time).unwrap();
+    confirmed(&backend, 2, query_time);
+    assert_eq!(position(&backend, query_time), ([48 * SECOND, 0], 2));
+    // A late turn changes which wall was reached. Collision handling must replay too.
+    backend.submit(vec![input(2, 4, Direction::North)]).unwrap();
+    confirmed(&backend, 3, query_time);
+    assert_eq!(position(&backend, query_time), ([40 * SECOND, 28 * SECOND], 3));
+    let later = Time(60_000_000_001);
+    backend.advance(later).unwrap();
+    confirmed(&backend, 3, later);
+    assert_eq!(position(&backend, later), ([40 * SECOND, 28 * SECOND], 3));
+    backend.check_rejections().unwrap();
+    backend.shutdown().unwrap();
+}
+
+#[test]
+fn runtime_replays_wall_collisions_after_a_late_turn() {
+    let options = Options { snapshots: 1, retention_ms: 30_000, checkpoint_interval: 1, ..Default::default() };
+    verify_walls(backend::runtime::<MovementExample>(&options).unwrap());
+}
+
+#[cfg(feature = "manual")]
+#[test]
+fn manual_replays_wall_collisions_after_a_late_turn() {
+    let options = Options { snapshots: 1, retention_ms: 30_000, checkpoint_interval: 1, ..Default::default() };
+    verify_walls(backend::Manual::<MovementExample>::new(&options).unwrap());
+}

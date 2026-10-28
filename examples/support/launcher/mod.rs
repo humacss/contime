@@ -1,5 +1,6 @@
 //! Central example selection. Existing definitions and entry points stay separate.
 pub(crate) mod form;
+mod graphics;
 mod launch;
 mod menu;
 pub(crate) mod selection;
@@ -15,8 +16,8 @@ use std::{
         Arc,
     },
 };
-const HELP: &str = "ConTime example launcher\n\nRun without arguments to select environment, execution, example and common live settings.\n\n--environment native|wasm|wasm-threads|browser\n--execution runtime|manual\n--example counter|client-movement|chain-hash\n--dry-run       show the launch plan\n--no-setup      skip interactive forms\n--no-open       serve browser without opening it\n--list          show supported combinations\n\nCommon settings follow -- for every environment, for example:\n-- --snapshots 8 --events-per-second 1000 --query-hz 20 --duration 2\nRuntime accepts --workers N; Manual uses one worker.\nRuns continue until stopped unless an explicit duration is selected.\nBrowser only: --budget-ms 0.01_TO_1000, --max-steps 1_TO_100000\nAliases before --: --workers N, --rate max_OR_N\n\nPortable builds use Rust 1.90.0. Threaded WASI requires Wasmtime 36.x LTS\n(selected with WASMTIME); browser bindings need wasm-bindgen-cli (WASM_BINDGEN).\nwasm-bindgen checks compatibility during binding generation.\nMissing tools are reported, never installed automatically.";
-const MATRIX:&str="Terminal: Runtime or Manual; Counter, Client movement, Chain hash\nStandalone WASI (Node): Manual; Counter, Client movement, Chain hash\nStandalone WASI threads (Wasmtime 36.x LTS): Manual or Runtime; Counter, Client movement, Chain hash\nBrowser: Manual; Counter, Client movement, Chain hash";
+const HELP: &str = "ConTime example launcher\n\nRun without arguments to select environment, execution, example and common live settings.\n\n--environment native|wasm|wasm-threads|browser\n--execution runtime|manual\n--example counter|client-movement|chain-hash\n--dry-run       show the launch plan\n--no-setup      skip interactive forms\n--no-open       serve browser without opening it\n--list          show supported combinations\n\nCommon settings follow -- for every environment, for example:\n-- --snapshots 8 --events-per-second 1000 --query-hz 20 --duration 2\nRuntime accepts --workers N; Manual uses one worker.\nRuns continue until stopped unless an explicit duration is selected.\nBrowser only: --budget-ms 0.01_TO_1000, --max-steps 1_TO_100000\nAliases before --: --workers N, --rate max_OR_N\n\nMovement graphics use an isolated Bevy example with Rust 1.95.0. Portable workload builds use Rust 1.90.0. Threaded WASI requires Wasmtime 36.x LTS\n(selected with WASMTIME); browser bindings need wasm-bindgen-cli (WASM_BINDGEN).\nwasm-bindgen checks compatibility during binding generation.\nMissing tools are reported, never installed automatically.";
+const MATRIX:&str="Native: Runtime or Manual; Counter, Client movement, Chain hash\nStandalone WASI (Node): Manual; Counter, Client movement, Chain hash\nStandalone WASI threads (Wasmtime 36.x LTS): Manual or Runtime; Counter, Client movement, Chain hash\nBrowser: Manual; Counter, Client movement, Chain hash";
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let options = Options::parse(std::env::args().skip(1))?;
     if options.help || options.example_args.iter().any(|a| matches!(a.as_str(), "--help" | "-h")) {
@@ -53,7 +54,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let settings = config.settings()?;
         let arguments = config.arguments();
         return match selection.environment {
-            Environment::Terminal => launch::native(launch::movement_command(root, selection, &arguments), options.dry_run, &cancelled),
+            Environment::Terminal => {
+                if config.headless {
+                    launch::native(launch::movement_command(root, selection, &arguments), options.dry_run, &cancelled)
+                } else {
+                    graphics::native(root, selection, &arguments, options.dry_run, &cancelled)
+                }
+            }
             Environment::Wasm | Environment::WasmThreads => {
                 launch::wasi(root, selection, &settings, Some(&arguments), options.dry_run, &cancelled)
             }

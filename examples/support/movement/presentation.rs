@@ -31,6 +31,7 @@ pub struct Report {
     pub updates: u64,
     pub keyboard_inputs: u64,
     pub center: [f64; 2],
+    pub arena_half_extent: [f64; 2],
     pub positions: Vec<Client>,
     pub trails: Vec<Point>,
     pub preview_limited: bool,
@@ -47,6 +48,8 @@ impl Report {
             || self.positions.len() > 2048
             || self.trails.len() > 4096
             || !finite(&self.center)
+            || !finite(&self.arena_half_extent)
+            || self.arena_half_extent.iter().any(|extent| *extent <= 0.0)
             || self.positions.iter().any(|p| p.id == 0 || p.id > self.clients || !finite(&p.position))
             || self.trails.iter().any(|p| !finite(&p.position) || !p.opacity.is_finite() || !(0.0..=1.0).contains(&p.opacity))
         {

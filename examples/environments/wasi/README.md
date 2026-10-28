@@ -116,7 +116,7 @@ repeatable selection, independent of timing and backpressure.
 ## Client movement
 
 Every live case is available here: `counter`, `chain-hash`, and `client-movement`.
-The launcher uses the same terminal movement map as Native, but the guest runs
+The launcher opens the same Bevy movement window as Native, while the guest runs
 the simulator, delayed network, monitor and query validation. WASD/arrows choose
 a persistent direction; Space stops; q/Esc drains and validates before exit.
 Standard WASI uses Manual; WASI Threads supports Manual and Runtime.
@@ -135,3 +135,8 @@ After building `wasm32-wasip1`, exercise the real Node input transport with:
 ```sh
 node --test tests/movement.mjs
 ```
+
+Client movement presentation uses the isolated
+[Bevy example](../../support/graphics/README.md), requiring Rust 1.95 for the
+native graphics window. ConTime still runs inside the selected WASI guest with
+its existing Rust 1.90 baseline. Other cases retain the terminal dashboard.

@@ -1,0 +1,76 @@
+# Workspace and verification
+
+[Overview](../../README.md) · [Using ConTime](../usage/README.md) · [How it works](../how-it-works/README.md)
+
+The root crate is a facade: it re-exports application contracts and the selected
+execution model. Most implementation lives in the subcrates below. Runtime starts
+managed background processing; Manual runs an existing worker when the host calls
+`process()`. Core supplies their shared application contracts and storage adapters.
+
+## Crates
+
+| Crate | Responsibility |
+| --- | --- |
+| [`contime-monitor`](../../crates/monitor/README.md) | Read-only worker status, workload accounting, and bounded observation history |
+| [`contime-simulator`](../../crates/simulator/README.md) | Caller-driven generation, independent validation, and paced Maximum admission |
+| [`contime-batcher`](../../crates/batcher/README.md) | Bounded packetization and ready-queue draining for the native pipeline |
+| [`contime-manual`](../../crates/manual/README.md) | Caller-driven processing of one worker between complete operations |
+| `contime` (root) | Public facade and selection of manual or managed runtime processing |
+| [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Shared application contracts and synchronous history/storage adapters |
+| [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input requests, responses, and optional local callback adapters |
+| [`contime-router`](https://github.com/humacss/contime/blob/main/crates/router/README.md) | Deterministic routing to worker-owned histories |
+| [`contime-runtime`](https://github.com/humacss/contime/blob/main/crates/runtime/README.md) | Managed instance, admission, batching integration, router/worker threads, and shutdown |
+| [`contime-worker`](https://github.com/humacss/contime/blob/main/crates/worker/README.md) | History ownership and incremental replay scheduling |
+| [`contime-snapshots`](https://github.com/humacss/contime/blob/main/crates/snapshots/README.md) | Checkpoint storage and historical reconstruction |
+| [`contime-events`](https://github.com/humacss/contime/blob/main/crates/events/README.md) | Ordered retained event history |
+| [`contime-lanes`](https://github.com/humacss/contime/blob/main/crates/lanes/README.md) | Consumer application and hook contracts |
+| [`contime-progress`](https://github.com/humacss/contime/blob/main/crates/progress/README.md) | Participant progress measurement |
+
+`contime-manual` owns caller-driven processing; `contime-batcher` owns transport batching for the native pipeline. Neither depends on the other.
+
+Verify each concern independently:
+
+```bash
+cargo +1.90.0 test -p contime-manual
+cargo +1.90.0 test -p contime-batcher
+cargo +1.90.0 bench -p contime-batcher --bench batcher
+cargo +1.90.0 test --manifest-path examples/environments/wasi/Cargo.toml
+```
+
+The [WebAssembly example](../../examples/environments/wasi/README.md) verifies Manual and threaded Runtime
+execution through their respective WASI targets; the [browser example](../../examples/environments/browser/README.md) adds a
+configurable browser host.
+
+## Current constraints
+
+- ConTime is in-memory only. Persistence, replay from disk, and recovery belong in surrounding systems.
+- Retention prunes old events and checkpoints by time. There is no built-in memory cap.
+- Application logic must be deterministic. Stable event IDs and snapshot routing belong to the consumer.
+- Queries earlier than retained history cannot reconstruct discarded events.
+- Checkpoints clone snapshot state, so large snapshots can be expensive.
+- Submission and advancement across workers do not provide transactional rollback. Integrations that need stronger ordering must supply it at their own boundary.
+- The API is still evolving. The root re-exports the current input and application contracts; application-specific macros belong in consumers.
+
+## Verification
+
+```bash
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo run -p contime --example counter
+cargo run -p contime --features monitor,counters --example client_movement -- --headless --duration 2
+cargo test --doc --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+```
+
+Build the Rust API documentation with `cargo doc --workspace --no-deps --open`
+for completion boundaries and public contracts. Each crate README describes
+its focused tests and benchmarks. Recorded component results stay in those
+READMEs; public pipeline and terminal-presentation results are in
+[`benches/README.md`](../../benches/README.md).
+
+The [coverage workflow](../../.github/workflows/coverage.yml) combines workspace tests
+with default and optional features, Manual-only tests, and example verification
+tests. It reports library coverage to [Qlty](https://qlty.sh/gh/humacss/projects/contime),
+excluding test, benchmark, and example source. Browser and WASI packages are
+separate workspaces and are not included in this native coverage report.

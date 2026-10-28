@@ -1,14 +1,15 @@
 import { startupSettings } from './pacing.mjs';
-import { drawMovement } from './movement.mjs';
+import { createMovementView } from './movement.mjs';
 // Presentation and host scheduling only: Rust owns generation and query policy.
 const $ = (id) => document.getElementById(id);
 const metrics = ['submitted', 'applications', 'queued', 'queries', 'steps', 'overruns'];
 const params = new URLSearchParams(location.search);
 const result = window.contimeExample = { done: false, error: null, report: null, frames: 0 };
-let BudgetDemo, demo, config, running = false, animationId = null;
+let BudgetDemo, demo, config, movementView, running = false, animationId = null;
 let activeMs = 0, previousTime = null, overruns = 0, duration = null;
 function status(message) { $('state').textContent = message; }
 function controls() {
+    movementView?.running(running);
     $('start').disabled = !BudgetDemo || running || result.done || !!result.error;
     $('start').textContent = demo ? 'Resume' : 'Start';
     $('pause').disabled = !running;
@@ -46,7 +47,7 @@ function render(report) {
     $('movement-panel').hidden = !report.movement;
     if (report.movement) {
         const m=report.movement;
-        drawMovement($('movement-map'), m);
+        movementView?.draw(m);
         $('movement-stats').textContent = `${metric(m.clients)} clients · spacing ${metric(m.client_spacing)} · speed ${metric(m.movement_speed)} units/s · ${metric(m.late)} reordered inputs · ${metric(m.corrections)} corrected client histories · ${metric(m.updates)} queried updates${m.preview_limited ? ' · bounded visual preview; all clients validated' : ''}`;
     }
     for (const id of metrics) $(id).textContent = metric(id === 'overruns' ? overruns : report[id]);
@@ -87,6 +88,7 @@ function tick() {
         render(report);
         measure();
         if (report.done) {
+            movementView?.finish();
             running = false;
             result.done = true;
             status('Completed · all work drained');
@@ -133,8 +135,7 @@ $('reset').addEventListener('click', () => {
     $('values-panel').hidden = true;
     $('movement-panel').hidden = true;
     $('movement-stats').textContent = '';
-    const canvas = $('movement-map');
-    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    movementView?.reset();
     $('elapsed').textContent = '0 s'; $('values').textContent = 'Waiting for first query';
     status('Ready'); controls();
 });
@@ -147,6 +148,11 @@ try {
     controls();
     const bindings = await import('../pkg/contime_browser_example.js');
     await bindings.default(); BudgetDemo = bindings.BudgetDemo;
+    if (config.domain === 'client-movement') {
+        const graphics = await import('../pkg/graphics/contime_graphics_example.js');
+        await graphics.default();
+        movementView = createMovementView(graphics);
+    }
     status('Ready'); controls();
     if (params.get('autostart') === '1') $('start').click();
 } catch (error) { fail(error); }

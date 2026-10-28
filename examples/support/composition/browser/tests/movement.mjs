@@ -1,21 +1,24 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
-import { drawMovement } from '../ui/movement.mjs';
+import test from 'node:test';
+import { createMovementView } from '../ui/movement.mjs';
 
-test('opaque current points cover old paths at exactly the same canvas coordinates', () => {
-    const draws = [];
-    const ctx = {
-        fillRect(...bounds) { draws.push({bounds, color: this.fillStyle, alpha: this.globalAlpha}); },
-        fillText() {},
-    };
-    const canvas = {clientWidth: 799, getContext: () => ctx};
-    drawMovement(canvas, {center: [12.3, -4.7], positions: [], trails: [
-        {position: [13.4, -2.3], current: true, corrected: false, opacity: 1},
-        {position: [13.4, -2.3], current: false, corrected: true, opacity: 0.7},
-    ]});
-    const [old, current] = draws.slice(1);
-    assert.equal(old.color, '#e9aa3a');
-    assert.equal(current.color, '#4bd5dd');
-    assert.equal(current.alpha, 1);
-    assert.deepEqual(current.bounds, old.bounds);
+test('browser forwards queried reports unchanged to the shared Bevy renderer', () => {
+    const calls = [];
+    const view = createMovementView({ start_graphics: canvas => calls.push(canvas),
+        update_scene: (json, reduced) => calls.push([JSON.parse(json), reduced]),
+        set_running() {}, finish_scene() {}, reset_scene() {} });
+    const report = { arena_half_extent: [48, 28], positions: [{ id: 1, position: [4, 2] }], trails: [] };
+    const original = structuredClone(report);
+    view.draw(report);
+    assert.equal(calls[0], '#movement-map');
+    assert.deepEqual(calls[1], [original, false]);
+    assert.deepEqual(report, original);
+});
+
+test('pause and reset reach Bevy without modifying workload settings', () => {
+    const calls = [];
+    const view = createMovementView({ start_graphics() {}, update_scene() {},
+        set_running: value => calls.push(value), finish_scene: () => calls.push('finish'), reset_scene: () => calls.push('reset') });
+    view.running(true); view.running(false); view.finish(); view.reset();
+    assert.deepEqual(calls, [true, false, 'finish', 'reset']);
 });

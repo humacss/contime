@@ -169,10 +169,11 @@ Direct movement startup uses the same schema and grouped editor.
 
 Select **Client movement** with any environment. The same shared driver generates
 late inputs, checks monitor-confirmed historical queries, validates every client,
-and publishes corrected rendering states. Native and WASI share the terminal map;
-WASI keeps simulation and validation in WebAssembly and receives keyboard commands
-through a nonblocking control pipe. The browser draws the queried scene on Canvas
-and retains its per-frame processing allowance. Click the map before using WASD,
+and publishes corrected rendering states. All graphical hosts share the isolated
+[Bevy presentation](../graphics/README.md), requiring Rust 1.95 for graphics while
+ConTime remains on Rust 1.90. WASI keeps simulation and validation in WebAssembly
+and receives keyboard commands through an input pipe. Browser uses the same
+renderer compiled to WebAssembly and retains its per-frame processing allowance. Click the map before using WASD,
 arrows or Space. Relaunch to change settings.
 
 ```sh

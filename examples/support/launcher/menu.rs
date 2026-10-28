@@ -4,7 +4,7 @@ use super::{
     selection::{Domain, Environment, Execution, Options, Selection},
 };
 
-const ENVIRONMENTS: [&str; 4] = ["Native (terminal)", "WebAssembly / WASI", "WebAssembly / WASI Threads", "Browser (WebAssembly)"];
+const ENVIRONMENTS: [&str; 4] = ["Native", "WebAssembly / WASI", "WebAssembly / WASI Threads", "Browser (WebAssembly)"];
 const EXECUTIONS: [&str; 2] = ["runtime", "manual"];
 const EXAMPLES: [&str; 3] = ["Counter", "Chain hash verification", "Client movement"];
 fn field(label: &'static str, help: &'static str, value: impl ToString, choices: &[&str]) -> Field {
@@ -15,7 +15,7 @@ fn selection_form(options: &Options) -> Result<Form, String> {
     // silently changing an explicitly requested backend.
     let selected = options.defaults()?;
     let mut form = Form::new(vec![
-        field("Environment", "Native runs a terminal executable. WASI uses Node (Manual only). WASI Threads uses Wasmtime 36.x LTS (Manual or Runtime). Browser opens a local WebAssembly page (Manual only).", selected.environment.label(), &ENVIRONMENTS),
+        field("Environment", "Native runs a local executable. Client movement opens a Bevy graphics window; other cases use the terminal. WASI uses Node (Manual only). WASI Threads uses Wasmtime 36.x LTS (Manual or Runtime). Browser opens a local WebAssembly page (Manual only).", selected.environment.label(), &ENVIRONMENTS),
         field("Execution", "Runtime uses background worker threads. Manual runs one worker on the calling thread. Runtime is available for Terminal or WASI threads. Standard WASI and Browser support Manual only.", selected.execution.slug(), &EXECUTIONS),
         field("Example", "Counter shows changing totals. Chain hash verifies event ordering, including late events. Client movement shows delayed client inputs and corrected paths.", selected.domain.label(), &EXAMPLES),
     ], false);
