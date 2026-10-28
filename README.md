@@ -1,6 +1,5 @@
 [![Crates.io](https://img.shields.io/crates/v/contime.svg)](https://crates.io/crates/contime)
 [![Docs](https://docs.rs/contime/badge.svg)](https://docs.rs/contime)
-[![CI](https://github.com/humacss/contime/actions/workflows/ci.yml/badge.svg)](https://github.com/humacss/contime/actions/workflows/ci.yml)
 [![Qlty | Maintainability](https://qlty.sh/gh/humacss/projects/contime/maintainability.svg)](https://qlty.sh/gh/humacss/projects/contime)
 [![Qlty | Code Coverage](https://qlty.sh/gh/humacss/projects/contime/coverage.svg)](https://qlty.sh/gh/humacss/projects/contime)
 
