@@ -38,6 +38,30 @@ count and simulated latency before starting. See the [browser setup](examples/en
 and [recording settings](guides/usage/README.md#reproduce-the-reconciliation-recording),
 or try the [terminal version](examples/cases/client_movement/README.md).
 
+## Performance
+
+ConTime is built for throughput as well as reconciliation. On the author's
+Apple M3 Pro, the public API benchmark processed **about 5.2 million simple
+counter events per second with one worker**, submitting events individually.
+That includes submission, routing and processing; event construction and runtime
+startup are outside the measurement.
+
+A separate order-sensitive hash workload, with 64 snapshot histories and
+submissions of 1,000 events, recorded:
+
+| Worker threads | Total throughput |
+| ---: | ---: |
+| 1 | 4.0 million events/s |
+| 2 | 8.0 million events/s |
+| 4 | 17.9 million events/s |
+
+These local release-mode measurements were recorded on 2026-10-28 with Rust
+1.90.0, unpinned threads and normal desktop background activity. Throughput
+depends on your event logic, snapshot targets, late arrivals and query load.
+See the [pipeline benchmarks](benches/README.md) and
+[matched scaling results](benches/scaling/README.md) for workloads, timing
+boundaries and reproduction commands.
+
 ## Continuous Time?
 
 Most systems today work with **discrete state**: "**right now** the state is X".
