@@ -1,5 +1,5 @@
 //! Worker reports are independent observations, not an atomic global snapshot.
-use contime_worker::WorkerStatus;
+use crate::contime_worker::WorkerStatus;
 use crossbeam_channel::Receiver;
 use std::{error::Error, fmt, time::Duration};
 
@@ -65,9 +65,9 @@ impl fmt::Display for WorkerMonitorError {
 impl Error for WorkerMonitorError {}
 
 #[cfg(feature = "runtime")]
-impl<I, S, W> WorkerStatusSource<I::Time> for contime_runtime::ConTime<I, S, W>
+impl<I, S, W> WorkerStatusSource<I::Time> for crate::contime_runtime::ConTime<I, S, W>
 where
-    I: contime_runtime::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     fn worker_count(&self) -> usize {
         self.worker_count()

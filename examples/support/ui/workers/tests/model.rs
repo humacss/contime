@@ -1,5 +1,5 @@
 //! Minimal lane contracts for the worker renderer integration test.
-use contime_runtime::{
+use contime::contime_runtime::{
     checkpoints::{ApplyBatch, ApplyEvents, Event, Snapshot, Timestamp},
     AdvanceTime, Input,
 };

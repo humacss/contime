@@ -1,4 +1,4 @@
-use crate::Random;
+use crate::contime_simulator::Random;
 use std::iter::FusedIterator;
 
 /// Finite event stream configuration with application-defined settings.

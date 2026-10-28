@@ -1,4 +1,4 @@
-use crate::{Error, Observation, Query, Rates, Snapshot, Totals};
+use crate::contime_monitor::{Error, Observation, Query, Rates, Snapshot, Totals};
 use std::{collections::VecDeque, num::NonZeroUsize, time::Duration};
 
 #[derive(Debug, Clone, Copy)]

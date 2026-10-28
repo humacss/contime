@@ -14,7 +14,7 @@ use crate::{
     },
     CounterExample, HashExample,
 };
-use contime_monitor::WorkerReading;
+use contime::contime_monitor::WorkerReading;
 use std::{
     io::{self, Write},
     sync::{atomic::AtomicBool, Arc},

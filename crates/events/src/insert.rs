@@ -1,4 +1,4 @@
-use crate::{Event, EventHistory, EventKey, Insert};
+use crate::contime_events::{Event, EventHistory, EventKey, Insert};
 
 impl Insert {
     /// Returns whether canonical history changed.
@@ -53,7 +53,7 @@ mod tests {
     use criterion::{BatchSize, Criterion};
     use std::hint::black_box;
 
-    use crate::{Event, EventHistory, EventKey, Insert};
+    use crate::contime_events::{Event, EventHistory, EventKey, Insert};
 
     #[derive(Clone)]
     struct TestEvent {

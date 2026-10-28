@@ -1,16 +1,16 @@
 use std::convert::Infallible;
 use std::marker::PhantomData;
 
-use crate::checkpoints::{ApplyEvents, ApplyWrapper, CheckpointConfig, Snapshot};
+use crate::contime_runtime::checkpoints::{ApplyEvents, ApplyWrapper, CheckpointConfig, Snapshot};
 
 use crossbeam_channel::Receiver;
 
-use crate::types::{CheckpointStorage, CheckpointStorageConfig};
-use crate::{WorkerMessage, WorkerProcess};
+use crate::contime_runtime::types::{CheckpointStorage, CheckpointStorageConfig};
+use crate::contime_runtime::{WorkerMessage, WorkerProcess};
 
 impl<I, S, W> WorkerProcess<I, S, W>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
     S: Snapshot,
 {
     /// Registers idle observers for this worker.
@@ -20,7 +20,7 @@ where
     }
 
     /// Connects fenced progress and completed-pruning reports.
-    pub fn with_coordination(mut self, coordination: contime_worker::Coordination<I::Time>) -> Self {
+    pub fn with_coordination(mut self, coordination: crate::contime_worker::Coordination<I::Time>) -> Self {
         self.coordination = Some(coordination);
         self
     }
@@ -34,9 +34,9 @@ where
     }
 }
 
-impl<I, S, W> crate::Worker for WorkerProcess<I, S, W>
+impl<I, S, W> crate::contime_runtime::Worker for WorkerProcess<I, S, W>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + Send + 'static,
     W: ApplyWrapper<S, I> + Send + 'static,
 {
@@ -45,7 +45,7 @@ where
 
     fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error> {
         let checkpoint_config = CheckpointStorageConfig { checkpoints: self.checkpoints };
-        contime_worker::work_messages::<WorkerMessage<I, S>, CheckpointStorage<I, S, W>>(
+        crate::contime_worker::work_messages::<WorkerMessage<I, S>, CheckpointStorage<I, S, W>>(
             input,
             checkpoint_config,
             self.wrapper,
@@ -58,28 +58,28 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::types::testing::Time;
+    use crate::contime_runtime::types::testing::Time;
     use std::hint::black_box;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use crate::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
-    use contime_api::RejectionMessage;
+    use crate::contime_api::RejectionMessage;
+    use crate::contime_runtime::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
 
-    use crate::Worker as RuntimeWorker;
-    use contime_router::{RouteOutput, WorkerOutput};
+    use crate::contime_router::{RouteOutput, WorkerOutput};
+    use crate::contime_runtime::Worker as RuntimeWorker;
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::{unbounded, TryRecvError};
 
-    use crate::input::prepare_inputs;
-    use crate::{CompletionHandle, Input, RejectionReason, Route, WorkerBatch, WorkerMessage, WorkerProcess};
+    use crate::contime_runtime::input::prepare_inputs;
+    use crate::contime_runtime::{CompletionHandle, Input, RejectionReason, Route, WorkerBatch, WorkerMessage, WorkerProcess};
 
     struct TestInput {
         id: u128,
         value: usize,
     }
 
-    impl contime_checkpoints::Event for TestInput {
+    impl crate::contime_checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {
@@ -150,7 +150,7 @@ mod tests {
         let (sender, receiver) = unbounded();
         let (batch, rejections) = batch(5);
         sender.send(WorkerMessage::Apply(batch)).unwrap();
-        sender.send(WorkerMessage::Advance(crate::Advance { time: Time(10), completion: unbounded().0 })).unwrap();
+        sender.send(WorkerMessage::Advance(crate::contime_runtime::Advance { time: Time(10), completion: unbounded().0 })).unwrap();
         drop(sender);
 
         RuntimeWorker::run(process(Arc::clone(&observed)), receiver).unwrap();
@@ -169,7 +169,9 @@ mod tests {
                     let observed = Arc::new(AtomicUsize::new(0));
                     let (sender, receiver) = unbounded();
                     sender.send(WorkerMessage::Apply(batch(1_000).0)).unwrap();
-                    sender.send(WorkerMessage::Advance(crate::Advance { time: Time(10), completion: unbounded().0 })).unwrap();
+                    sender
+                        .send(WorkerMessage::Advance(crate::contime_runtime::Advance { time: Time(10), completion: unbounded().0 }))
+                        .unwrap();
                     drop(sender);
                     (process(observed), receiver)
                 },

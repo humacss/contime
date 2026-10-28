@@ -5,8 +5,8 @@ mod tests {
     use criterion::Criterion;
     use crossbeam_channel::unbounded;
 
-    use crate::{SnapshotListener, SnapshotListenerMessage};
-    use contime_worker::SnapshotListener as WorkerSnapshotListener;
+    use crate::contime_runtime::{SnapshotListener, SnapshotListenerMessage};
+    use crate::contime_worker::SnapshotListener as WorkerSnapshotListener;
 
     #[test]
     fn concrete_listener_reports_registration_and_completed_replay() {

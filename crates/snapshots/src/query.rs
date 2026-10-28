@@ -1,4 +1,4 @@
-use crate::{Apply, Checkpoint, Event, EventStore, NoCheckpoint, Snapshot, Store};
+use crate::contime_checkpoints::{Apply, Checkpoint, Event, EventStore, NoCheckpoint, Snapshot, Store};
 
 /// Reconstructs fresh state without retaining it. Supply an effect-free context.
 /// Includes events at the requested time. The returned timestamp remains the
@@ -17,7 +17,7 @@ where
             if events.peek().is_none() {
                 break;
             }
-            crate::apply::apply(checkpoint, events, context);
+            crate::contime_checkpoints::apply::apply(checkpoint, events, context);
         }
         playback.commit(|_| {});
     }
@@ -29,7 +29,7 @@ mod tests {
     use super::*;
     use std::hint::black_box;
 
-    use crate::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
+    use crate::contime_checkpoints::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
 
     #[rstest::rstest]
     #[case::before_events(5, 0, 0)]

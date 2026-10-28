@@ -1,5 +1,5 @@
 //! Applies an ordered borrowed iterator in complete timestamp batches.
-use crate::{Apply, BatchLookahead, Checkpoint, Event, Snapshot};
+use crate::contime_checkpoints::{Apply, BatchLookahead, Checkpoint, Event, Snapshot};
 
 pub(crate) fn apply<'a, S: Snapshot, E: Apply<Checkpoint<S>, C, Time = S::Time> + 'a, C>(
     checkpoint: &mut Checkpoint<S>,
@@ -81,7 +81,7 @@ impl<I: Iterator> Drop for TimestampBatch<I> {
 mod tests {
     use super::*;
 
-    use crate::types::testing::{TestEvent, TestSnapshot, Time};
+    use crate::contime_checkpoints::types::testing::{TestEvent, TestSnapshot, Time};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     const CONTEXT: u64 = 10;

@@ -1,13 +1,13 @@
 //! Component integration: manually deliver messages and execute real worker steps.
 //! Included by Core's test module to access its private adapters and admission.
 //! No OS threads, clocks, retries, or alternative scheduling implementation.
-use crate::checkpoints::*;
-use crate::coordinator::admit;
-use crate::frontier::Frontier;
-use crate::input::prepare_inputs;
-use crate::types::{CheckpointStorage, CheckpointStorageConfig};
-use crate::{Advance, CompletionHandle, Input, Route, RouterBatch, RouterMessage, WorkerBatch, WorkerMessage};
-use contime_worker::{Coordination, MessageWorker};
+use crate::contime_runtime::checkpoints::*;
+use crate::contime_runtime::coordinator::admit;
+use crate::contime_runtime::frontier::Frontier;
+use crate::contime_runtime::input::prepare_inputs;
+use crate::contime_runtime::types::{CheckpointStorage, CheckpointStorageConfig};
+use crate::contime_runtime::{Advance, CompletionHandle, Input, Route, RouterBatch, RouterMessage, WorkerBatch, WorkerMessage};
+use crate::contime_worker::{Coordination, MessageWorker};
 use crossbeam_channel::{never, unbounded, Sender};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
@@ -17,7 +17,7 @@ impl Timestamp for Time {
         self.0.checked_sub(1).map(Self)
     }
 }
-impl contime_worker::AdvanceTime for Time {
+impl crate::contime_worker::AdvanceTime for Time {
     fn saturating_sub(&self, retention: &Self) -> Self {
         Self(self.0.saturating_sub(retention.0))
     }
@@ -26,7 +26,7 @@ struct TestEvent {
     id: u128,
     time: Time,
 }
-impl contime_checkpoints::Event for TestEvent {
+impl crate::contime_checkpoints::Event for TestEvent {
     type Time = Time;
     fn time(&self) -> Time {
         self.time
@@ -352,7 +352,7 @@ fn insertion_after_report_waits_for_resolution(#[case] decide_first: bool, #[cas
     worker.handle(route(batch));
     assert!(!worker.step());
     let (response, queried) = unbounded();
-    worker.handle(WorkerMessage::SnapshotQuery(crate::SnapshotQuery { time: target, snapshot_ids: vec![1], response }));
+    worker.handle(WorkerMessage::SnapshotQuery(crate::contime_runtime::SnapshotQuery { time: target, snapshot_ids: vec![1], response }));
     assert_eq!(queried.try_recv().unwrap()[0].sum, expected_sum);
     assert!(publications.is_empty(), "queries during the barrier must remain effect-free");
     if !decide_first {

@@ -1,10 +1,10 @@
 use crossbeam_channel::{unbounded, Sender};
 
-use crate::{ApiError, EventQueryOutput};
+use crate::contime_api::{ApiError, EventQueryOutput};
 
 traitstub::deps! {
     send_query_events_between[T, E](snapshot_id: u128, from: T, to: T, response: crossbeam_channel::Sender<Vec<E>>)
-        -> Result<(), source::ApiError>;
+        -> Result<(), source::contime_api::ApiError>;
 }
 
 /// Sends an event-history query and collects results until all downstream
@@ -21,7 +21,7 @@ where
     O: EventQueryOutput<T, E>,
 {
     query_events_between_with_deps(
-        &Deps(|snapshot_id, from, to, response| crate::send_query_events_between(output, snapshot_id, from, to, response)),
+        &Deps(|snapshot_id, from, to, response| crate::contime_api::send_query_events_between(output, snapshot_id, from, to, response)),
         snapshot_id,
         from,
         to,

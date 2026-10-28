@@ -6,29 +6,28 @@ rust-version = "1.90"
 autobenches = false
 license = "MIT"
 description = "Managed background processing and thread lifecycle for ConTime"
-publish = ["crates-io"]
+publish = false
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime-runtime"
-readme = "README.md"
+readme = "../README.md"
 authors = ["humacss"]
 keywords = ["events", "history", "replay", "snapshots"]
 categories = ["data-structures", "concurrency"]
-include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
 
 [features]
 counters = ["contime-worker/counters", "contime-core/counters"]
 
 [dependencies]
 traitstub = "0.1.0"
-contime-batcher = { path = "../batcher", version = "0.1.0" }
-contime-core = { path = "../core", version = "0.1.0" }
-contime-api = { path = "../api", version = "0.1.0" }
-contime-events = { path = "../events", version = "0.1.0" }
-contime-lanes = { path = "../lanes", version = "0.1.0" }
-contime-progress = { path = "../progress", version = "0.1.0" }
-contime-router = { path = "../router", version = "0.1.0" }
-contime-worker = { path = "../worker", version = "0.1.0" }
-contime-checkpoints = { package = "contime-snapshots", path = "../snapshots", version = "0.1.0" }
+contime-batcher = { path = "../../batcher/dev", version = "0.1.0" }
+contime-core = { path = "../../core/dev", version = "0.1.0" }
+contime-api = { path = "../../api/dev", version = "0.1.0" }
+contime-events = { path = "../../events/dev", version = "0.1.0" }
+contime-lanes = { path = "../../lanes/dev", version = "0.1.0" }
+contime-progress = { path = "../../progress/dev", version = "0.1.0" }
+contime-router = { path = "../../router/dev", version = "0.1.0" }
+contime-worker = { path = "../../worker/dev", version = "0.1.0" }
+contime-checkpoints = { package = "contime-snapshots", path = "../../snapshots/dev", version = "0.1.0" }
 crossbeam-channel = "0.5"
 
 [dev-dependencies]
@@ -38,19 +37,30 @@ pprof = { version = "0.15", features = ["criterion", "flamegraph"] }
 
 [[bench]]
 name = "counters"
+path = "../benches/counters.rs"
 harness = false
 
 [[bench]]
 name = "runtime"
+path = "../benches/runtime.rs"
 harness = false
 
 [[bench]]
 name = "breakdown"
+path = "../benches/breakdown.rs"
 harness = false
 
 [[bench]]
 name = "batching"
+path = "../benches/batching.rs"
 harness = false
+
+[lib]
+path = "lib.rs"
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[test]]
+name = "batching"
+path = "../tests/batching.rs"

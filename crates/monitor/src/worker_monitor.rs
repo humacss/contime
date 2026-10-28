@@ -1,6 +1,6 @@
 //! Nonblocking collection with a bounded immutable history.
-use crate::{WorkerMonitorError, WorkerReading, WorkerStatusSource};
-use contime_worker::WorkerStatus;
+use crate::contime_monitor::{WorkerMonitorError, WorkerReading, WorkerStatusSource};
+use crate::contime_worker::WorkerStatus;
 use crossbeam_channel::{Receiver, TryRecvError};
 use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 struct Pending<T> {

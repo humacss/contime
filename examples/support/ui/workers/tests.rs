@@ -1,5 +1,5 @@
 use super::{Scroll, WorkerView};
-use contime_monitor::{WorkerReading, WorkerStatus};
+use contime::contime_monitor::{WorkerReading, WorkerStatus};
 use ratatui::{backend::TestBackend, Terminal};
 use std::{
     fmt,
@@ -168,7 +168,7 @@ fn totals_do_not_overflow_on_large_reports() {
 
 #[test]
 fn collection_and_presentation_communicate_only_through_a_complete_reading() {
-    use contime_monitor::{WorkerMonitor, WorkerMonitorError, WorkerStatusSource};
+    use contime::contime_monitor::{WorkerMonitor, WorkerMonitorError, WorkerStatusSource};
     struct Ready;
     impl WorkerStatusSource<u64> for Ready {
         fn worker_count(&self) -> usize {
@@ -231,7 +231,7 @@ mod native;
 #[test]
 fn native_worker_reports_render_without_advancing_or_querying() {
     for workers in [1, 4] {
-        use contime_runtime::{checkpoints::CheckpointConfig, ConTime, ConTimeConfig, Placement};
+        use contime::contime_runtime::{checkpoints::CheckpointConfig, ConTime, ConTimeConfig, Placement};
         let runtime = ConTime::<native::Increment, native::Counter, ()>::start(
             ConTimeConfig {
                 worker_count: workers,
@@ -270,7 +270,7 @@ fn native_worker_reports_render_without_advancing_or_querying() {
 
 #[test]
 fn application_totals_rates_and_unavailable_baselines_are_explicit() {
-    use contime_monitor::WorkerCounters;
+    use contime::contime_monitor::WorkerCounters;
     let mut first = reading(1);
     Arc::get_mut(&mut first).unwrap().workers[0].counters =
         Some(WorkerCounters { inserted_applications: 100, replay_applications: Some(120), saturated: false });
@@ -296,7 +296,7 @@ fn application_totals_rates_and_unavailable_baselines_are_explicit() {
 
 #[test]
 fn unknown_replay_and_saturation_are_not_presented_as_exact_measurements() {
-    use contime_monitor::WorkerCounters;
+    use contime::contime_monitor::WorkerCounters;
     let mut unknown = reading(1);
     Arc::get_mut(&mut unknown).unwrap().workers[0].counters =
         Some(WorkerCounters { inserted_applications: 100, replay_applications: None, saturated: false });
@@ -316,7 +316,7 @@ fn unknown_replay_and_saturation_are_not_presented_as_exact_measurements() {
 
 #[test]
 fn digit_changes_keep_summary_labels_and_table_units_in_fixed_columns() {
-    use contime_monitor::WorkerCounters;
+    use contime::contime_monitor::WorkerCounters;
     fn sample(at: u64, inserted: u64, gauges: usize) -> Arc<WorkerReading<u64>> {
         let mut data = reading(1);
         let data_mut = Arc::get_mut(&mut data).unwrap();
@@ -357,7 +357,7 @@ fn digit_changes_keep_summary_labels_and_table_units_in_fixed_columns() {
 
 #[test]
 fn compact_worker_table_shows_distinct_worker_rates_alongside_global_rates() {
-    use contime_monitor::WorkerCounters;
+    use contime::contime_monitor::WorkerCounters;
     let make = |at: u64, inserted: [u64; 2], replay: [u64; 2]| {
         let mut result = reading(2);
         let data = Arc::get_mut(&mut result).unwrap();
@@ -392,7 +392,7 @@ fn compact_worker_table_shows_distinct_worker_rates_alongside_global_rates() {
 
 #[test]
 fn cumulative_columns_are_explicitly_labelled_as_totals() {
-    use contime_monitor::WorkerCounters;
+    use contime::contime_monitor::WorkerCounters;
     let mut data = reading(1);
     Arc::get_mut(&mut data).unwrap().workers[0].counters =
         Some(WorkerCounters { inserted_applications: 12_345_678, replay_applications: Some(23_456_789), saturated: false });
@@ -407,7 +407,7 @@ fn cumulative_columns_are_explicitly_labelled_as_totals() {
 
 #[test]
 fn narrow_view_stacks_totals_and_rates_instead_of_hiding_cumulative_counts() {
-    use contime_monitor::WorkerCounters;
+    use contime::contime_monitor::WorkerCounters;
     let make = |at, values: [u64; 2]| {
         let mut data = reading(2);
         let r = Arc::get_mut(&mut data).unwrap();
@@ -435,7 +435,7 @@ fn narrow_view_stacks_totals_and_rates_instead_of_hiding_cumulative_counts() {
 
 #[test]
 fn worker_table_shows_only_cumulative_average_rates() {
-    use contime_monitor::WorkerCounters;
+    use contime::contime_monitor::WorkerCounters;
     let make = |at, values: [u64; 2]| {
         let mut data = reading(2);
         let r = Arc::get_mut(&mut data).unwrap();

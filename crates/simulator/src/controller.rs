@@ -1,5 +1,5 @@
-use crate::Error;
-use contime_monitor::{Monitor, Totals};
+use crate::contime_monitor::{Monitor, Totals};
+use crate::contime_simulator::Error;
 use std::time::Duration;
 
 /// Units in which admission is paced. Monitoring always retains both totals.

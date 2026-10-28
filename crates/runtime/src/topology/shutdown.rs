@@ -1,6 +1,6 @@
 use std::thread::JoinHandle;
 
-use crate::{ShutdownReport, ThreadOutcome, ThreadTopology};
+use crate::contime_runtime::{ShutdownReport, ThreadOutcome, ThreadTopology};
 
 impl<I, RE, WE> ThreadTopology<I, RE, WE> {
     /// Drops the owned input sender and joins all routers, then all workers.
@@ -39,7 +39,7 @@ mod tests {
 
     use crossbeam_channel::{Receiver, Sender};
 
-    use crate::{Router, ThreadOutcome, ThreadTopology, Worker};
+    use crate::contime_runtime::{Router, ThreadOutcome, ThreadTopology, Worker};
 
     struct FailingRouter(usize);
 

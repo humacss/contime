@@ -1,7 +1,7 @@
 //! Example-only execution adapters; load, completion feedback and UI stay shared.
 use super::{Failure, Options};
 use crate::definition::{Example, Time};
-use contime_monitor::{WorkerMonitorError, WorkerStatusSource};
+use contime::contime_monitor::{WorkerMonitorError, WorkerStatusSource};
 use crossbeam_channel::{Receiver, Sender};
 
 pub trait Backend<M: Example>: WorkerStatusSource<Time> {
@@ -86,7 +86,7 @@ impl<M: Example> WorkerStatusSource<Time> for Manual<M> {
     fn worker_count(&self) -> usize {
         1
     }
-    fn request_worker_status(&self) -> Result<Receiver<contime_monitor::WorkerStatus<Time>>, WorkerMonitorError> {
+    fn request_worker_status(&self) -> Result<Receiver<contime::contime_monitor::WorkerStatus<Time>>, WorkerMonitorError> {
         let (send, receive) = crossbeam_channel::bounded(1);
         let _ = send.try_send(self.0.inspect(|instance| instance.worker_status()));
         Ok(receive)

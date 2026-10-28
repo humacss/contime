@@ -4,7 +4,7 @@ use crate::{
     definition::{Example, Time},
     support::monitored_metrics::Metrics,
 };
-use contime_monitor::{WorkerCounters, WorkerReading, WorkerStatus};
+use contime::contime_monitor::{WorkerCounters, WorkerReading, WorkerStatus};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 const MAGIC: &str = "contime-workers-v2\t";

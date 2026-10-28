@@ -1,6 +1,6 @@
 use super::*;
-use contime_monitor::WorkerReading;
-use contime_worker::{WorkerCounters, WorkerStatus};
+use contime::contime_monitor::WorkerReading;
+use contime::contime_worker::{WorkerCounters, WorkerStatus};
 
 fn reading(at: u64, applications: u64, pending: usize, target: u64) -> WorkerReading<Time> {
     WorkerReading {

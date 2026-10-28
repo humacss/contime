@@ -1,6 +1,6 @@
 use crossbeam_channel::Sender;
 
-use crate::{ApiError, SnapshotQueryOutput};
+use crate::contime_api::{ApiError, SnapshotQueryOutput};
 
 /// Forwards one asynchronous historical snapshot query.
 ///
@@ -27,7 +27,7 @@ where
 mod tests {
     use crossbeam_channel::{unbounded, Sender, TryRecvError};
 
-    use crate::{send_query_at, ApiError, SnapshotQueryOutput};
+    use crate::contime_api::{send_query_at, ApiError, SnapshotQueryOutput};
 
     struct QueryOutput {
         time: u64,

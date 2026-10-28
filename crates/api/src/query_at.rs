@@ -1,10 +1,10 @@
 use crossbeam_channel::{unbounded, Sender};
 
-use crate::{ApiError, SnapshotQueryOutput};
+use crate::contime_api::{ApiError, SnapshotQueryOutput};
 
 traitstub::deps! {
     send_query_at[T, S, Ids](time: T, snapshot_ids: Ids, response: crossbeam_channel::Sender<Vec<Box<S>>>)
-        -> Result<(), source::ApiError>
+        -> Result<(), source::contime_api::ApiError>
         where [Ids: IntoIterator<Item = u128>];
 }
 
@@ -22,7 +22,11 @@ where
     O: SnapshotQueryOutput<T, S>,
     Ids: IntoIterator<Item = u128>,
 {
-    query_at_with_deps(&Deps(|time, snapshot_ids, response| crate::send_query_at(output, time, snapshot_ids, response)), time, snapshot_ids)
+    query_at_with_deps(
+        &Deps(|time, snapshot_ids, response| crate::contime_api::send_query_at(output, time, snapshot_ids, response)),
+        time,
+        snapshot_ids,
+    )
 }
 
 fn query_at_with_deps<T, S, Ids>(deps: &impl calls::send_query_at<T, S, Ids>, time: T, snapshot_ids: Ids) -> Result<Vec<Box<S>>, ApiError>

@@ -81,7 +81,7 @@ where
     /// Delivers the single effective batch, which may be empty or borrow input.
     ///
     /// A filter must call this exactly once per invocation. The receiver used by
-    /// [`crate::apply`] applies it immediately and panics on a second call.
+    /// [`crate::contime_lanes::apply()`] applies it immediately and panics on a second call.
     fn output<'a>(&mut self, events: A::Batch<'a>)
     where
         A: 'a;
@@ -167,6 +167,6 @@ where
     where
         Self: Sized,
     {
-        crate::route::create_snapshot(self)
+        crate::contime_lanes::route::create_snapshot(self)
     }
 }

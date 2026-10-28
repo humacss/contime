@@ -23,17 +23,17 @@ mod testing;
 mod topology;
 mod types;
 mod worker;
-pub use contime_api::{ApiError, ApplyResponse, RejectionMessage};
-pub use contime_core::{checkpoints, lanes, Input, RejectionReason};
-pub use contime_progress::{ProgressObservation, ProgressPolicy};
-pub use contime_router::Placement;
-pub use contime_worker::{AdvanceTime, WorkerCounters, WorkerStatus};
-pub use instance::{ConTime, ConTimeConfig, IdleError};
+pub use self::instance::{ConTime, ConTimeConfig, IdleError};
+pub use crate::contime_api::{ApiError, ApplyResponse, RejectionMessage};
+pub use crate::contime_core::{checkpoints, lanes, Input, RejectionReason};
+pub use crate::contime_progress::{ProgressObservation, ProgressPolicy};
+pub use crate::contime_router::Placement;
+pub use crate::contime_worker::{AdvanceTime, WorkerCounters, WorkerStatus};
 /// A managed background ConTime instance.
 pub type Runtime<I, S, W> = ConTime<I, S, W>;
-pub use coordinator::{run as coordinate, Settings as CoordinatorSettings};
-pub use topology::{Router, RuntimeStage, ShutdownReport, StartError, ThreadOutcome, ThreadTopology, TopologySendError, Worker};
-pub use types::{
+pub use self::coordinator::{run as coordinate, Settings as CoordinatorSettings};
+pub use self::topology::{Router, RuntimeStage, ShutdownReport, StartError, ThreadOutcome, ThreadTopology, TopologySendError, Worker};
+pub use self::types::{
     Advance, CompletionHandle, EventQuery, Route, RouterBatch, RouterMessage, RouterProcess, SharedEvent, SnapshotListen, SnapshotListener,
     SnapshotListenerMessage, SnapshotQuery, WorkerBatch, WorkerMessage, WorkerProcess,
 };

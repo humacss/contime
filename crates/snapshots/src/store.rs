@@ -1,6 +1,6 @@
 //! Storage ownership and playback initialization.
 use super::{Checkpoint, Playback};
-use crate::{Event, EventStore, Insert, InsertEventStore, NoCheckpoint, Snapshot};
+use crate::contime_checkpoints::{Event, EventStore, Insert, InsertEventStore, NoCheckpoint, Snapshot};
 use std::collections::VecDeque;
 
 /// Storage for one snapshot. Dirty is the inclusive valid-through boundary.
@@ -99,7 +99,7 @@ mod tests {
     use super::*;
     use std::hint::black_box;
 
-    use crate::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
+    use crate::contime_checkpoints::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
 
     #[rstest::rstest]
     #[case::zero_time(0, 0)]

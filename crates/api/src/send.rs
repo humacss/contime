@@ -1,9 +1,9 @@
 use crossbeam_channel::Sender;
 
-use crate::types::{ApiError, ApplyOutput, RejectionMessage};
+use crate::contime_api::types::{ApiError, ApplyOutput, RejectionMessage};
 
 traitstub::deps! {
-    forward[O](output: O) -> Result<(), source::ApiError>;
+    forward[O](output: O) -> Result<(), source::contime_api::ApiError>;
 }
 
 /// Converts inputs into the caller-selected ownership type and forwards one batch.
@@ -61,7 +61,7 @@ mod tests {
     use crossbeam_channel::{unbounded, TryRecvError};
 
     use super::{calls, send, send_with_deps, Deps};
-    use crate::types::{ApiError, ApplyOutput, InputBatch, RejectionMessage};
+    use crate::contime_api::types::{ApiError, ApplyOutput, InputBatch, RejectionMessage};
 
     #[repr(C)]
     struct BenchmarkEvent<const PAYLOAD_BYTES: usize> {

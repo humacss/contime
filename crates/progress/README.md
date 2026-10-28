@@ -59,8 +59,8 @@ It does not account for messages still outside Runtime or replace fenced reports
 ## Verification
 
 ```sh
-cargo +1.90.0 test --offline --manifest-path crates/progress/Cargo.toml
-cargo +1.90.0 test --offline --manifest-path crates/runtime/Cargo.toml
+cargo +1.90.0 test --offline --manifest-path crates/progress/dev/Cargo.toml
+cargo +1.90.0 test --offline --manifest-path crates/runtime/dev/Cargo.toml
 ```
 
 Public-API tests cover missing and stale reports, duplicate completion,

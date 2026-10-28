@@ -1,10 +1,10 @@
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::types::{
+use crate::contime_router::types::{
     AdvanceInput, AdvanceWorkerOutput, EventQueryInput, EventQueryWorkerOutput, RoutableInput, RouteInput, RouteInputBatch, RouteInputKind,
     RouteOutput, RouterError, SnapshotListenInput, SnapshotListenWorkerOutput, SnapshotQueryInput, SnapshotQueryWorkerOutput, WorkerOutput,
 };
-use crate::{CoordinationOutput, Flush, Placement};
+use crate::contime_router::{CoordinationOutput, Flush, Placement};
 
 traitstub::deps! {
     worker_count() -> usize;
@@ -171,12 +171,14 @@ where
             match message.into_kind() {
                 RouteInputKind::Apply(batch) => route_batch(&self.placement, batch, &deps)?,
                 RouteInputKind::ApplyPacket(batches) => route_packet(&self.placement, batches, &deps)?,
-                RouteInputKind::SnapshotQuery(query) => crate::route_snapshot_query(self.placement, query, self.worker_outputs)?,
-                RouteInputKind::EventQuery(query) => crate::route_event_query(self.placement, query, self.worker_outputs)?,
-                RouteInputKind::SnapshotListen(registration) => {
-                    crate::route_snapshot_listeners(self.placement, registration, self.worker_outputs)?
+                RouteInputKind::SnapshotQuery(query) => {
+                    crate::contime_router::route_snapshot_query(self.placement, query, self.worker_outputs)?
                 }
-                RouteInputKind::Advance(advance) => crate::route_advance(advance, self.worker_outputs)?,
+                RouteInputKind::EventQuery(query) => crate::contime_router::route_event_query(self.placement, query, self.worker_outputs)?,
+                RouteInputKind::SnapshotListen(registration) => {
+                    crate::contime_router::route_snapshot_listeners(self.placement, registration, self.worker_outputs)?
+                }
+                RouteInputKind::Advance(advance) => crate::contime_router::route_advance(advance, self.worker_outputs)?,
                 RouteInputKind::Fence { round, observed } => {
                     let _ = observed.send(round);
                 }
@@ -349,8 +351,8 @@ mod tests {
         worker_count => || 1;
         send => |_, _| Ok(());
     }
-    use crate::Placement;
-    use crate::{InputBatch, RoutableInput, RouteInputBatch, RouteOutput, RouterError, WorkerBatch, WorkerOutput};
+    use crate::contime_router::Placement;
+    use crate::contime_router::{InputBatch, RoutableInput, RouteInputBatch, RouteOutput, RouterError, WorkerBatch, WorkerOutput};
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct TestInput {
@@ -427,7 +429,7 @@ mod tests {
         input_sender.send(AdapterInputBatch { inputs: vec![TestInput { value: 10, snapshot_ids: vec![11] }], completion: 29 }).unwrap();
         drop(input_sender);
 
-        route(crate::Placement::default(), input_receiver, &[worker_sender]).unwrap();
+        route(crate::contime_router::Placement::default(), input_receiver, &[worker_sender]).unwrap();
 
         let batch: AdapterWorkerBatch = worker_receiver.recv().unwrap();
         assert_eq!(batch.inputs, vec![AdapterRoute { snapshot_id: 11, input: TestInput { value: 10, snapshot_ids: vec![11] } }]);
@@ -441,7 +443,7 @@ mod tests {
         input_sender.send(InputBatch { inputs: vec![TestInput { value: 10, snapshot_ids: vec![11] }], completion: () }).unwrap();
         drop(input_sender);
 
-        route(crate::Placement::default(), input_receiver, &[worker_sender]).unwrap();
+        route(crate::contime_router::Placement::default(), input_receiver, &[worker_sender]).unwrap();
 
         let input: TestInput = worker_receiver.recv().unwrap().inputs.pop().unwrap().input;
         assert_eq!(input.value, 10);
@@ -467,7 +469,7 @@ mod tests {
             .unwrap();
         drop(input_sender);
 
-        route(crate::Placement::default(), input_receiver, &[worker_sender]).unwrap();
+        route(crate::contime_router::Placement::default(), input_receiver, &[worker_sender]).unwrap();
 
         let routed = worker_receiver.recv().unwrap().inputs.pop().unwrap();
         assert_eq!(routed.snapshot_id, 11);
@@ -511,7 +513,7 @@ mod tests {
         let (_input_sender, input_receiver) = unbounded::<InputBatch<TestInput, ()>>();
         let worker_outputs = [] as [Sender<WorkerBatch<TestInput, ()>>; 0];
 
-        let result = route(crate::Placement::default(), input_receiver, &worker_outputs);
+        let result = route(crate::contime_router::Placement::default(), input_receiver, &worker_outputs);
 
         assert_eq!(result, Err(RouterError::NoWorkers));
     }
@@ -521,7 +523,8 @@ mod tests {
         let (input_sender, input_receiver) = unbounded::<InputBatch<TestInput, ()>>();
         drop(input_sender);
 
-        let result = route_with_deps::<_, _, WorkerBatch<TestInput, ()>>(crate::Placement::default(), input_receiver, &Stubs);
+        let result =
+            route_with_deps::<_, _, WorkerBatch<TestInput, ()>>(crate::contime_router::Placement::default(), input_receiver, &Stubs);
 
         assert_eq!(result, Ok(()));
     }
@@ -529,7 +532,7 @@ mod tests {
     #[test]
     fn route_dispatches_every_snapshot_route_once() {
         let batches = route_once(
-            crate::Placement::default(),
+            crate::contime_router::Placement::default(),
             vec![
                 TestInput { value: 10, snapshot_ids: vec![11] },
                 TestInput { value: 20, snapshot_ids: vec![22] },
@@ -553,17 +556,17 @@ mod tests {
         let inputs =
             (0..100).map(|snapshot_id| TestInput { value: snapshot_id as u64, snapshot_ids: vec![snapshot_id] }).collect::<Vec<_>>();
 
-        let first = placements(route_once(crate::Placement::default(), inputs.clone(), 8));
-        let second = placements(route_once(crate::Placement::default(), inputs, 8));
+        let first = placements(route_once(crate::contime_router::Placement::default(), inputs.clone(), 8));
+        let second = placements(route_once(crate::contime_router::Placement::default(), inputs, 8));
 
         assert_eq!(first, second);
     }
 
     #[test]
     fn route_preserves_input_order_within_a_worker_batch() {
-        let snapshot_id = snapshot_id_for_worker(crate::Placement::default(), 4, 0);
+        let snapshot_id = snapshot_id_for_worker(crate::contime_router::Placement::default(), 4, 0);
         let batches = route_once(
-            crate::Placement::default(),
+            crate::contime_router::Placement::default(),
             vec![
                 TestInput { value: 10, snapshot_ids: vec![snapshot_id] },
                 TestInput { value: 20, snapshot_ids: vec![snapshot_id] },
@@ -591,7 +594,7 @@ mod tests {
         input_sender.send(InputBatch { inputs: vec![SharedInput(event)], completion: () }).unwrap();
         drop(input_sender);
 
-        route(crate::Placement::default(), input_receiver, &worker_outputs).unwrap();
+        route(crate::contime_router::Placement::default(), input_receiver, &worker_outputs).unwrap();
 
         assert_eq!(weak.strong_count(), 3);
         let routed_count = worker_receivers.iter().flat_map(|receiver| receiver.try_iter()).map(|batch| batch.inputs.len()).sum::<usize>();
@@ -607,7 +610,7 @@ mod tests {
         input_sender.send(InputBatch { inputs: vec![SharedInput(event)], completion: () }).unwrap();
         drop(input_sender);
 
-        route(crate::Placement::default(), input_receiver, &[worker_sender]).unwrap();
+        route(crate::contime_router::Placement::default(), input_receiver, &[worker_sender]).unwrap();
 
         assert_eq!(weak.strong_count(), 1);
         assert_eq!(worker_receiver.try_iter().map(|batch| batch.inputs.len()).sum::<usize>(), 1);
@@ -626,7 +629,8 @@ mod tests {
 
     #[test]
     fn route_clones_completion_only_for_additional_workers() {
-        let snapshot_ids = (0..3).map(|worker| snapshot_id_for_worker(crate::Placement::default(), 3, worker)).collect::<Vec<_>>();
+        let snapshot_ids =
+            (0..3).map(|worker| snapshot_id_for_worker(crate::contime_router::Placement::default(), 3, worker)).collect::<Vec<_>>();
         let completion_clone_count = Arc::new(AtomicUsize::new(0));
         let (input_sender, input_receiver) = unbounded();
         let mut worker_outputs = Vec::<Sender<WorkerBatch<TestInput, CompletionToken>>>::new();
@@ -644,7 +648,7 @@ mod tests {
             .unwrap();
         drop(input_sender);
 
-        route(crate::Placement::default(), input_receiver, &worker_outputs).unwrap();
+        route(crate::contime_router::Placement::default(), input_receiver, &worker_outputs).unwrap();
 
         assert_eq!(completion_clone_count.load(Ordering::Relaxed), 2);
         assert!(worker_receivers.iter().all(|receiver| receiver.len() == 1));
@@ -652,7 +656,7 @@ mod tests {
 
     #[test]
     fn route_sends_nothing_for_inputs_without_snapshot_ids() {
-        let batches = route_once(crate::Placement::default(), vec![TestInput { value: 10, snapshot_ids: Vec::new() }], 4);
+        let batches = route_once(crate::contime_router::Placement::default(), vec![TestInput { value: 10, snapshot_ids: Vec::new() }], 4);
 
         assert!(batches.is_empty());
     }
@@ -660,7 +664,7 @@ mod tests {
     #[test]
     fn route_reports_the_disconnected_worker_index() {
         let selected_worker = 1;
-        let snapshot_id = snapshot_id_for_worker(crate::Placement::default(), 2, selected_worker);
+        let snapshot_id = snapshot_id_for_worker(crate::contime_router::Placement::default(), 2, selected_worker);
         let (input_sender, input_receiver) = unbounded();
         input_sender.send(InputBatch { inputs: vec![TestInput { value: 10, snapshot_ids: vec![snapshot_id] }], completion: () }).unwrap();
         drop(input_sender);
@@ -668,7 +672,7 @@ mod tests {
         let (second_worker, second_receiver) = unbounded::<WorkerBatch<TestInput, ()>>();
         drop(second_receiver);
 
-        let result = route(crate::Placement::default(), input_receiver, &[first_worker, second_worker]);
+        let result = route(crate::contime_router::Placement::default(), input_receiver, &[first_worker, second_worker]);
 
         assert_eq!(result, Err(RouterError::WorkerUnavailable { worker_index: selected_worker }));
     }
@@ -709,7 +713,7 @@ mod tests {
             bencher.iter_batched(
                 || benchmark_fixture(1_000, 8),
                 |(input_receiver, worker_outputs, worker_receivers, completion_receiver)| {
-                    route(crate::Placement::default(), input_receiver, &worker_outputs).unwrap();
+                    route(crate::contime_router::Placement::default(), input_receiver, &worker_outputs).unwrap();
                     black_box((worker_outputs, worker_receivers, completion_receiver))
                 },
                 BatchSize::LargeInput,

@@ -1,4 +1,4 @@
-use crate::{Event, EventHistory, EventKey, PruneResult};
+use crate::contime_events::{Event, EventHistory, EventKey, PruneResult};
 
 impl<E> EventHistory<E>
 where
@@ -46,7 +46,7 @@ mod tests {
 
     use criterion::{BatchSize, Criterion};
 
-    use crate::{Event, EventHistory, Insert, PruneResult};
+    use crate::contime_events::{Event, EventHistory, Insert, PruneResult};
 
     #[derive(Clone)]
     struct TestEvent {

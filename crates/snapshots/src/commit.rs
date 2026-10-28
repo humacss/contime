@@ -1,5 +1,5 @@
 //! Restricted checkpoint and boundary updates for caller-defined commit policies.
-use crate::{Checkpoint, Snapshot, Store};
+use crate::contime_checkpoints::{Checkpoint, Snapshot, Store};
 
 pub struct Commit<'a, S: Snapshot, H> {
     store: &'a mut Store<S, H>,
@@ -63,7 +63,7 @@ pub(crate) fn commit<S: Snapshot, H, R>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::testing::{TestSnapshot, Time};
+    use crate::contime_checkpoints::types::testing::{TestSnapshot, Time};
     use std::hint::black_box;
 
     #[rstest::rstest]

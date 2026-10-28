@@ -5,12 +5,12 @@ pub(crate) mod testing {
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
     pub struct Time(pub i64);
 
-    impl contime_checkpoints::Timestamp for Time {
+    impl crate::contime_checkpoints::Timestamp for Time {
         fn previous(&self) -> Option<Self> {
             self.0.checked_sub(1).map(Self)
         }
     }
-    impl contime_worker::AdvanceTime for Time {
+    impl crate::contime_worker::AdvanceTime for Time {
         fn saturating_sub(&self, other: &Self) -> Self {
             Self(self.0.saturating_sub(other.0))
         }
@@ -19,7 +19,7 @@ pub(crate) mod testing {
 use std::sync::Arc;
 /// The event information required by the complete apply pipeline.
 pub trait Input:
-    contime_checkpoints::Event<Time: contime_worker::AdvanceTime + contime_checkpoints::Timestamp + 'static> + 'static
+    crate::contime_checkpoints::Event<Time: crate::contime_worker::AdvanceTime + crate::contime_checkpoints::Timestamp + 'static> + 'static
 {
     /// Returns a stable identity for duplicate detection within each history.
     ///
@@ -67,21 +67,21 @@ pub(crate) struct History<I>
 where
     I: Input,
 {
-    pub(crate) events: contime_events::EventHistory<SharedEvent<I>>,
+    pub(crate) events: crate::contime_events::EventHistory<SharedEvent<I>>,
 }
 
 pub(crate) enum HistoryIter<'a, I>
 where
     I: Input,
 {
-    All(contime_events::EventHistoryIter<'a, SharedEvent<I>>),
-    Range(contime_events::EventHistoryRangeIter<'a, SharedEvent<I>>),
+    All(crate::contime_events::EventHistoryIter<'a, SharedEvent<I>>),
+    Range(crate::contime_events::EventHistoryRangeIter<'a, SharedEvent<I>>),
 }
 
 /// Settings for the shared synchronous worker storage adapter.
 pub struct CheckpointStorageConfig {
     /// Checkpoint spacing used for each history.
-    pub checkpoints: crate::checkpoints::CheckpointConfig,
+    pub checkpoints: crate::contime_core::checkpoints::CheckpointConfig,
 }
 
 /// Synchronous storage adapter shared by execution modes.
@@ -89,11 +89,11 @@ pub struct CheckpointStorageConfig {
 pub struct CheckpointStorage<I, S, W>
 where
     I: Input,
-    S: contime_checkpoints::Snapshot<Time = I::Time>,
+    S: crate::contime_checkpoints::Snapshot<Time = I::Time>,
 {
     pub(crate) snapshot_id: u128,
     pub(crate) horizon: I::Time,
     pub(crate) interval: u64,
-    pub(crate) store: Option<contime_checkpoints::SnapshotStore<S, History<I>>>,
+    pub(crate) store: Option<crate::contime_checkpoints::SnapshotStore<S, History<I>>>,
     pub(crate) wrapper: PhantomData<fn() -> W>,
 }

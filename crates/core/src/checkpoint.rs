@@ -1,11 +1,11 @@
-use crate::checkpoints::{Application, ApplyEvents, ApplyWrapper, Snapshot};
-use crate::types::{CheckpointStorage, CheckpointStorageConfig, History};
-use crate::{Input, InsertionRejection, RejectionReason, SharedEvent};
-use contime_checkpoints::Insert;
-use contime_worker::EventInsert;
+use crate::contime_checkpoints::Insert;
+use crate::contime_core::checkpoints::{Application, ApplyEvents, ApplyWrapper, Snapshot};
+use crate::contime_core::types::{CheckpointStorage, CheckpointStorageConfig, History};
+use crate::contime_core::{Input, InsertionRejection, RejectionReason, SharedEvent};
+use crate::contime_worker::EventInsert;
 use std::marker::PhantomData;
 
-impl<I, S, W> contime_worker::SnapshotStore<SharedEvent<I>> for CheckpointStorage<I, S, W>
+impl<I, S, W> crate::contime_worker::SnapshotStore<SharedEvent<I>> for CheckpointStorage<I, S, W>
 where
     I: Input,
     S: Snapshot<Time = I::Time> + ApplyEvents<I>,
@@ -37,7 +37,7 @@ where
         let store = self.store.get_or_insert_with(|| {
             let mut snapshot = S::create(self.snapshot_id, input.inner.as_ref());
             snapshot.set_time(self.horizon.clone());
-            contime_checkpoints::SnapshotStore::new(History::with_horizon(self.horizon.clone()), snapshot, self.interval)
+            crate::contime_checkpoints::SnapshotStore::new(History::with_horizon(self.horizon.clone()), snapshot, self.interval)
         });
         match store.insert(input) {
             Insert::Inserted => EventInsert { changed: true, rejections: vec![] },
@@ -97,16 +97,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checkpoints::{ApplyBatch, ApplyInner, CheckpointConfig, EventBatch};
-    use crate::types::testing::Time;
-    use contime_worker::SnapshotStore;
+    use crate::contime_core::checkpoints::{ApplyBatch, ApplyInner, CheckpointConfig, EventBatch};
+    use crate::contime_core::types::testing::Time;
+    use crate::contime_worker::SnapshotStore;
 
     struct TestEvent {
         id: u128,
         time: Time,
         value: i64,
     }
-    impl contime_checkpoints::Event for TestEvent {
+    impl crate::contime_checkpoints::Event for TestEvent {
         type Time = Time;
         fn time(&self) -> Time {
             self.time
@@ -166,7 +166,7 @@ mod tests {
     }
     type Adapter = CheckpointStorage<TestEvent, TestSnapshot, Context>;
     fn event(id: u128, time: i64, value: i64) -> SharedEvent<TestEvent> {
-        crate::input::prepare_inputs(vec![TestEvent { id, time: Time(time), value }]).pop().unwrap()
+        crate::contime_core::input::prepare_inputs(vec![TestEvent { id, time: Time(time), value }]).pop().unwrap()
     }
 
     #[derive(Default)]

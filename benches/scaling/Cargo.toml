@@ -8,10 +8,5 @@ publish = false
 
 [dependencies]
 contime = { path = "../.." }
-contime-core = { path = "../../crates/core" }
-contime-api = { path = "../../crates/api" }
-contime-router = { path = "../../crates/router" }
-contime-runtime = { path = "../../crates/runtime" }
-contime-worker = { path = "../../crates/worker" }
 crossbeam-channel = "0.5"
 libc = "0.2"

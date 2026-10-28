@@ -1,14 +1,14 @@
 use std::fmt;
 use std::ops::Deref;
 
-use crate::SharedEvent;
+use crate::contime_runtime::SharedEvent;
 
 #[cfg(test)]
-pub(crate) fn prepare_inputs<I: crate::ThreadInput>(inputs: Vec<I>) -> Vec<SharedEvent<I>> {
+pub(crate) fn prepare_inputs<I: crate::contime_runtime::ThreadInput>(inputs: Vec<I>) -> Vec<SharedEvent<I>> {
     inputs.into_iter().map(SharedEvent::from).collect()
 }
 
-impl<I: crate::ThreadInput> From<I> for SharedEvent<I> {
+impl<I: crate::contime_runtime::ThreadInput> From<I> for SharedEvent<I> {
     fn from(input: I) -> Self {
         Self { inner: input.into(), observation: None }
     }
@@ -16,7 +16,7 @@ impl<I: crate::ThreadInput> From<I> for SharedEvent<I> {
 
 impl<I> Clone for SharedEvent<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     fn clone(&self) -> Self {
         Self { inner: self.inner.clone(), observation: self.observation.clone() }
@@ -25,7 +25,7 @@ where
 
 impl<I> Deref for SharedEvent<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     type Target = I;
 
@@ -36,7 +36,7 @@ where
 
 impl<I> fmt::Debug for SharedEvent<I>
 where
-    I: crate::ThreadInput + fmt::Debug,
+    I: crate::contime_runtime::ThreadInput + fmt::Debug,
 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.deref().fmt(formatter)
@@ -45,16 +45,16 @@ where
 
 impl<I> AsRef<I> for SharedEvent<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     fn as_ref(&self) -> &I {
         self
     }
 }
 
-impl<I> contime_events::Event for SharedEvent<I>
+impl<I> crate::contime_events::Event for SharedEvent<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     type Time = I::Time;
 
@@ -67,9 +67,9 @@ where
     }
 }
 
-impl<I> contime_router::RoutableInput for SharedEvent<I>
+impl<I> crate::contime_router::RoutableInput for SharedEvent<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
         self.deref().snapshot_ids(emit);

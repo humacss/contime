@@ -12,6 +12,7 @@
 //! # Measuring two participants
 //!
 //! ```
+//! # use contime::contime_progress as contime_progress;
 //! use contime_progress::MeasurementRound;
 //! use std::num::NonZeroUsize;
 //!
@@ -21,6 +22,7 @@
 //! assert!(round.is_complete());
 //! // The completed boundary excludes the timestamp bucket at 40.
 //! ```
+//! # use contime::contime_progress as contime_progress;
 
 #![deny(missing_docs)]
 
@@ -28,6 +30,6 @@ mod coverage;
 mod policy;
 mod round;
 
-pub use coverage::CoverageConstraint;
-pub use policy::{ProgressObservation, ProgressPolicy};
-pub use round::MeasurementRound;
+pub use self::coverage::CoverageConstraint;
+pub use self::policy::{ProgressObservation, ProgressPolicy};
+pub use self::round::MeasurementRound;

@@ -118,7 +118,7 @@ pub trait Event {
 /// Read the value only after consuming the current batch iterator to completion.
 /// A reported timestamp is later than the current batch. Availability depends on
 /// the supplied playback range: `None` does not establish that all retained or
-/// future history is exhausted. [`crate::SnapshotStore::process_until`] also exposes
+/// future history is exhausted. [`crate::contime_checkpoints::SnapshotStore::process_until`] also exposes
 /// the next playback interval when its boundary is reached; query and forwarding
 /// do not provide that extra interval lookahead.
 pub struct BatchLookahead<'a, T> {

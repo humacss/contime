@@ -14,7 +14,7 @@ impl Timestamp for Time {
     }
 }
 
-impl contime_worker::AdvanceTime for Time {
+impl contime::contime_worker::AdvanceTime for Time {
     fn saturating_sub(&self, retention: &Self) -> Self {
         Self(self.0.saturating_sub(retention.0))
     }

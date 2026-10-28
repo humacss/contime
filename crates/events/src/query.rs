@@ -1,4 +1,4 @@
-use crate::{Event, EventHistory};
+use crate::contime_events::{Event, EventHistory};
 
 impl<E> EventHistory<E>
 where
@@ -29,7 +29,7 @@ mod tests {
 
     use criterion::Criterion;
 
-    use crate::{Event, EventHistory};
+    use crate::contime_events::{Event, EventHistory};
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     struct TestEvent {

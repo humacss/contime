@@ -42,10 +42,10 @@ mod replay;
 mod store;
 mod types;
 
-pub use api::SnapshotStore;
-pub use forward::ForwardError;
-pub use types::{Apply, BatchLookahead, Checkpoint, Event, EventStore, Insert, InsertEventStore, NoCheckpoint, Snapshot, Timestamp};
+pub use self::api::SnapshotStore;
+pub use self::forward::ForwardError;
+pub use self::types::{Apply, BatchLookahead, Checkpoint, Event, EventStore, Insert, InsertEventStore, NoCheckpoint, Snapshot, Timestamp};
 
-pub(crate) use commit::Commit;
-pub(crate) use playback::Playback;
-pub(crate) use store::Store;
+pub(crate) use self::commit::Commit;
+pub(crate) use self::playback::Playback;
+pub(crate) use self::store::Store;

@@ -1,10 +1,10 @@
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::{RouterMessage, RouterProcess, WorkerMessage};
+use crate::contime_runtime::{RouterMessage, RouterProcess, WorkerMessage};
 
 impl<I, S> RouterProcess<I, S>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     /// Registers idle observers for this router.
     pub fn with_activity(mut self, activity: Receiver<Sender<bool>>) -> Self {
@@ -13,7 +13,7 @@ where
     }
 
     /// Connects fenced flush requests from the admission coordinator.
-    pub fn with_controls(mut self, controls: Receiver<contime_router::Flush>) -> Self {
+    pub fn with_controls(mut self, controls: Receiver<crate::contime_router::Flush>) -> Self {
         self.controls = controls;
         self
     }
@@ -22,43 +22,43 @@ where
     ///
     /// Activity observation and flush controls are initially disabled; attach
     /// their receivers with the corresponding builder methods when needed.
-    pub fn new(placement: contime_router::Placement) -> Self {
+    pub fn new(placement: crate::contime_router::Placement) -> Self {
         Self { placement, activity: crossbeam_channel::never(), controls: crossbeam_channel::never(), input: std::marker::PhantomData }
     }
 }
 
-impl<I, S> crate::Router for RouterProcess<I, S>
+impl<I, S> crate::contime_runtime::Router for RouterProcess<I, S>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
     S: Send + 'static,
 {
     type Input = RouterMessage<I, S>;
     type WorkerInput = WorkerMessage<I, S>;
-    type Error = contime_router::RouterError;
+    type Error = crate::contime_router::RouterError;
 
     fn run(self, input: Receiver<Self::Input>, workers: Vec<Sender<Self::WorkerInput>>) -> Result<(), Self::Error> {
-        contime_router::route_messages(self.placement, input, &workers, self.activity, self.controls)
+        crate::contime_router::route_messages(self.placement, input, &workers, self.activity, self.controls)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::types::testing::Time;
+    use crate::contime_runtime::types::testing::Time;
     use std::hint::black_box;
 
-    use contime_api::{ApplyOutput, RejectionMessage};
+    use crate::contime_api::{ApplyOutput, RejectionMessage};
 
-    use crate::Router as RuntimeRouter;
-    use contime_worker::ApplyInput;
+    use crate::contime_runtime::Router as RuntimeRouter;
+    use crate::contime_worker::ApplyInput;
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::unbounded;
 
-    use crate::input::prepare_inputs;
-    use crate::{Input, RejectionReason, RouterBatch, RouterMessage, RouterProcess, WorkerMessage};
+    use crate::contime_runtime::input::prepare_inputs;
+    use crate::contime_runtime::{Input, RejectionReason, RouterBatch, RouterMessage, RouterProcess, WorkerMessage};
 
     struct TestInput(u128);
 
-    impl contime_checkpoints::Event for TestInput {
+    impl crate::contime_checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {
@@ -87,7 +87,7 @@ mod tests {
         input.send(batch(4)).unwrap();
         drop(input);
 
-        RuntimeRouter::run(RouterProcess::new(contime_router::Placement::default()), receiver, vec![worker]).unwrap();
+        RuntimeRouter::run(RouterProcess::new(crate::contime_router::Placement::default()), receiver, vec![worker]).unwrap();
 
         let WorkerMessage::Apply(routed) = output.recv().unwrap() else { panic!("expected apply") };
         assert_eq!(routed.into_parts().0.len(), 4);
@@ -107,7 +107,7 @@ mod tests {
                     (receiver, worker, output)
                 },
                 |(receiver, worker, output)| {
-                    RuntimeRouter::run(RouterProcess::new(contime_router::Placement::default()), receiver, vec![worker]).unwrap();
+                    RuntimeRouter::run(RouterProcess::new(crate::contime_router::Placement::default()), receiver, vec![worker]).unwrap();
                     black_box(output.recv().unwrap())
                 },
                 BatchSize::LargeInput,

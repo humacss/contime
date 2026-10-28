@@ -30,6 +30,13 @@ jobs:
         run: cargo +${{ matrix.toolchain }} test --workspace
       - name: Test optional features
         run: cargo +${{ matrix.toolchain }} test --workspace --all-features
+      - name: Check isolated Monitor features
+        run: |
+          cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --lib
+          cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features monitor --lib
+          cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features workers --lib
+          cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features runtime --lib
+          cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features counters --lib
       - name: Test Manual without managed Runtime
         run: cargo +${{ matrix.toolchain }} test -p contime --no-default-features --features manual --test manual
       - name: Test example verification logic
@@ -59,5 +66,5 @@ jobs:
         run: cargo +1.90.0 doc --workspace --all-features --no-deps
       - name: Run counter walkthrough
         run: cargo +1.90.0 run -p contime --example counter
-      - name: Verify workspace release without uploading
-        run: cargo +1.90.0 publish --workspace --all-features --dry-run
+      - name: Verify single-package release without uploading
+        run: cargo +1.90.0 publish -p contime --all-features --dry-run

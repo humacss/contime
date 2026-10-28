@@ -1,5 +1,5 @@
-use crate::types::SnapshotOutput;
-use crate::{ApplyBatch, ApplyEvents, ApplyLanes, EventFilter, FilterBatch, FilterOutput, Lanes};
+use crate::contime_lanes::types::SnapshotOutput;
+use crate::contime_lanes::{ApplyBatch, ApplyEvents, ApplyLanes, EventFilter, FilterBatch, FilterOutput, Lanes};
 
 impl<S, T, A> FilterOutput<A> for SnapshotOutput<'_, S, T>
 where
@@ -58,7 +58,9 @@ mod tests {
 
     use criterion::Criterion;
 
-    use crate::{apply, ApplyBatch, ApplyEvents, ApplyLanes, EventFilter, FilterBatch, FilterLanes, FilterOutput, Lanes, RawBatch};
+    use crate::contime_lanes::{
+        apply, ApplyBatch, ApplyEvents, ApplyLanes, EventFilter, FilterBatch, FilterLanes, FilterOutput, Lanes, RawBatch,
+    };
 
     struct Attack {
         damage: i64,
@@ -196,7 +198,7 @@ mod tests {
         let attack = RawEvent::Attack(Attack { damage: 8 });
         let claim = RawEvent::Claim(Claim { bonus: 3 });
         let raw_events = [&attack, &claim];
-        let filter_batch = crate::project::<CombatFilterLanes, _, _>(RawBatch {
+        let filter_batch = crate::contime_lanes::project::<CombatFilterLanes, _, _>(RawBatch {
             snapshot_id: 7,
             time: 11_i64,
             history_event_count: 2,
@@ -223,21 +225,21 @@ mod tests {
 
         criterion.bench_function("lanes/apply/default_pipeline_1000_events", |bencher| {
             bencher.iter(|| {
-                let filter_batch = crate::project::<CombatFilterLanes, _, _>(RawBatch {
+                let filter_batch = crate::contime_lanes::project::<CombatFilterLanes, _, _>(RawBatch {
                     snapshot_id: 7,
                     time: 11_i64,
                     history_event_count: 1_000,
                     events: black_box(&raw_events),
                 });
                 let mut snapshot = RawSnapshot::default();
-                apply::<_, _, CombatFilterLanes, CombatFilterLanes, _>(&mut snapshot, &crate::PassThrough, filter_batch);
+                apply::<_, _, CombatFilterLanes, CombatFilterLanes, _>(&mut snapshot, &crate::contime_lanes::PassThrough, filter_batch);
                 black_box(snapshot)
             });
         });
 
         criterion.bench_function("lanes/apply/decorated_pipeline_1000_raw_events", |bencher| {
             bencher.iter(|| {
-                let filter_batch = crate::project::<CombatFilterLanes, _, _>(RawBatch {
+                let filter_batch = crate::contime_lanes::project::<CombatFilterLanes, _, _>(RawBatch {
                     snapshot_id: 7,
                     time: 11_i64,
                     history_event_count: 1_000,

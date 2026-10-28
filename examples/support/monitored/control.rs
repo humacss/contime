@@ -1,6 +1,6 @@
 //! Example-only closed-loop load control. Monitor readings are the only feedback.
 use super::Time;
-use contime_monitor::WorkerReading;
+use contime::contime_monitor::WorkerReading;
 use std::time::Duration;
 const WINDOW: Duration = Duration::from_millis(50);
 // Automatic memory bound in target applications, independent of query cadence.

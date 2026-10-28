@@ -2,11 +2,11 @@
 
 use crossbeam_channel::Sender;
 
-use crate::{ApiError, ConTime, RouterMessage, SharedEvent};
+use crate::contime_runtime::{ApiError, ConTime, RouterMessage, SharedEvent};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     /// Enqueues a read of the requested snapshots through `time`, inclusively.
     ///
@@ -22,7 +22,7 @@ where
         snapshot_ids: impl IntoIterator<Item = u128>,
         response: Sender<Vec<Box<S>>>,
     ) -> Result<(), ApiError> {
-        contime_api::send_query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids, response)
+        crate::contime_api::send_query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids, response)
     }
 
     /// Collects a snapshot query through `time`, including events exactly at it.
@@ -35,7 +35,7 @@ where
     /// should observe operation-specific responses or progress instead.
     /// Returns [`ApiError`] if submission fails.
     pub fn query_at(&self, time: I::Time, snapshot_ids: impl IntoIterator<Item = u128>) -> Result<Vec<Box<S>>, ApiError> {
-        contime_api::query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids)
+        crate::contime_api::query_at::<RouterMessage<I, S>, _, _, _>(&self.input, time, snapshot_ids)
     }
 
     /// Enqueues a retained event-history read in the half-open range `[from, to)`.
@@ -52,7 +52,7 @@ where
         to: I::Time,
         response: Sender<Vec<SharedEvent<I>>>,
     ) -> Result<(), ApiError> {
-        contime_api::send_query_events_between::<RouterMessage<I, S>, _, _>(&self.input, snapshot_id, from, to, response)
+        crate::contime_api::send_query_events_between::<RouterMessage<I, S>, _, _>(&self.input, snapshot_id, from, to, response)
     }
 
     /// Collects retained events for one snapshot in the half-open range `[from, to)`.
@@ -62,20 +62,20 @@ where
     /// Returned handles share immutable input ownership; pruned events are absent.
     /// Waits only for this read and returns [`ApiError`] if submission fails.
     pub fn query_events_between(&self, snapshot_id: u128, from: I::Time, to: I::Time) -> Result<Vec<SharedEvent<I>>, ApiError> {
-        contime_api::query_events_between::<RouterMessage<I, S>, _, _>(&self.input, snapshot_id, from, to)
+        crate::contime_api::query_events_between::<RouterMessage<I, S>, _, _>(&self.input, snapshot_id, from, to)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::testing::Time;
+    use crate::contime_runtime::testing::Time;
     use std::time::Duration;
 
-    use crate::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
+    use crate::contime_runtime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
 
     use crossbeam_channel::unbounded;
 
-    use crate::{ConTime, ConTimeConfig, Input};
+    use crate::contime_runtime::{ConTime, ConTimeConfig, Input};
 
     struct TestEvent {
         id: u128,
@@ -83,7 +83,7 @@ mod tests {
         value: u64,
     }
 
-    impl crate::checkpoints::Event for TestEvent {
+    impl crate::contime_runtime::checkpoints::Event for TestEvent {
         type Time = Time;
 
         fn time(&self) -> Self::Time {
@@ -131,7 +131,7 @@ mod tests {
         ConTimeConfig {
             router_count: 2,
             worker_count: 4,
-            placement: contime_router::Placement::default(),
+            placement: crate::contime_router::Placement::default(),
             pruning_interval: std::time::Duration::from_millis(100),
 
             history_retention: Time(0),

@@ -1,6 +1,6 @@
 //! Clone Store-selected state and lend event intervals for a working checkpoint.
 use super::{Checkpoint, Store};
-use crate::{Event, EventStore, Snapshot};
+use crate::contime_checkpoints::{Event, EventStore, Snapshot};
 
 /// A cloned working checkpoint whose commit callback may change retained storage.
 /// A no-op callback leaves the store unchanged, including for query playback.
@@ -39,7 +39,7 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> Playback<'_, S, H> {
 
     pub(crate) fn begin_with_lookahead(
         &mut self,
-    ) -> (&mut Checkpoint<S>, impl Iterator<Item = &H::Event>, crate::BatchLookahead<'_, S::Time>) {
+    ) -> (&mut Checkpoint<S>, impl Iterator<Item = &H::Event>, crate::contime_checkpoints::BatchLookahead<'_, S::Time>) {
         self.next_event_time.replace(None);
         let events = interval_events(
             &self.store.events,
@@ -48,12 +48,12 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> Playback<'_, S, H> {
             self.store.checkpoint_interval,
             Some(&self.next_event_time),
         );
-        (&mut self.checkpoint, events, crate::BatchLookahead::new(&self.next_event_time))
+        (&mut self.checkpoint, events, crate::contime_checkpoints::BatchLookahead::new(&self.next_event_time))
     }
     /// Delegates storage changes and prepares the next interval.
     /// A no-op policy leaves retained state unchanged.
-    pub fn commit<R>(&mut self, policy: impl FnOnce(&mut crate::Commit<'_, S, H>) -> R) -> R {
-        let result = crate::commit::commit(self.store, &self.checkpoint, &mut self.checkpoint_index, policy);
+    pub fn commit<R>(&mut self, policy: impl FnOnce(&mut crate::contime_checkpoints::Commit<'_, S, H>) -> R) -> R {
+        let result = crate::contime_checkpoints::commit::commit(self.store, &self.checkpoint, &mut self.checkpoint_index, policy);
         if self.checkpoint.history_event_count.saturating_sub(self.interval_start_count) >= self.store.checkpoint_interval {
             self.interval_start_count = self.checkpoint.history_event_count;
         }
@@ -103,15 +103,15 @@ mod tests {
     use super::*;
     use std::hint::black_box;
 
-    use crate::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
+    use crate::contime_checkpoints::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
 
     // Synthetic application results keep these tests independent of apply.rs.
     fn apply_stub<'a>(checkpoint: &mut Checkpoint<TestSnapshot>, events: impl Iterator<Item = &'a TestEvent>) -> Vec<Time> {
         let mut times = Vec::new();
-        <TestEvent as crate::Apply<Checkpoint<TestSnapshot>>>::apply(
+        <TestEvent as crate::contime_checkpoints::Apply<Checkpoint<TestSnapshot>>>::apply(
             checkpoint,
             events.inspect(|event| times.push(event.0)),
-            crate::BatchLookahead::unavailable(),
+            crate::contime_checkpoints::BatchLookahead::unavailable(),
             &(),
         );
         if let Some(time) = times.last() {

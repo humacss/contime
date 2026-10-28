@@ -1,10 +1,10 @@
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use crate::types::{ApiError, ApplyOutput, ApplyResponse, RejectionMessage};
+use crate::contime_api::types::{ApiError, ApplyOutput, ApplyResponse, RejectionMessage};
 
 traitstub::deps! {
-    send[R, Inputs](inputs: Inputs, rejection_sender: crossbeam_channel::Sender<source::RejectionMessage<R>>)
-        -> Result<(), source::ApiError>
+    send[R, Inputs](inputs: Inputs, rejection_sender: crossbeam_channel::Sender<source::contime_api::RejectionMessage<R>>)
+        -> Result<(), source::contime_api::ApiError>
         where [Inputs: IntoIterator];
 }
 
@@ -24,7 +24,10 @@ where
     O: ApplyOutput<I, R>,
     R: Ord,
 {
-    apply_with_deps(&Deps(|inputs, rejection_sender| crate::send::send::<O, I, R, Input, Inputs>(output, inputs, rejection_sender)), inputs)
+    apply_with_deps(
+        &Deps(|inputs, rejection_sender| crate::contime_api::send::send::<O, I, R, Input, Inputs>(output, inputs, rejection_sender)),
+        inputs,
+    )
 }
 
 fn apply_with_deps<R, Inputs>(deps: &impl calls::send<R, Inputs>, inputs: Inputs) -> Result<ApplyResponse<R>, ApiError>
@@ -54,7 +57,7 @@ mod tests {
     use std::hint::black_box;
 
     use super::*;
-    use crate::types::InputBatch;
+    use crate::contime_api::types::InputBatch;
 
     #[derive(Clone, Copy, Debug, Ord, PartialOrd, Eq, PartialEq)]
     enum TestReason {

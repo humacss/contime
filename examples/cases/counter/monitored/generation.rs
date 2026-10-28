@@ -1,6 +1,6 @@
 //! Two simulator callbacks: make a counter event, then assign its destinations.
 use super::{model::CounterChanged, Options, Time};
-use contime_simulator::{EventStream, StreamConfig};
+use contime::contime_simulator::{EventStream, StreamConfig};
 
 pub fn events(options: Options, start: u64, count: u64, time: Time) -> impl Iterator<Item = CounterChanged> {
     let mut sequence = start;

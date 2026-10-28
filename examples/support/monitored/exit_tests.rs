@@ -1,7 +1,7 @@
 //! Subprocess probes keep real backend work while detecting premature teardown.
 use super::backend::Backend;
 use crate::definition::{Example, Time};
-use contime_monitor::{WorkerMonitorError, WorkerStatus, WorkerStatusSource};
+use contime::contime_monitor::{WorkerMonitorError, WorkerStatus, WorkerStatusSource};
 use crossbeam_channel::{Receiver, Sender};
 use std::{path::PathBuf, process::Command};
 type Failure = Box<dyn std::error::Error>;

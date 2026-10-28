@@ -1,7 +1,7 @@
 use crossbeam_channel::Sender;
 
-use crate::Placement;
-use crate::{RouterError, SnapshotListenInput, SnapshotListenWorkerOutput};
+use crate::contime_router::Placement;
+use crate::contime_router::{RouterError, SnapshotListenInput, SnapshotListenWorkerOutput};
 
 /// Partitions one timestamped listener collection by owning worker.
 ///
@@ -67,7 +67,7 @@ mod tests {
     use crossbeam_channel::{unbounded, Sender};
 
     use super::route_snapshot_listeners;
-    use crate::{SnapshotListenInput, SnapshotListenWorkerOutput};
+    use crate::contime_router::{SnapshotListenInput, SnapshotListenWorkerOutput};
 
     #[derive(Clone)]
     struct Listener(Sender<u128>);
@@ -106,7 +106,7 @@ mod tests {
         let (listener, notifications) = unbounded();
 
         route_snapshot_listeners(
-            crate::Placement::default(),
+            crate::contime_router::Placement::default(),
             Registration { time: 55, snapshot_ids: vec![1, 2, 3, 4, 5, 6], listener: Listener(listener) },
             &outputs,
         )
@@ -138,7 +138,7 @@ mod tests {
         let (listener, notifications) = unbounded();
 
         route_snapshot_listeners(
-            crate::Placement::default(),
+            crate::contime_router::Placement::default(),
             Registration { time: 55, snapshot_ids: Vec::new(), listener: Listener(listener) },
             &outputs,
         )
@@ -163,7 +163,7 @@ mod tests {
                         (workers, outputs, notifications, registration)
                     },
                     |(workers, outputs, notifications, registration)| {
-                        route_snapshot_listeners(crate::Placement::default(), registration, &outputs).unwrap();
+                        route_snapshot_listeners(crate::contime_router::Placement::default(), registration, &outputs).unwrap();
                         black_box((workers, notifications));
                     },
                     BatchSize::LargeInput,

@@ -1,6 +1,6 @@
 //! Simulated transport; it owns inputs until their scheduled delivery, not ConTime.
 use crate::movement_example::model::{MovementInput, Time};
-use contime_simulator::Random;
+use contime::contime_simulator::Random;
 use std::{
     collections::{BTreeMap, HashMap},
     num::NonZeroU64,

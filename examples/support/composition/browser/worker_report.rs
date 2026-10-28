@@ -1,6 +1,6 @@
 //! Presentation-neutral worker totals shared by every browser case.
 use crate::definition::Time;
-use contime_monitor::{ApplicationActivity, WorkerReading};
+use contime::contime_monitor::{ApplicationActivity, WorkerReading};
 pub fn workers(baseline: Option<&WorkerReading<Time>>, latest: Option<&WorkerReading<Time>>) -> Vec<serde_json::Value> {
     let average = latest.map(|r| ApplicationActivity::between(baseline, r));
     let workers = latest

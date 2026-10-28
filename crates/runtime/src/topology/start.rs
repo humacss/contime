@@ -3,7 +3,7 @@ use std::thread::JoinHandle;
 
 use crossbeam_channel::{unbounded, Sender};
 
-use crate::{Router, RuntimeStage, StartError, ThreadTopology, Worker};
+use crate::contime_runtime::{Router, RuntimeStage, StartError, ThreadTopology, Worker};
 
 traitstub::deps! {
     spawn[T, F](name: String, run: F) -> std::io::Result<std::thread::JoinHandle<T>>
@@ -142,7 +142,7 @@ mod tests {
     traitstub::stubs! {
         spawn(name, run) => std::thread::Builder::new().name(name).spawn(run);
     }
-    use crate::{Router, StartError, ThreadTopology, Worker};
+    use crate::contime_runtime::{Router, StartError, ThreadTopology, Worker};
 
     struct TestRouter;
 
@@ -274,7 +274,7 @@ mod tests {
             (0..3).map(|_| ExitWorker { exited: worker_exited.clone() }).collect(),
         );
 
-        assert!(matches!(result, Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Worker { index: 2 }, .. })));
+        assert!(matches!(result, Err(StartError::ThreadSpawn { stage: crate::contime_runtime::RuntimeStage::Worker { index: 2 }, .. })));
         assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
         assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
     }
@@ -290,7 +290,7 @@ mod tests {
             (0..2).map(|_| ExitWorker { exited: worker_exited.clone() }).collect(),
         );
 
-        assert!(matches!(result, Err(StartError::ThreadSpawn { stage: crate::RuntimeStage::Router { index: 1 }, .. })));
+        assert!(matches!(result, Err(StartError::ThreadSpawn { stage: crate::contime_runtime::RuntimeStage::Router { index: 1 }, .. })));
         assert_eq!(router_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
         assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));
         assert_eq!(worker_exits.recv_timeout(Duration::from_secs(1)), Ok(()));

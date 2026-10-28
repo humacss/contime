@@ -1,4 +1,4 @@
-use crate::{Apply, Checkpoint, Event, EventStore, NoCheckpoint, Playback, Snapshot, Store};
+use crate::contime_checkpoints::{Apply, Checkpoint, Event, EventStore, NoCheckpoint, Playback, Snapshot, Store};
 
 /// Rebuilds and retains the dirty suffix through the inclusive target.
 pub fn replay<S, H, C>(store: &mut Store<S, H>, context: &C, time: S::Time) -> Result<(), NoCheckpoint>
@@ -15,7 +15,7 @@ where
             if events.peek().is_none() {
                 break;
             }
-            crate::apply::apply_with_lookahead(checkpoint, events, lookahead, context);
+            crate::contime_checkpoints::apply::apply_with_lookahead(checkpoint, events, lookahead, context);
         }
         retain(&mut playback);
     }
@@ -39,7 +39,7 @@ where
             if events.peek().is_none() {
                 break;
             }
-            crate::apply::apply_with_lookahead(checkpoint, events, lookahead, context);
+            crate::contime_checkpoints::apply::apply_with_lookahead(checkpoint, events, lookahead, context);
         }
         retain(&mut playback);
     }
@@ -81,7 +81,7 @@ mod tests {
     use super::*;
     use std::hint::black_box;
 
-    use crate::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
+    use crate::contime_checkpoints::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
 
     #[rstest::rstest]
     #[case::bounded(2, &[0, 20, 30])]

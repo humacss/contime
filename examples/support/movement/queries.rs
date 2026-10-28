@@ -6,7 +6,7 @@ use crate::{
     movement_example::{model::Character, setup::MovementExample},
     support::monitored::backend::Backend,
 };
-use contime_monitor::WorkerReading;
+use contime::contime_monitor::WorkerReading;
 use crossbeam_channel::{Receiver, TryRecvError};
 use std::{collections::VecDeque, time::Duration};
 type Failure = Box<dyn std::error::Error>;

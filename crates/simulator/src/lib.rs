@@ -5,10 +5,10 @@ mod controller;
 mod random;
 mod simulation;
 mod stream;
-pub use controller::{Maximum, MaximumConfig, WorkUnit};
-pub use random::Random;
-pub use simulation::{ProduceError, Query, QueryError, Simulator, Workload};
-pub use stream::{EventStream, StreamConfig};
+pub use self::controller::{Maximum, MaximumConfig, WorkUnit};
+pub use self::random::Random;
+pub use self::simulation::{ProduceError, Query, QueryError, Simulator, Workload};
+pub use self::stream::{EventStream, StreamConfig};
 /// Invalid simulator configuration, clock, or admission operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -21,7 +21,7 @@ pub enum Error {
     /// Cumulative simulation totals cannot be represented.
     CounterOverflow,
     /// Invalid query token or monitor clock.
-    Monitor(contime_monitor::Error),
+    Monitor(crate::contime_monitor::Error),
     /// The supplied elapsed clock moved backwards.
     ClockReversed,
     /// More work was consumed than the pacing credit permits.

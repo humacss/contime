@@ -1,7 +1,7 @@
 use crossbeam_channel::Sender;
 
-use crate::Placement;
-use crate::{EventQueryInput, EventQueryWorkerOutput, RouterError, SnapshotQueryInput, SnapshotQueryWorkerOutput};
+use crate::contime_router::Placement;
+use crate::contime_router::{EventQueryInput, EventQueryWorkerOutput, RouterError, SnapshotQueryInput, SnapshotQueryWorkerOutput};
 
 /// Partitions a historical snapshot query into one message per affected worker.
 ///
@@ -89,7 +89,7 @@ where
 mod tests {
     use crossbeam_channel::{unbounded, Sender};
 
-    use crate::{
+    use crate::contime_router::{
         route_event_query, route_messages, route_snapshot_query, AdvanceInput, AdvanceWorkerOutput, EventQueryInput,
         EventQueryWorkerOutput, InputBatch, RoutableInput, RouteInput, RouteInputKind, RouteOutput, SnapshotListenInput,
         SnapshotListenWorkerOutput, SnapshotQueryInput, SnapshotQueryWorkerOutput, WorkerOutput,
@@ -244,7 +244,7 @@ mod tests {
         }
     }
 
-    impl crate::CoordinationOutput<u64, Response> for WorkerMessage {
+    impl crate::contime_router::CoordinationOutput<u64, Response> for WorkerMessage {
         fn resolve(_: u64, time: u64, completion: Response) -> Self {
             Self::Advance { time, completion }
         }
@@ -269,7 +269,7 @@ mod tests {
         let (response, _results) = unbounded();
 
         route_snapshot_query(
-            crate::Placement::default(),
+            crate::contime_router::Placement::default(),
             SnapshotQuery { time: 42, snapshot_ids: vec![1, 2, 3, 4, 5, 6], response: Response(response) },
             &workers,
         )
@@ -297,7 +297,7 @@ mod tests {
         let (response, _results) = unbounded();
 
         route_event_query(
-            crate::Placement::default(),
+            crate::contime_router::Placement::default(),
             EventQuery { snapshot_id: 99, from: 10, to: 20, response: Response(response) },
             &workers,
         )
@@ -328,7 +328,14 @@ mod tests {
         input.send(RouterMessage::Advance(Advance { time: 50, completion: Response(advance_response) })).unwrap();
         drop(input);
 
-        route_messages(crate::Placement::default(), receiver, &[worker], crossbeam_channel::never(), crossbeam_channel::never()).unwrap();
+        route_messages(
+            crate::contime_router::Placement::default(),
+            receiver,
+            &[worker],
+            crossbeam_channel::never(),
+            crossbeam_channel::never(),
+        )
+        .unwrap();
 
         let messages = output.try_iter().collect::<Vec<_>>();
         assert_eq!(messages.len(), 5);
@@ -355,10 +362,10 @@ mod tests {
         input.send(RouterMessage::Apply(InputBatch { inputs: vec![ApplyEvent(0)], completion: Response(response) })).unwrap();
         input.send(RouterMessage::Fence { round: 3, observed }).unwrap();
         let thread = std::thread::spawn(move || {
-            route_messages(crate::Placement::default(), receiver, &workers, crossbeam_channel::never(), controls)
+            route_messages(crate::contime_router::Placement::default(), receiver, &workers, crossbeam_channel::never(), controls)
         });
         assert_eq!(observations.recv_timeout(std::time::Duration::from_secs(2)).unwrap(), 3);
-        control.send(crate::Flush { round: 3, router: 1 }).unwrap();
+        control.send(crate::contime_router::Flush { round: 3, router: 1 }).unwrap();
         assert!(matches!(channels[0].1.recv_timeout(std::time::Duration::from_secs(2)).unwrap(), WorkerMessage::Apply { count: 1 }));
         for (_, receiver) in &channels {
             assert!(matches!(
@@ -380,7 +387,13 @@ mod tests {
         let first_receiver = receiver.clone();
         let first_worker = worker.clone();
         let first = std::thread::spawn(move || {
-            route_messages(crate::Placement::default(), first_receiver, &[first_worker], crossbeam_channel::never(), first_controls)
+            route_messages(
+                crate::contime_router::Placement::default(),
+                first_receiver,
+                &[first_worker],
+                crossbeam_channel::never(),
+                first_controls,
+            )
         });
         let (started, active) = unbounded();
         let (release, gate) = unbounded();
@@ -394,13 +407,13 @@ mod tests {
             .unwrap();
         active.recv_timeout(timeout).unwrap();
         let second = std::thread::spawn(move || {
-            route_messages(crate::Placement::default(), receiver, &[worker], crossbeam_channel::never(), second_controls)
+            route_messages(crate::contime_router::Placement::default(), receiver, &[worker], crossbeam_channel::never(), second_controls)
         });
         let (observed, observations) = unbounded();
         input.send(RouterMessage::Fence { round: 9, observed }).unwrap();
         assert_eq!(observations.recv_timeout(timeout).unwrap(), 9);
-        first_control.send(crate::Flush { round: 9, router: 0 }).unwrap();
-        second_control.send(crate::Flush { round: 9, router: 1 }).unwrap();
+        first_control.send(crate::contime_router::Flush { round: 9, router: 0 }).unwrap();
+        second_control.send(crate::contime_router::Flush { round: 9, router: 1 }).unwrap();
         assert!(matches!(output.recv_timeout(timeout).unwrap(), WorkerMessage::Fence { round: 9, router: 1 }));
         assert!(output.is_empty());
         release.send(()).unwrap();
@@ -416,7 +429,7 @@ mod tests {
         let (input, receiver) = unbounded();
         let channels = (0..3).map(|_| unbounded::<WorkerMessage>()).collect::<Vec<_>>();
         let workers = channels.iter().map(|(sender, _)| sender.clone()).collect::<Vec<_>>();
-        let placement = crate::Placement::with_mapper(|id| id + 1);
+        let placement = crate::contime_router::Placement::with_mapper(|id| id + 1);
         let (response, _results) = unbounded();
         input.send(RouterMessage::Apply(InputBatch { inputs: vec![ApplyEvent(7)], completion: Response(response.clone()) })).unwrap();
         input
@@ -446,7 +459,13 @@ mod tests {
         let (worker, output) = crossbeam_channel::bounded::<WorkerMessage>(0);
         let (register, registrations) = unbounded();
         let thread = std::thread::spawn(move || {
-            crate::route_messages(crate::Placement::default(), receiver, &[worker], registrations, crossbeam_channel::never())
+            crate::contime_router::route_messages(
+                crate::contime_router::Placement::default(),
+                receiver,
+                &[worker],
+                registrations,
+                crossbeam_channel::never(),
+            )
         });
         let timeout = std::time::Duration::from_secs(2);
         let (first, first_reports) = unbounded();

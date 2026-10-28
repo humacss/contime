@@ -1,6 +1,6 @@
 use crossbeam_channel::Sender;
 
-use crate::{AdvanceInput, AdvanceWorkerOutput, RouterError};
+use crate::contime_router::{AdvanceInput, AdvanceWorkerOutput, RouterError};
 
 /// Broadcasts a processing target to every worker without consulting placement.
 ///
@@ -50,7 +50,7 @@ mod tests {
 
     use crossbeam_channel::{unbounded, Sender, TryRecvError};
 
-    use crate::{AdvanceInput, AdvanceWorkerOutput, RouterError};
+    use crate::contime_router::{AdvanceInput, AdvanceWorkerOutput, RouterError};
 
     struct Advance<C> {
         time: u64,

@@ -1,4 +1,4 @@
-use contime_monitor::{ApplicationActivity, WorkerReading};
+use contime::contime_monitor::{ApplicationActivity, WorkerReading};
 use std::sync::Arc;
 
 /// Backend-independent navigation. Map host keyboard or mouse events to these.

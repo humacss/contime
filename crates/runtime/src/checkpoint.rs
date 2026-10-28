@@ -1,11 +1,11 @@
 //! Native admission coverage around the shared synchronous storage adapter.
-use crate::checkpoints::{ApplyEvents, ApplyWrapper, Snapshot};
-use crate::types::{CheckpointStorage, CheckpointStorageConfig};
-use crate::{RejectionMessage, RejectionReason, SharedEvent};
-use contime_worker::{EventInsert, SnapshotStore};
+use crate::contime_runtime::checkpoints::{ApplyEvents, ApplyWrapper, Snapshot};
+use crate::contime_runtime::types::{CheckpointStorage, CheckpointStorageConfig};
+use crate::contime_runtime::{RejectionMessage, RejectionReason, SharedEvent};
+use crate::contime_worker::{EventInsert, SnapshotStore};
 impl<I, S, W> SnapshotStore<SharedEvent<I>> for CheckpointStorage<I, S, W>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
     S: Snapshot<Time = I::Time> + ApplyEvents<I>,
     W: ApplyWrapper<S, I>,
 {
@@ -15,7 +15,7 @@ where
     type Snapshot = S;
     type Rejection = RejectionMessage<RejectionReason>;
     fn create(snapshot_id: u128, config: &Self::Config, horizon: &I::Time) -> Self {
-        Self { snapshot_id, inner: contime_core::CheckpointStorage::create(snapshot_id, config, horizon) }
+        Self { snapshot_id, inner: crate::contime_core::CheckpointStorage::create(snapshot_id, config, horizon) }
     }
     fn event_time(input: &SharedEvent<I>) -> I::Time {
         input.inner.time()
@@ -61,17 +61,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checkpoints::{ApplyBatch, ApplyInner, CheckpointConfig, EventBatch};
-    use crate::types::testing::Time;
-    use crate::Input;
-    use contime_worker::SnapshotStore;
+    use crate::contime_runtime::checkpoints::{ApplyBatch, ApplyInner, CheckpointConfig, EventBatch};
+    use crate::contime_runtime::types::testing::Time;
+    use crate::contime_runtime::Input;
+    use crate::contime_worker::SnapshotStore;
 
     struct TestEvent {
         id: u128,
         time: Time,
         value: i64,
     }
-    impl contime_checkpoints::Event for TestEvent {
+    impl crate::contime_checkpoints::Event for TestEvent {
         type Time = Time;
         fn time(&self) -> Time {
             self.time
@@ -131,7 +131,7 @@ mod tests {
     }
     type Adapter = CheckpointStorage<TestEvent, TestSnapshot, Context>;
     fn event(id: u128, time: i64, value: i64) -> SharedEvent<TestEvent> {
-        crate::input::prepare_inputs(vec![TestEvent { id, time: Time(time), value }]).pop().unwrap()
+        crate::contime_runtime::input::prepare_inputs(vec![TestEvent { id, time: Time(time), value }]).pop().unwrap()
     }
 
     #[derive(Default)]
@@ -189,7 +189,7 @@ mod tests {
         let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 100 } };
         let mut first = Adapter::create(7, &config, &Time(20));
         let mut second = Adapter::create(8, &config, &Time(20));
-        let observation = std::sync::Arc::new(std::sync::Mutex::new(contime_progress::CoverageConstraint::new(Time(20), [7, 8])));
+        let observation = std::sync::Arc::new(std::sync::Mutex::new(crate::contime_progress::CoverageConstraint::new(Time(20), [7, 8])));
         let mut input = event(1, 90, 1);
         input.observation = Some(observation.clone());
 
@@ -208,7 +208,7 @@ mod tests {
         let mut store = Adapter::create(7, &config, &Time(20));
         assert!(store.insert(event(1, 90, 1), &Time(20)).changed);
         for mut input in [event(1, 90, 1), event(2, 10, 1)] {
-            let observation = std::sync::Arc::new(std::sync::Mutex::new(contime_progress::CoverageConstraint::new(Time(20), [7])));
+            let observation = std::sync::Arc::new(std::sync::Mutex::new(crate::contime_progress::CoverageConstraint::new(Time(20), [7])));
             input.observation = Some(observation.clone());
             assert!(!store.insert(input, &Time(20)).changed);
             assert_eq!(observation.lock().unwrap().boundary(), None);

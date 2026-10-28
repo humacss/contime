@@ -2,7 +2,7 @@
 //!
 //! Start with [`Placement`] to select stable history ownership, then implement
 //! [`RoutableInput`], [`RouteInputBatch`], and [`WorkerOutput`] for apply routing
-//! with [`route`]. For a unified apply/query/control queue, implement
+//! with [`route()`]. For a unified apply/query/control queue, implement
 //! [`RouteInput`] and use [`route_messages`]. The default [`InputBatch`],
 //! [`RoutedInput`], and [`WorkerBatch`] containers are optional adapters.
 //!
@@ -22,14 +22,14 @@ mod query;
 mod route;
 mod types;
 
-pub use advance::route_advance;
-pub use listen::route_snapshot_listeners;
-pub use placement::Placement;
-pub use query::{route_event_query, route_snapshot_query};
-pub use route::{route, route_messages};
-pub use types::{
+pub use self::advance::route_advance;
+pub use self::listen::route_snapshot_listeners;
+pub use self::placement::Placement;
+pub use self::query::{route_event_query, route_snapshot_query};
+pub use self::route::{route, route_messages};
+pub use self::types::{
     AdvanceInput, AdvanceWorkerOutput, EventQueryInput, EventQueryWorkerOutput, InputBatch, RoutableInput, RouteInput, RouteInputBatch,
     RouteInputKind, RouteOutput, RoutedInput, RouterError, SnapshotListenInput, SnapshotListenWorkerOutput, SnapshotQueryInput,
     SnapshotQueryWorkerOutput, WorkerBatch, WorkerOutput,
 };
-pub use types::{CoordinationOutput, Flush};
+pub use self::types::{CoordinationOutput, Flush};

@@ -4,7 +4,7 @@ use crate::{
     definition::Time,
     monitored::{self, Options},
 };
-use contime_simulator::{EventStream, Random, StreamConfig};
+use contime::contime_simulator::{EventStream, Random, StreamConfig};
 pub fn events(options: Options, start: u64, count: u64, time: Time) -> impl Iterator<Item = CounterChanged> {
     let mut selection_random = Random::new(start ^ 42);
     let mut primary = Vec::new();

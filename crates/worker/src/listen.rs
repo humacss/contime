@@ -1,7 +1,7 @@
 use ahash::AHashMap;
 
-use crate::types::{NotificationId, ReplayUpdate, StoreSlot};
-use crate::SnapshotListener;
+use crate::contime_worker::types::{NotificationId, ReplayUpdate, StoreSlot};
+use crate::contime_worker::SnapshotListener;
 
 struct NotificationCollection<T, L> {
     watched_time: T,
@@ -116,8 +116,8 @@ mod tests {
     use crossbeam_channel::{unbounded, Sender};
 
     use super::NotificationCollections;
-    use crate::types::{ReplayUpdate, StoreSlot};
-    use crate::SnapshotListener;
+    use crate::contime_worker::types::{ReplayUpdate, StoreSlot};
+    use crate::contime_worker::SnapshotListener;
 
     #[derive(Clone, Debug, Eq, PartialEq)]
     enum Message {

@@ -13,7 +13,7 @@ impl checkpoints::Timestamp for Time {
     }
 }
 
-impl contime_worker::AdvanceTime for Time {
+impl contime::contime_worker::AdvanceTime for Time {
     fn saturating_sub(&self, retention: &Self) -> Self {
         Self(self.0.saturating_sub(retention.0))
     }
@@ -89,7 +89,7 @@ fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
-        placement: contime_router::Placement::default(),
+        placement: contime::contime_router::Placement::default(),
         pruning_interval: std::time::Duration::ZERO,
 
         history_retention: Time(10),

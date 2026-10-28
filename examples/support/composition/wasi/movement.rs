@@ -11,7 +11,7 @@ use crate::{
         monitored_wire::Sample,
     },
 };
-use contime_monitor::WorkerMonitor;
+use contime::contime_monitor::WorkerMonitor;
 use std::{
     io::{self, Write},
     time::{Duration, Instant},

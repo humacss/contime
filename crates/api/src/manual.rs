@@ -3,7 +3,7 @@
 //! Callbacks run synchronously during worker processing, may own thread-local
 //! state, and must not block waiting for that worker. Queued requests dropped
 //! before processing do not invoke callbacks. This module owns no storage or loop.
-use contime_worker::{
+use crate::contime_worker::{
     AdvanceInput, ApplyInput, Completion, EventQueryInput, EventQueryResponse, RoutedInput, SnapshotListenInput, SnapshotListener,
     SnapshotQueryInput, SnapshotQueryResponse, WorkInput, WorkInputKind,
 };
@@ -97,7 +97,7 @@ impl<T, I> EventQueryInput for Events<T, I> {
 /// Processing target or explicit pruning horizon; acceptance is not replay completion.
 #[derive(Clone)]
 pub struct Advance<T>(T);
-impl<T: contime_worker::AdvanceTime> AdvanceInput for Advance<T> {
+impl<T: crate::contime_worker::AdvanceTime> AdvanceInput for Advance<T> {
     type Time = T;
     type Completion = ();
     fn into_parts(self) -> (T, ()) {
@@ -159,7 +159,7 @@ impl<I, S, T, R> Message<I, S, T, R> {
         Self(Kind::Prune(Advance(time)))
     }
 }
-impl<I, S, T: contime_worker::AdvanceTime, R> WorkInput for Message<I, S, T, R> {
+impl<I, S, T: crate::contime_worker::AdvanceTime, R> WorkInput for Message<I, S, T, R> {
     type Apply = Apply<I, R>;
     type SnapshotQuery = Query<T, S>;
     type EventQuery = Events<T, I>;

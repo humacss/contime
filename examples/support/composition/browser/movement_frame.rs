@@ -4,7 +4,7 @@ use crate::{
     movement_example::setup::MovementExample,
     support::monitored::{backend::Manual, Options},
 };
-use contime_monitor::WorkerMonitor;
+use contime::contime_monitor::WorkerMonitor;
 use std::time::Duration;
 pub struct Frame {
     backend: Manual<MovementExample>,

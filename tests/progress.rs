@@ -13,7 +13,7 @@ impl Timestamp for Time {
         self.0.checked_sub(1).map(Self)
     }
 }
-impl contime_worker::AdvanceTime for Time {
+impl contime::contime_worker::AdvanceTime for Time {
     fn saturating_sub(&self, other: &Self) -> Self {
         Self(self.0.saturating_sub(other.0))
     }

@@ -8,6 +8,7 @@ snapshot-identifying fields. Both receive the configuration and seeded randomnes
 No batches or target objects are required.
 
 ```rust
+# use contime::contime_simulator as contime_simulator;
 use contime_simulator::{EventStream, StreamConfig};
 use std::num::NonZeroU64;
 
@@ -115,6 +116,7 @@ No snapshot counter, hash, ID format or timestamp type is required. `Simulator`
 combines that model with Maximum and a monitor; it does not start ConTime.
 
 ```rust
+# use contime::contime_simulator as contime_simulator;
 use contime_simulator::{MaximumConfig, Simulator, Workload};
 use std::{num::NonZeroU64, time::Duration};
 

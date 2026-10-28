@@ -7,7 +7,7 @@ use crate::{
         Options,
     },
 };
-use contime_monitor::WorkerMonitor;
+use contime::contime_monitor::WorkerMonitor;
 use std::time::{Duration, Instant};
 fn confirmed<B: Backend<MovementExample>>(backend: &B, count: u64, time: Time) {
     let mut monitor = WorkerMonitor::attach(backend);

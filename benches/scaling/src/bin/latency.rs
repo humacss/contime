@@ -165,7 +165,7 @@ fn main() {
     }
     assert_eq!(engine.errors().try_iter().count(), 0);
     let report = engine.shutdown();
-    assert!(report.workers.iter().all(|r| *r == contime_runtime::ThreadOutcome::Completed));
+    assert!(report.workers.iter().all(|r| *r == contime::contime_runtime::ThreadOutcome::Completed));
     let app = [50, 95, 99].map(|p| percentile(&mut samples, p));
     let query = [50, 95, 99].map(|p| percentile(&mut queries, p));
     println!("workers,total,submission,arrivals,seconds,events_per_sec,app_p50_us,app_p95_us,app_p99_us,query_count,query_p50_us,query_p95_us,query_p99_us");

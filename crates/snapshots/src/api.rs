@@ -1,5 +1,7 @@
 //! Worker-facing access to one snapshot's checkpoint history.
-use crate::{Apply, Checkpoint, Event, EventStore, ForwardError, Insert, InsertEventStore, NoCheckpoint, Snapshot, Store, Timestamp};
+use crate::contime_checkpoints::{
+    Apply, Checkpoint, Event, EventStore, ForwardError, Insert, InsertEventStore, NoCheckpoint, Snapshot, Store, Timestamp,
+};
 
 /// Owns one snapshot's canonical event history and retained checkpoints.
 ///
@@ -88,7 +90,7 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> SnapshotStore<S, H> {
     where
         H::Event: Apply<Checkpoint<S>, C>,
     {
-        crate::query::query_at(&mut self.store, context, time)
+        crate::contime_checkpoints::query::query_at(&mut self.store, context, time)
     }
 
     /// Ensures retained state incorporates accepted events through the inclusive target.
@@ -107,7 +109,7 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> SnapshotStore<S, H> {
     where
         H::Event: Apply<Checkpoint<S>, C>,
     {
-        crate::replay::replay(&mut self.store, context, time)
+        crate::contime_checkpoints::replay::replay(&mut self.store, context, time)
     }
 
     /// Processes through the inclusive target and returns raw canonical events
@@ -125,7 +127,7 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> SnapshotStore<S, H> {
     where
         H::Event: Apply<Checkpoint<S>, C>,
     {
-        crate::replay::replay_counted(&mut self.store, context, time)
+        crate::contime_checkpoints::replay::replay_counted(&mut self.store, context, time)
     }
 
     /// Forwards through the horizon's predecessor, then publishes the horizon.
@@ -153,6 +155,6 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> SnapshotStore<S, H> {
         S::Time: Timestamp,
         H::Event: Apply<Checkpoint<S>, C>,
     {
-        crate::forward::forward(&mut self.store, context, horizon, hook)
+        crate::contime_checkpoints::forward::forward(&mut self.store, context, horizon, hook)
     }
 }

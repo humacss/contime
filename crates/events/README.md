@@ -153,7 +153,7 @@ and dropping the returned vector. Event payloads are not cloned.
 Run the integration suite with:
 
 ```bash
-cargo bench --manifest-path crates/events/Cargo.toml --bench events
+cargo bench --manifest-path crates/events/dev/Cargo.toml --bench events
 ```
 
 ## Full benchmark run — 2026-10-28

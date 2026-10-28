@@ -1,4 +1,4 @@
-use crate::{Apply, Checkpoint, Event, EventStore, Snapshot, Store, Timestamp};
+use crate::contime_checkpoints::{Apply, Checkpoint, Event, EventStore, Snapshot, Store, Timestamp};
 
 /// Failure to select the state immediately before a requested new horizon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,7 +47,7 @@ where
             }
             while let Some(next) = events.peek().map(|event| event.time()) {
                 let batch = std::iter::from_fn(|| events.next_if(|event| event.time() == next));
-                crate::apply::apply(checkpoint, batch, context);
+                crate::contime_checkpoints::apply::apply(checkpoint, batch, context);
                 hook(&mut checkpoint.snapshot, &next, context);
                 last_hook_time = Some(next);
             }
@@ -68,8 +68,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
-    use crate::Checkpoint;
+    use crate::contime_checkpoints::types::testing::{TestEvent, TestEventStore, TestSnapshot, Time};
+    use crate::contime_checkpoints::Checkpoint;
     use std::hint::black_box;
 
     #[rstest::rstest]

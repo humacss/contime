@@ -1,10 +1,10 @@
 //! Fixed-work scaling benchmark. This is not part of the published workspace.
 use contime::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, Event, EventBatch, Snapshot, Timestamp};
 use contime::{ConTime, ConTimeConfig, Input};
-use contime_api::{AdvanceOutput, ApplyOutput};
-use contime_router::{AdvanceWorkerOutput, RouteOutput, WorkerOutput};
-use contime_runtime::Worker;
-use contime_runtime::{CompletionHandle, Route, RouterMessage, RouterProcess, SharedEvent, WorkerMessage, WorkerProcess};
+use contime::contime_api::{AdvanceOutput, ApplyOutput};
+use contime::contime_router::{AdvanceWorkerOutput, RouteOutput, WorkerOutput};
+use contime::contime_runtime::Worker;
+use contime::contime_runtime::{CompletionHandle, Route, RouterMessage, RouterProcess, SharedEvent, WorkerMessage, WorkerProcess};
 use crossbeam_channel::{unbounded, Sender};
 use std::hint::black_box;
 use std::sync::{Arc, Barrier};
@@ -201,7 +201,7 @@ fn run(mode: &str, settings: Settings, expected: &[State]) -> (f64, f64, f64, f6
         pipeline.wait_until_idle(Duration::from_secs(30)).unwrap(); // startup only, never timed
         native = Some(pipeline);
     } else if mode == "routed" {
-        let topology = contime_runtime::ThreadTopology::start(
+        let topology = contime::contime_runtime::ThreadTopology::start(
             vec![RouterProcess::<Record, State>::new(Default::default())],
             (0..settings.workers).map(|_| WorkerProcess::new(checkpoints, wrapper.clone())).collect(),
         )
@@ -310,7 +310,7 @@ fn run(mode: &str, settings: Settings, expected: &[State]) -> (f64, f64, f64, f6
         let actual = pipeline.query_at(settings.target(), 0..settings.histories as u128).unwrap();
         verify(actual.into_iter().map(|s| *s).collect(), expected);
         let report = pipeline.shutdown();
-        assert!(report.workers.iter().all(|r| *r == contime_runtime::ThreadOutcome::Completed));
+        assert!(report.workers.iter().all(|r| *r == contime::contime_runtime::ThreadOutcome::Completed));
     }
     if let Some(topology) = runtime {
         topology.shutdown();

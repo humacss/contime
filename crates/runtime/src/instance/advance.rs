@@ -2,11 +2,11 @@
 
 use crossbeam_channel::Sender;
 
-use crate::{ApiError, ConTime, RouterMessage};
+use crate::contime_runtime::{ApiError, ConTime, RouterMessage};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     /// Subscribe to the horizon completed by every worker, including retention
     /// hooks. Samples strictly before each reported horizon may be considered
@@ -27,7 +27,7 @@ where
     /// for completed retention and the configured [`crate::ProgressPolicy`] for
     /// local processing observations. Neither establishes external delivery.
     pub fn send_advance_to(&self, time: I::Time, completion: Sender<()>) -> Result<(), ApiError> {
-        contime_api::send_advance_to::<RouterMessage<I, S>, _>(&self.input, time, completion)
+        crate::contime_api::send_advance_to::<RouterMessage<I, S>, _>(&self.input, time, completion)
     }
 
     /// Asynchronously raises the processing target and requests retention.

@@ -7,6 +7,30 @@ execution model. Most implementation lives in the subcrates below. Runtime start
 managed background processing; Manual runs an existing worker when the host calls
 `process()`. Core supplies their shared application contracts and storage adapters.
 
+## Shared source and publication
+
+Only `contime` is published to crates.io. Its root library compiles the component
+implementations directly as modules and re-exports the consumer-facing API.
+Cargo does not bundle workspace dependencies into a published package, so the
+root package has no internal `contime-*` package dependencies.
+
+For isolated development, each component has a non-publishable manifest and a
+thin wrapper in `crates/<component>/dev/`. The wrapper compiles the same files
+under `crates/<component>/src/`; tests and benchmarks remain beside that source.
+Workspace commands such as `cargo test -p contime-worker` and
+`cargo bench -p contime-batcher --bench batcher` still select individual crates.
+The published archive excludes these development packages.
+
+Application code should use types re-exported by `contime` consistently. A type
+compiled inside `contime` and the same source compiled in a standalone development
+crate are distinct Rust types and cannot be mixed interchangeably.
+
+Verify the one public package without uploading it:
+
+```sh
+cargo publish -p contime --all-features --dry-run
+```
+
 ## Crates
 
 | Crate | Responsibility |

@@ -2,11 +2,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use contime_worker::AdvanceTime;
+use crate::contime_worker::AdvanceTime;
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::frontier::Frontier;
-use crate::{Advance, ProgressObservation, ProgressPolicy, RejectionMessage, RejectionReason, RouterBatch, RouterMessage};
+use crate::contime_runtime::frontier::Frontier;
+use crate::contime_runtime::{Advance, ProgressObservation, ProgressPolicy, RejectionMessage, RejectionReason, RouterBatch, RouterMessage};
 
 /// Configuration for the admission coordinator run by the owning orchestrator.
 pub struct Settings<T> {
@@ -36,10 +36,10 @@ pub struct Settings<T> {
 /// # Panics
 ///
 /// Panics if `settings.workers` is zero.
-pub fn run<I: crate::ThreadInput, S, P: ProgressPolicy<I::Time>>(
+pub fn run<I: crate::contime_runtime::ThreadInput, S, P: ProgressPolicy<I::Time>>(
     input: Arc<Receiver<RouterMessage<I, S>>>,
     output: Sender<RouterMessage<I, S>>,
-    controls: Vec<Sender<contime_router::Flush>>,
+    controls: Vec<Sender<crate::contime_router::Flush>>,
     registrations: Receiver<Sender<bool>>,
     settings: Settings<I::Time>,
     mut policy: P,
@@ -140,7 +140,7 @@ pub fn run<I: crate::ThreadInput, S, P: ProgressPolicy<I::Time>>(
                 if awaiting_marker == Some(round) {
                     awaiting_marker = None;
                     for (router, control) in controls.iter().enumerate() {
-                        if control.send(contime_router::Flush { round, router }).is_err() {
+                        if control.send(crate::contime_router::Flush { round, router }).is_err() {
                             return;
                         }
                     }
@@ -176,7 +176,7 @@ pub fn run<I: crate::ThreadInput, S, P: ProgressPolicy<I::Time>>(
             }
             RouterMessage::Apply(batch) => {
                 let started = Instant::now();
-                let result = crate::batching::drain(
+                let result = crate::contime_runtime::batching::drain(
                     batch,
                     &input,
                     &output,
@@ -186,7 +186,7 @@ pub fn run<I: crate::ThreadInput, S, P: ProgressPolicy<I::Time>>(
                         observation_pending = true;
                         Some(batch)
                     },
-                    || started.elapsed() < crate::batching::GATHER_WORK,
+                    || started.elapsed() < crate::contime_runtime::batching::GATHER_WORK,
                 );
                 match result {
                     Ok(boundary) => pending = boundary,
@@ -226,7 +226,7 @@ pub fn run<I: crate::ThreadInput, S, P: ProgressPolicy<I::Time>>(
         if let Some(message) = forwarded {
             if let RouterMessage::Apply(batch) = message {
                 policy.invalidated();
-                let mut batcher = crate::batching::batcher(&output, crate::batching::MAX_EVENTS);
+                let mut batcher = crate::contime_runtime::batching::batcher(&output, crate::contime_runtime::batching::MAX_EVENTS);
                 if batcher.push(batch).and_then(|_| batcher.flush()).is_err() {
                     return;
                 }
@@ -237,7 +237,7 @@ pub fn run<I: crate::ThreadInput, S, P: ProgressPolicy<I::Time>>(
     }
 }
 
-pub(crate) fn admit<I: crate::ThreadInput, S>(
+pub(crate) fn admit<I: crate::contime_runtime::ThreadInput, S>(
     mut batch: RouterBatch<I>,
     source: Option<I::Time>,
     frontier: &mut Frontier<I::Time>,
@@ -268,13 +268,13 @@ pub(crate) fn admit<I: crate::ThreadInput, S>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::testing::Time;
-    use crate::CompletionHandle;
-    use crate::Input;
+    use crate::contime_runtime::types::testing::Time;
+    use crate::contime_runtime::CompletionHandle;
+    use crate::contime_runtime::Input;
 
     struct Event(Time);
 
-    impl contime_checkpoints::Event for Event {
+    impl crate::contime_checkpoints::Event for Event {
         type Time = Time;
 
         fn time(&self) -> Time {
@@ -291,7 +291,10 @@ mod tests {
     }
 
     fn batch(time: Time, sender: &Sender<RejectionMessage<RejectionReason>>) -> RouterBatch<Event> {
-        RouterBatch { inputs: crate::input::prepare_inputs(vec![Event(time)]), completion: CompletionHandle { sender: sender.clone() } }
+        RouterBatch {
+            inputs: crate::contime_runtime::input::prepare_inputs(vec![Event(time)]),
+            completion: CompletionHandle { sender: sender.clone() },
+        }
     }
 
     #[test]
@@ -333,7 +336,7 @@ mod tests {
         assert_eq!(rejected.recv_timeout(Duration::from_secs(2)).unwrap().reason, RejectionReason::BeforeSourceTime);
         input
             .send(RouterMessage::Apply(RouterBatch {
-                inputs: crate::input::prepare_inputs(vec![]),
+                inputs: crate::contime_runtime::input::prepare_inputs(vec![]),
                 completion: CompletionHandle { sender: errors },
             }))
             .unwrap();
@@ -396,7 +399,13 @@ mod tests {
             // Query delivery and resolution completion are independent channels.
             // Zero starts another round without a timer; either may be observed first.
             let (response, _) = crossbeam_channel::unbounded();
-            input.send(RouterMessage::SnapshotQuery(crate::SnapshotQuery { time: Time(100), snapshot_ids: vec![1], response })).unwrap();
+            input
+                .send(RouterMessage::SnapshotQuery(crate::contime_runtime::SnapshotQuery {
+                    time: Time(100),
+                    snapshot_ids: vec![1],
+                    response,
+                }))
+                .unwrap();
             if interval.is_zero() {
                 let first = routed.recv_timeout(Duration::from_secs(2)).unwrap();
                 let (next, observed) = match first {
@@ -457,7 +466,9 @@ mod tests {
         // A query is a FIFO probe: it must pass through without waiting for the
         // missing worker, and no prune may have preceded it.
         let (response, _) = crossbeam_channel::unbounded();
-        input.send(RouterMessage::SnapshotQuery(crate::SnapshotQuery { time: Time(100), snapshot_ids: vec![1], response })).unwrap();
+        input
+            .send(RouterMessage::SnapshotQuery(crate::contime_runtime::SnapshotQuery { time: Time(100), snapshot_ids: vec![1], response }))
+            .unwrap();
         assert!(matches!(routed.recv_timeout(Duration::from_secs(1)).unwrap(), RouterMessage::SnapshotQuery(_)));
         let (errors, _) = crossbeam_channel::unbounded();
         input.send(RouterMessage::Internal { source: Time(80), batch: batch(Time(80), &errors) }).unwrap();

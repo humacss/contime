@@ -1,4 +1,4 @@
-use crate::{ApplyLanes, EventFilter, FilterBatch, FilterLanes, FilterOutput, Lanes, RawBatch};
+use crate::contime_lanes::{ApplyLanes, EventFilter, FilterBatch, FilterLanes, FilterOutput, Lanes, RawBatch};
 
 /// Projects one canonical raw batch into a snapshot-specific borrowed filter
 /// batch while preserving metadata and canonical order.
@@ -21,7 +21,7 @@ where
 /// Runs one statically selected snapshot filter with a caller-owned receiver.
 ///
 /// The filter's exactly-one-output contract remains its responsibility. This
-/// wrapper delegates directly and does not count emissions; use [`crate::apply`]
+/// wrapper delegates directly and does not count emissions; use [`crate::contime_lanes::apply()`]
 /// for immediate snapshot application with emission-count checks.
 pub fn filter<'a, T, F, A, E, O>(event_filter: &E, batch: FilterBatch<T, F::Batch<'a>>, output: &mut O)
 where
@@ -41,7 +41,7 @@ mod tests {
 
     use criterion::Criterion;
 
-    use crate::{filter, project, ApplyLanes, FilterLanes, FilterOutput, Lanes, PassThrough, RawBatch};
+    use crate::contime_lanes::{filter, project, ApplyLanes, FilterLanes, FilterOutput, Lanes, PassThrough, RawBatch};
 
     #[derive(Debug)]
     struct Attack;

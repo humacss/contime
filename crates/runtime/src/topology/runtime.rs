@@ -2,7 +2,7 @@ use std::fmt;
 
 use crossbeam_channel::Sender;
 
-use crate::ThreadTopology;
+use crate::contime_runtime::ThreadTopology;
 
 /// An apply input returned when the shared router queue is unavailable.
 #[derive(Debug, Eq, PartialEq)]
@@ -68,7 +68,7 @@ mod tests {
 
     use crossbeam_channel::{Receiver, Sender};
 
-    use crate::{Router, ThreadTopology, Worker};
+    use crate::contime_runtime::{Router, ThreadTopology, Worker};
 
     struct RelayRouter {
         index: usize,
@@ -114,8 +114,8 @@ mod tests {
 
     fn finish_test_runtime(runtime: ThreadTopology<u64, (), ()>) {
         let report = runtime.shutdown();
-        assert!(report.routers.iter().all(|outcome| matches!(outcome, crate::ThreadOutcome::Completed)));
-        assert!(report.workers.iter().all(|outcome| matches!(outcome, crate::ThreadOutcome::Completed)));
+        assert!(report.routers.iter().all(|outcome| matches!(outcome, crate::contime_runtime::ThreadOutcome::Completed)));
+        assert!(report.workers.iter().all(|outcome| matches!(outcome, crate::contime_runtime::ThreadOutcome::Completed)));
     }
 
     #[test]

@@ -1,0 +1,43 @@
+[package]
+name = "contime-simulator"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+description = "Caller-driven load simulation and admission control for ConTime"
+publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-simulator"
+authors = ["humacss"]
+keywords = ["events", "simulation", "benchmark", "snapshots"]
+categories = ["development-tools::testing"]
+readme = "../README.md"
+
+[dependencies]
+contime-monitor = { path = "../../monitor/dev", version = "0.1.0" }
+
+[lib]
+path = "lib.rs"
+
+[[test]]
+name = "controller"
+path = "../tests/controller.rs"
+
+[[test]]
+name = "event_stream"
+path = "../tests/event_stream.rs"
+
+[[test]]
+name = "simulation"
+path = "../tests/simulation.rs"
+
+[[test]]
+name = "slow_queries"
+path = "../tests/slow_queries.rs"
+
+[[example]]
+name = "event_stream"
+path = "../examples/event_stream.rs"
+
+[dev-dependencies]
+contime = { path = "../../..", features = ["monitor", "simulator", "manual", "counters"] }

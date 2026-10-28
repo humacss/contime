@@ -2,19 +2,19 @@
 
 use std::convert::Infallible;
 
-use crate::ConTime;
+use crate::contime_runtime::ConTime;
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     /// Closes admission and joins the topology. Stop external producers and use
     /// application-owned completion or progress conditions to finish any required
     /// causal work before releasing borrowed/shared owners and calling this
     /// consuming method. Running applications must not rely on global idle.
     /// Idle waits are helpers for controlled tests and benchmarks only.
-    pub fn shutdown(self) -> crate::ShutdownReport<contime_router::RouterError, Infallible> {
-        let _ = self.input.send(crate::RouterMessage::Shutdown);
+    pub fn shutdown(self) -> crate::contime_runtime::ShutdownReport<crate::contime_router::RouterError, Infallible> {
+        let _ = self.input.send(crate::contime_runtime::RouterMessage::Shutdown);
         drop(self.worker_inputs);
         let _ = self.coordinator.join();
         self.runtime.shutdown()
@@ -23,19 +23,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::testing::Time;
+    use crate::contime_runtime::testing::Time;
     use std::hint::black_box;
     use std::time::{Duration, Instant};
 
-    use crate::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
+    use crate::contime_runtime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
 
     use criterion::Criterion;
 
-    use crate::{ConTime, ConTimeConfig, Input};
+    use crate::contime_runtime::{ConTime, ConTimeConfig, Input};
 
     struct TestInput;
 
-    impl crate::checkpoints::Event for TestInput {
+    impl crate::contime_runtime::checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {
@@ -78,7 +78,7 @@ mod tests {
             ConTimeConfig {
                 router_count: 1,
                 worker_count: 1,
-                placement: contime_router::Placement::default(),
+                placement: crate::contime_router::Placement::default(),
                 pruning_interval: std::time::Duration::from_millis(100),
 
                 history_retention: Time(0),
@@ -93,8 +93,8 @@ mod tests {
     fn shutdown_joins_every_supplied_process() {
         let report = runtime().shutdown();
 
-        assert_eq!(report.routers, vec![crate::ThreadOutcome::Completed]);
-        assert_eq!(report.workers, vec![crate::ThreadOutcome::Completed]);
+        assert_eq!(report.routers, vec![crate::contime_runtime::ThreadOutcome::Completed]);
+        assert_eq!(report.workers, vec![crate::contime_runtime::ThreadOutcome::Completed]);
     }
 
     #[test]

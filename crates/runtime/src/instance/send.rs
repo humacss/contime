@@ -2,13 +2,13 @@
 
 use crossbeam_channel::Sender;
 
-use crate::SharedEvent;
-use crate::{ApiError, ConTime, RejectionMessage, RejectionReason, RouterMessage};
-use contime_api::ApplyOutput;
+use crate::contime_api::ApplyOutput;
+use crate::contime_runtime::SharedEvent;
+use crate::contime_runtime::{ApiError, ConTime, RejectionMessage, RejectionReason, RouterMessage};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     /// Enqueues a submission with a caller-owned rejection stream.
     ///
@@ -32,7 +32,7 @@ where
     pub fn apply_internal(&self, source: I::Time, inputs: impl IntoIterator<Item = I>) -> Result<(), ApiError> {
         let inputs = inputs.into_iter().map(SharedEvent::from).collect();
         self.input
-            .send(RouterMessage::Internal { source, batch: crate::RouterBatch::create(inputs, self.error_sender.clone()) })
+            .send(RouterMessage::Internal { source, batch: crate::contime_runtime::RouterBatch::create(inputs, self.error_sender.clone()) })
             .map_err(|_| ApiError::OutputChannelClosed)
     }
 }
@@ -43,33 +43,33 @@ fn send_to<I, S>(
     rejection_sender: Sender<RejectionMessage<RejectionReason>>,
 ) -> Result<(), ApiError>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     let inputs = inputs.into_iter().map(SharedEvent::from).collect::<Vec<_>>();
-    contime_api::send::<RouterMessage<I, S>, _, _, _, _>(output, inputs, rejection_sender)
+    crate::contime_api::send::<RouterMessage<I, S>, _, _, _, _>(output, inputs, rejection_sender)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::testing::Time;
+    use crate::contime_runtime::testing::Time;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
+    use crate::contime_runtime::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, EventBatch, Snapshot};
 
     use criterion::{BatchSize, Criterion};
     use crossbeam_channel::unbounded;
 
     use super::send_to;
-    use crate::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, RouterMessage};
+    use crate::contime_runtime::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, RouterMessage};
 
     struct TestInput {
         id: u128,
         value: usize,
     }
 
-    impl crate::checkpoints::Event for TestInput {
+    impl crate::contime_runtime::checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {
@@ -126,7 +126,7 @@ mod tests {
         ConTimeConfig {
             router_count: 1,
             worker_count: 1,
-            placement: contime_router::Placement::default(),
+            placement: crate::contime_router::Placement::default(),
             pruning_interval: std::time::Duration::from_millis(100),
 
             history_retention: Time(0),

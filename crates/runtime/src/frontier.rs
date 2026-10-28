@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-use contime_progress::{CoverageConstraint, MeasurementRound};
+use crate::contime_progress::{CoverageConstraint, MeasurementRound};
 
 pub(crate) type AdmissionObservation<T> = Arc<Mutex<CoverageConstraint<T, u128>>>;
 

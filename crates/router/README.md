@@ -83,27 +83,27 @@ recovery orchestration.
 Run the inline unit tests from the ConTime repository root:
 
 ```bash
-cargo test --manifest-path crates/router/Cargo.toml --lib
+cargo test --manifest-path crates/router/dev/Cargo.toml --lib
 ```
 
 Run the inline Criterion benchmark separately in release mode:
 
 ```bash
-cargo test --manifest-path crates/router/Cargo.toml --release --lib benchmark_route -- --ignored --nocapture
-cargo test --manifest-path crates/router/Cargo.toml --release --lib benchmark_snapshot_listener_routing -- --ignored --nocapture
+cargo test --manifest-path crates/router/dev/Cargo.toml --release --lib benchmark_route -- --ignored --nocapture
+cargo test --manifest-path crates/router/dev/Cargo.toml --release --lib benchmark_snapshot_listener_routing -- --ignored --nocapture
 ```
 
 Run the sustained integration benchmark:
 
 ```bash
-cargo bench --manifest-path crates/router/Cargo.toml --bench router
-cargo bench --manifest-path crates/router/Cargo.toml --bench query
+cargo bench --manifest-path crates/router/dev/Cargo.toml --bench router
+cargo bench --manifest-path crates/router/dev/Cargo.toml --bench query
 ```
 
 Generate its CPU flame graph with optimized code and full symbols:
 
 ```bash
-CARGO_PROFILE_BENCH_DEBUG=2 cargo bench --manifest-path crates/router/Cargo.toml --bench router -- 64_byte_events/8_workers/1_route --profile-time 10
+CARGO_PROFILE_BENCH_DEBUG=2 cargo bench --manifest-path crates/router/dev/Cargo.toml --bench router -- 64_byte_events/8_workers/1_route --profile-time 10
 ```
 
 Criterion writes the graph to

@@ -12,7 +12,7 @@ use crate::{
         Settings,
     },
 };
-use contime_monitor::{WorkerMonitor, WorkerReading};
+use contime::contime_monitor::{WorkerMonitor, WorkerReading};
 use crossbeam_channel::{Receiver, TryRecvError};
 use std::{sync::Arc, time::Duration};
 #[path = "../../../cases/counter/monitored/generation.rs"]

@@ -14,7 +14,7 @@ use crate::{
     },
     support::monitored::backend::Backend,
 };
-use contime_monitor::{WorkerMonitor, WorkerReading};
+use contime::contime_monitor::{WorkerMonitor, WorkerReading};
 use std::{sync::Arc, time::Duration};
 #[path = "../../cases/client_movement/generation.rs"]
 mod generation;

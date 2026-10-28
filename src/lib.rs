@@ -52,20 +52,86 @@ Run this example with `cargo run -p contime --example counter`."###
 #![cfg_attr(feature = "runtime", doc = concat!("```rust\n", include_str!("../examples/cases/counter/main.rs"), "\n```\n"))]
 
 /// Shared application contracts and storage adapters for either execution mode.
-pub use contime_core as core;
-pub use contime_core::{checkpoints, lanes, AdvanceTime, Input, RejectionReason};
+pub use crate::contime_core as core;
+pub use crate::contime_core::{checkpoints, lanes, AdvanceTime, Input, RejectionReason};
 /// Caller-driven processing; creating an instance starts no background threads.
 #[cfg(feature = "manual")]
 pub mod manual;
 #[cfg(feature = "runtime")]
-pub use contime_runtime::{
+pub use crate::contime_runtime::{
     ApiError, ApplyResponse, ConTime, ConTimeConfig, IdleError, Placement, ProgressObservation, ProgressPolicy, RejectionMessage,
     SharedEvent, ShutdownReport, SnapshotListenerMessage, StartError, ThreadInput, ThreadOutcome, WorkerCounters, WorkerStatus,
 };
 
 /// Worker observations and application accounting, separate from presentation.
 #[cfg(feature = "monitor")]
-pub use contime_monitor as monitor;
+pub use crate::contime_monitor as monitor;
 /// Caller-driven load simulation and adaptive Maximum admission.
 #[cfg(feature = "simulator")]
-pub use contime_simulator as simulator;
+pub use crate::contime_simulator as simulator;
+
+// Why these modules load source from the development crates:
+//
+// We keep components as separate Cargo crates for isolated tests, benchmarks,
+// and clear dependency boundaries, but distribute ConTime as one crates.io
+// package. Cargo does not bundle workspace dependencies into a published
+// package: internal path dependencies would need separately published registry
+// packages. Cargo also excludes nested packages from the parent archive.
+//
+// Each component therefore keeps its development manifest and thin crate wrapper
+// under crates/<component>/dev/, outside the implementation source tree. Those
+// development crates are not published. This package includes the shared source
+// files and compiles them directly as modules through the paths below. Both
+// arrangements use the same implementation; no release-time source generation
+// or second copy of the algorithms is needed.
+//
+// The re-exports above provide the consumer-facing API. The feature gates below
+// select the implementations needed for that API, while doc(hidden) keeps these
+// assembly entry points out of the normal generated documentation.
+#[cfg(any(feature = "runtime", feature = "manual"))]
+#[doc(hidden)]
+#[path = "../crates/api/src/lib.rs"]
+pub mod contime_api;
+#[cfg(feature = "runtime")]
+#[doc(hidden)]
+#[path = "../crates/batcher/src/lib.rs"]
+pub mod contime_batcher;
+#[doc(hidden)]
+#[path = "../crates/snapshots/src/lib.rs"]
+pub mod contime_checkpoints;
+#[doc(hidden)]
+#[path = "../crates/core/src/lib.rs"]
+pub mod contime_core;
+#[doc(hidden)]
+#[path = "../crates/events/src/lib.rs"]
+pub mod contime_events;
+#[doc(hidden)]
+#[path = "../crates/lanes/src/lib.rs"]
+pub mod contime_lanes;
+#[cfg(feature = "manual")]
+#[doc(hidden)]
+#[path = "../crates/manual/src/lib.rs"]
+pub mod contime_manual;
+#[cfg(feature = "monitor")]
+#[doc(hidden)]
+#[path = "../crates/monitor/src/lib.rs"]
+pub mod contime_monitor;
+#[cfg(feature = "runtime")]
+#[doc(hidden)]
+#[path = "../crates/progress/src/lib.rs"]
+pub mod contime_progress;
+#[cfg(feature = "runtime")]
+#[doc(hidden)]
+#[path = "../crates/router/src/lib.rs"]
+pub mod contime_router;
+#[cfg(feature = "runtime")]
+#[doc(hidden)]
+#[path = "../crates/runtime/src/lib.rs"]
+pub mod contime_runtime;
+#[cfg(feature = "simulator")]
+#[doc(hidden)]
+#[path = "../crates/simulator/src/lib.rs"]
+pub mod contime_simulator;
+#[doc(hidden)]
+#[path = "../crates/worker/src/lib.rs"]
+pub mod contime_worker;

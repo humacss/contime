@@ -1,7 +1,7 @@
 use ahash::AHashMap;
 
-use crate::types::StoreSlot;
-use crate::{EventQueryInput, EventQueryResponse, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore};
+use crate::contime_worker::types::StoreSlot;
+use crate::contime_worker::{EventQueryInput, EventQueryResponse, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore};
 
 pub(crate) fn query_snapshots<Q, I, S>(query: Q, snapshots: &mut AHashMap<u128, StoreSlot<S>>, context: &mut S::Context)
 where
@@ -45,7 +45,7 @@ mod tests {
     use criterion::Criterion;
     use crossbeam_channel::{unbounded, Sender};
 
-    use crate::{
+    use crate::contime_worker::{
         work_messages, AdvanceInput, ApplyBatch, EventInsert, EventQueryInput, RoutedInput, SnapshotListenInput, SnapshotListener,
         SnapshotQueryInput, SnapshotStore, WorkInput, WorkInputKind,
     };
@@ -265,7 +265,7 @@ mod tests {
         let (prune_completion, done) = unbounded();
         let reports = observed.clone();
         let context = PruningContext { input: Some(input.clone()), observed, completion: done.clone(), fail: false };
-        let coordination = crate::Coordination {
+        let coordination = crate::contime_worker::Coordination {
             router_count: 1,
             report: Box::new(|_, _| {}),
             pruned: Box::new(move |horizon| {
@@ -333,7 +333,7 @@ mod tests {
         let (completion, done) = unbounded();
         let (pruned, reports) = unbounded();
         let context = PruningContext { input: None, observed, completion: done.clone(), fail: true };
-        let coordination = crate::Coordination {
+        let coordination = crate::contime_worker::Coordination {
             router_count: 1,
             report: Box::new(|_, _| {}),
             pruned: Box::new(move |horizon| {
@@ -613,13 +613,13 @@ mod tests {
         }
     }
 
-    impl crate::SnapshotQueryResponse<TestSnapshot> for () {
+    impl crate::contime_worker::SnapshotQueryResponse<TestSnapshot> for () {
         fn send(self, snapshots: Vec<Box<TestSnapshot>>) {
             black_box(snapshots);
         }
     }
 
-    impl crate::EventQueryResponse<TestEvent> for () {
+    impl crate::contime_worker::EventQueryResponse<TestEvent> for () {
         fn send(self, events: Vec<TestEvent>) {
             black_box(events);
         }
@@ -631,7 +631,7 @@ mod tests {
         let mut snapshots = AHashMap::new();
         snapshots.insert(
             7,
-            crate::types::StoreSlot {
+            crate::contime_worker::types::StoreSlot {
                 store: Some(TestStore { events: (0..1_000).map(TestEvent).collect(), tip: None }),
                 notification_ids: Vec::new(),
             },

@@ -1,6 +1,6 @@
 use crossbeam_channel::Sender;
 
-use crate::{ApiError, EventQueryOutput};
+use crate::contime_api::{ApiError, EventQueryOutput};
 
 /// Forwards one asynchronous half-open event-history query over `[from, to)`.
 ///
@@ -27,7 +27,7 @@ where
 mod tests {
     use crossbeam_channel::{unbounded, Sender};
 
-    use crate::{send_query_events_between, ApiError, EventQueryOutput};
+    use crate::contime_api::{send_query_events_between, ApiError, EventQueryOutput};
 
     struct QueryOutput {
         snapshot_id: u128,

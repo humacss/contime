@@ -1,6 +1,6 @@
 use crossbeam_channel::Sender;
 
-use crate::{ApiError, SnapshotListenOutput};
+use crate::contime_api::{ApiError, SnapshotListenOutput};
 
 /// Forwards one asynchronous snapshot-listener registration.
 ///
@@ -32,7 +32,7 @@ mod tests {
     use crossbeam_channel::{unbounded, Sender, TryRecvError};
 
     use super::send_listen_snapshots;
-    use crate::{ApiError, SnapshotListenOutput};
+    use crate::contime_api::{ApiError, SnapshotListenOutput};
 
     struct ListenOutput {
         time: u64,

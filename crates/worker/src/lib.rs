@@ -22,9 +22,9 @@ mod query;
 mod types;
 mod work;
 
-pub use types::{
+pub use self::types::{
     AdvanceInput, AdvanceTime, ApplyBatch, ApplyInput, Completion, Coordination, EventInsert, EventQueryInput, EventQueryResponse,
     RouteInput, RoutedInput, SnapshotListenInput, SnapshotListener, SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput,
     WorkInputKind, WorkerCounters, WorkerStatus,
 };
-pub use work::{work_messages, MessageWorker};
+pub use self::work::{work_messages, MessageWorker};

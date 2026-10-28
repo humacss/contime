@@ -65,10 +65,10 @@ them, so its measurement includes that allocation and decoration work.
 Run the inline benchmarks from the repository root:
 
 ```bash
-cargo test --release --manifest-path crates/lanes/Cargo.toml \
+cargo test --release --manifest-path crates/lanes/dev/Cargo.toml \
   filter::tests::benchmark_filter -- --ignored --nocapture
 
-cargo test --release --manifest-path crates/lanes/Cargo.toml \
+cargo test --release --manifest-path crates/lanes/dev/Cargo.toml \
   apply::tests::benchmark_apply -- --ignored --nocapture
 ```
 

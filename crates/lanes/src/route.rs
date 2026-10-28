@@ -1,4 +1,4 @@
-use crate::Route;
+use crate::contime_lanes::Route;
 
 pub(crate) fn create_snapshot<R, S>(route: &R) -> S
 where
@@ -12,7 +12,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::Route;
+    use crate::contime_lanes::Route;
 
     #[derive(Debug, Default, Eq, PartialEq)]
     struct TestSnapshot {

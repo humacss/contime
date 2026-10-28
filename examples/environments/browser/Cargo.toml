@@ -16,13 +16,10 @@ default = ["manual"]
 manual = []
 
 [dev-dependencies]
-contime-worker = { path = "../../../crates/worker" }
 
 [dependencies]
 crossbeam-channel = "0.5"
-contime-monitor = { path = "../../../crates/monitor", features = ["workers", "counters"] }
-contime-simulator = { path = "../../../crates/simulator" }
-contime = { path = "../../..", default-features = false, features = ["manual", "counters"] }
+contime = { path = "../../..", default-features = false, features = ["manual", "counters", "monitor", "simulator"] }
 blake3 = "1.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

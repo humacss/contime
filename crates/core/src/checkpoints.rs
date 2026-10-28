@@ -9,7 +9,7 @@
 //!
 //! Snapshot storage contracts and algorithms are re-exported from
 //! `contime-snapshots`; [`CheckpointConfig`] controls the stores created by Core.
-pub use contime_checkpoints::*;
+pub use crate::contime_checkpoints::*;
 
 /// Startup checkpoint spacing used when core creates each snapshot's store.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -182,15 +182,15 @@ pub(crate) struct Application<'a, W> {
     pub live: bool,
 }
 
-impl<I: crate::Input> contime_checkpoints::Event for crate::SharedEvent<I> {
+impl<I: crate::contime_core::Input> crate::contime_checkpoints::Event for crate::contime_core::SharedEvent<I> {
     type Time = I::Time;
     fn time(&self) -> Self::Time {
         self.inner.time()
     }
 }
-impl<I, S, W> Apply<Checkpoint<S>, Application<'_, W>> for crate::SharedEvent<I>
+impl<I, S, W> Apply<Checkpoint<S>, Application<'_, W>> for crate::contime_core::SharedEvent<I>
 where
-    I: crate::Input,
+    I: crate::contime_core::Input,
     S: ApplyEvents<I> + Snapshot<Time = I::Time>,
     W: ApplyWrapper<S, I>,
 {
@@ -219,7 +219,7 @@ where
 #[cfg(test)]
 mod wrapper_tests {
     use super::*;
-    use crate::types::testing::Time;
+    use crate::contime_core::types::testing::Time;
 
     struct TestEvent(i64);
     #[derive(Clone, Default)]

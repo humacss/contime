@@ -19,6 +19,9 @@ include = [
     "/LICENSE",
     "/README.md",
     "/src/**",
+    "/crates/*/src/**",
+    "/crates/*/README.md",
+    "/crates/runtime/tests/controlled/**",
     "/examples/**",
     "/tests/**",
     "/benches/**",
@@ -30,29 +33,20 @@ include = [
 
 [features]
 default = ["runtime"]
-runtime = ["dep:contime-runtime", "contime-monitor?/runtime"]
-monitor = ["dep:contime-monitor", "contime-monitor/workers"]
-counters = ["contime-core/counters", "contime-runtime?/counters", "contime-monitor?/counters"]
-simulator = ["monitor", "dep:contime-simulator"]
-manual = ["dep:contime-manual", "dep:contime-api", "dep:contime-worker", "contime-api/manual"]
+runtime = ["dep:traitstub"]
+monitor = []
+counters = []
+simulator = ["monitor"]
+manual = ["dep:traitstub"]
 
 [dependencies]
-contime-simulator = { path = "crates/simulator", version = "0.1.0", optional = true }
-contime-monitor = { path = "crates/monitor", version = "0.1.0", optional = true }
-contime-api = { path = "crates/api", version = "0.1.0", optional = true }
-contime-worker = { path = "crates/worker", version = "0.1.0", optional = true }
-contime-manual = { path = "crates/manual", version = "0.1.0", optional = true }
-contime-core = { path = "crates/core", version = "0.1.0" }
-contime-runtime = { path = "crates/runtime", version = "0.1.0", optional = true }
+ahash = "0.8"
+crossbeam-channel = "0.5"
+traitstub = { version = "0.1.0", optional = true }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-contime-monitor = { path = "crates/monitor", version = "0.1.0", features = ["workers"] }
-contime-simulator = { path = "crates/simulator", version = "0.1.0" }
-contime-api = { path = "crates/api", version = "0.1.0" }
-contime-router = { path = "crates/router", version = "0.1.0" }
-contime-worker = { path = "crates/worker", version = "0.1.0" }
 crossbeam-channel = "0.5"
 blake3 = "1.8"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
@@ -85,19 +79,19 @@ required-features = ["runtime"]
 resolver = "2"
 exclude = ["examples/environments/wasi", "examples/environments/browser", "benches/scaling"]
 members = [
-    "crates/api",
-    "crates/batcher",
-    "crates/core",
-    "crates/events",
-    "crates/lanes",
-    "crates/manual",
-    "crates/monitor",
-    "crates/simulator",
-    "crates/progress",
-    "crates/router",
-    "crates/runtime",
-    "crates/snapshots",
-    "crates/worker",
+    "crates/api/dev",
+    "crates/batcher/dev",
+    "crates/core/dev",
+    "crates/events/dev",
+    "crates/lanes/dev",
+    "crates/manual/dev",
+    "crates/monitor/dev",
+    "crates/simulator/dev",
+    "crates/progress/dev",
+    "crates/router/dev",
+    "crates/runtime/dev",
+    "crates/snapshots/dev",
+    "crates/worker/dev",
 ]
 
 [package.metadata.docs.rs]

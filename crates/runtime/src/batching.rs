@@ -1,12 +1,12 @@
 //! ConTime protocol adapters for the isolated transport batcher.
-use crate::{CompletionHandle, RouterBatch, RouterMessage, SharedEvent};
+use crate::contime_runtime::{CompletionHandle, RouterBatch, RouterMessage, SharedEvent};
 use crossbeam_channel::{Receiver, Sender};
 
 #[cfg(test)]
-use contime_batcher::MAX_REQUESTS;
-pub(crate) use contime_batcher::{GATHER_WORK, MAX_EVENTS};
+use crate::contime_batcher::MAX_REQUESTS;
+pub(crate) use crate::contime_batcher::{GATHER_WORK, MAX_EVENTS};
 
-impl<I: crate::ThreadInput> contime_batcher::Batch for RouterBatch<I> {
+impl<I: crate::contime_runtime::ThreadInput> crate::contime_batcher::Batch for RouterBatch<I> {
     type Item = SharedEvent<I>;
     type Context = CompletionHandle;
     fn into_parts(self) -> (Vec<Self::Item>, Self::Context) {
@@ -22,7 +22,7 @@ impl<I: crate::ThreadInput> contime_batcher::Batch for RouterBatch<I> {
         self.completion.sender.same_channel(&other.completion.sender)
     }
 }
-impl<I: crate::ThreadInput, S> contime_batcher::Request for RouterMessage<I, S> {
+impl<I: crate::contime_runtime::ThreadInput, S> crate::contime_batcher::Request for RouterMessage<I, S> {
     type Batch = RouterBatch<I>;
     fn into_batch(self) -> Result<Self::Batch, Self> {
         match self {
@@ -31,7 +31,10 @@ impl<I: crate::ThreadInput, S> contime_batcher::Request for RouterMessage<I, S> 
         }
     }
 }
-fn emit<I: crate::ThreadInput, S>(output: &Sender<RouterMessage<I, S>>, mut segments: Vec<RouterBatch<I>>) -> Result<(), ()> {
+fn emit<I: crate::contime_runtime::ThreadInput, S>(
+    output: &Sender<RouterMessage<I, S>>,
+    mut segments: Vec<RouterBatch<I>>,
+) -> Result<(), ()> {
     let message = match segments.len() {
         1 => RouterMessage::Apply(segments.pop().unwrap()),
         _ => RouterMessage::ApplyPacket(segments),
@@ -40,32 +43,32 @@ fn emit<I: crate::ThreadInput, S>(output: &Sender<RouterMessage<I, S>>, mut segm
 }
 type Packet<I> = Vec<RouterBatch<I>>;
 
-pub(crate) fn batcher<I: crate::ThreadInput, S>(
+pub(crate) fn batcher<I: crate::contime_runtime::ThreadInput, S>(
     output: &Sender<RouterMessage<I, S>>,
     limit: usize,
-) -> contime_batcher::Batcher<RouterBatch<I>, impl FnMut(Packet<I>) -> Result<(), ()> + '_> {
-    contime_batcher::Batcher::new(move |segments| emit(output, segments), limit)
+) -> crate::contime_batcher::Batcher<RouterBatch<I>, impl FnMut(Packet<I>) -> Result<(), ()> + '_> {
+    crate::contime_batcher::Batcher::new(move |segments| emit(output, segments), limit)
 }
-pub(crate) fn drain<I: crate::ThreadInput, S>(
+pub(crate) fn drain<I: crate::contime_runtime::ThreadInput, S>(
     first: RouterBatch<I>,
     input: &Receiver<RouterMessage<I, S>>,
     output: &Sender<RouterMessage<I, S>>,
     admit: impl FnMut(RouterBatch<I>) -> Option<RouterBatch<I>>,
     may_gather: impl FnMut() -> bool,
 ) -> Result<Option<RouterMessage<I, S>>, ()> {
-    contime_batcher::drain(first, || input.try_recv().ok(), |segments| emit(output, segments), admit, may_gather)
+    crate::contime_batcher::drain(first, || input.try_recv().ok(), |segments| emit(output, segments), admit, may_gather)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::testing::Time;
-    use crate::{Input, RouterBatch, RouterMessage};
-    use contime_api::ApplyOutput;
+    use crate::contime_api::ApplyOutput;
+    use crate::contime_runtime::types::testing::Time;
+    use crate::contime_runtime::{Input, RouterBatch, RouterMessage};
     use crossbeam_channel::{unbounded, TryRecvError};
 
     struct Event(u128);
-    impl crate::checkpoints::Event for Event {
+    impl crate::contime_runtime::checkpoints::Event for Event {
         type Time = Time;
         fn time(&self) -> Time {
             Time(1)

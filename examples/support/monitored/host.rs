@@ -7,7 +7,7 @@ use super::{
 use crate::definition::{Example, Time};
 use crate::support::native;
 use crate::support::ui::workers::WorkerView;
-use contime_monitor::WorkerReading;
+use contime::contime_monitor::WorkerReading;
 use std::{sync::Arc, time::Duration};
 /// Standalone startup form and simulator callbacks; successful runs exit the process.
 /// Reusable hosts and tests use the returning `run_*_with_options` helpers.

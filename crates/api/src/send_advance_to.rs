@@ -1,9 +1,9 @@
 use crossbeam_channel::Sender;
 
-use crate::{AdvanceOutput, ApiError};
+use crate::contime_api::{AdvanceOutput, ApiError};
 
 traitstub::deps! {
-    forward[O](output: O) -> Result<(), source::ApiError>;
+    forward[O](output: O) -> Result<(), source::contime_api::ApiError>;
 }
 
 /// Queues one advancement request with the caller's completion sender.

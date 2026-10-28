@@ -3,7 +3,7 @@ use std::ops::Deref;
 
 use std::sync::Arc;
 
-use crate::{Input, SharedEvent};
+use crate::contime_core::{Input, SharedEvent};
 
 #[cfg(test)]
 pub(crate) fn prepare_inputs<I: Input>(inputs: Vec<I>) -> Vec<SharedEvent<I>> {
@@ -54,7 +54,7 @@ where
     }
 }
 
-impl<I> contime_events::Event for SharedEvent<I>
+impl<I> crate::contime_events::Event for SharedEvent<I>
 where
     I: Input,
 {

@@ -8,8 +8,8 @@
 //! is defined by the downstream adapter. Rejection reasons are generic, and the crate has no knowledge
 //! of downstream processing topology or the root `contime` crate.
 //!
-//! Use [`send`] and the `send_*` helpers to provide response channels yourself.
-//! [`apply`], [`query_at`], [`query_events_between`] and [`advance_to`] own
+//! Use [`send()`] and the `send_*` helpers to provide response channels yourself.
+//! [`apply()`], [`query_at()`], [`query_events_between()`] and [`advance_to()`] own
 //! their channels and block until every downstream sender is dropped. Output
 //! traits such as [`ApplyOutput`] and [`SnapshotQueryOutput`] adapt the boundary
 //! to an application's message types without coupling it to processing storage.
@@ -19,6 +19,7 @@
 //! # Forwarding a batch
 //!
 //! ```
+//! # use contime::contime_api as contime_api;
 //! use contime_api::{send, InputBatch};
 //! use crossbeam_channel::unbounded;
 //!
@@ -31,6 +32,7 @@
 //! drop(batch);
 //! assert!(rejected.recv().is_err());
 //! ```
+//! # use contime::contime_api as contime_api;
 
 #![deny(missing_docs)]
 
@@ -45,16 +47,16 @@ mod send_query_at;
 mod send_query_events_between;
 mod types;
 
-pub use advance_to::advance_to;
-pub use apply::apply;
-pub use query_at::query_at;
-pub use query_events_between::query_events_between;
-pub use send::send;
-pub use send_advance_to::send_advance_to;
-pub use send_listen_snapshots::send_listen_snapshots;
-pub use send_query_at::send_query_at;
-pub use send_query_events_between::send_query_events_between;
-pub use types::{
+pub use self::advance_to::advance_to;
+pub use self::apply::apply;
+pub use self::query_at::query_at;
+pub use self::query_events_between::query_events_between;
+pub use self::send::send;
+pub use self::send_advance_to::send_advance_to;
+pub use self::send_listen_snapshots::send_listen_snapshots;
+pub use self::send_query_at::send_query_at;
+pub use self::send_query_events_between::send_query_events_between;
+pub use self::types::{
     AdvanceOutput, ApiError, ApplyOutput, ApplyResponse, EventQueryOutput, InputBatch, RejectionMessage, SnapshotListenOutput,
     SnapshotQueryOutput,
 };

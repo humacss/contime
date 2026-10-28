@@ -1,7 +1,7 @@
 #[allow(dead_code, unused_imports)] // Benchmark selects a subset; UI tests run through example targets.
 #[path = "../examples/support/ui/presentation.rs"]
 mod support;
-use contime_monitor::{WorkerReading, WorkerStatus};
+use contime::contime_monitor::{WorkerReading, WorkerStatus};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use ratatui::{backend::TestBackend, Terminal};
 use std::{sync::Arc, time::Duration};
@@ -14,7 +14,7 @@ fn reading(count: usize) -> Arc<WorkerReading<u64>> {
             .map(|worker_id| WorkerStatus {
                 worker_id,
                 history_stores: 1000,
-                counters: cfg!(feature = "counters").then_some(contime_monitor::WorkerCounters {
+                counters: cfg!(feature = "counters").then_some(contime::contime_monitor::WorkerCounters {
                     inserted_applications: 1_000_000,
                     replay_applications: Some(2_000_000),
                     saturated: false,

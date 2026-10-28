@@ -1,7 +1,7 @@
 use std::collections::{btree_map, vec_deque};
 use std::ops::Bound;
 
-use crate::{Event, EventHistoryIter, EventHistoryRangeIter, EventKey};
+use crate::contime_events::{Event, EventHistoryIter, EventHistoryRangeIter, EventKey};
 
 impl<'a, E> EventHistoryIter<'a, E>
 where
@@ -12,7 +12,7 @@ where
     }
 }
 
-impl<E> crate::EventHistory<E>
+impl<E> crate::contime_events::EventHistory<E>
 where
     E: Event,
 {
@@ -92,7 +92,7 @@ mod tests {
     use criterion::Criterion;
     use std::hint::black_box;
 
-    use crate::{Event, EventHistory};
+    use crate::contime_events::{Event, EventHistory};
 
     struct TestEvent {
         id: u128,
@@ -157,7 +157,7 @@ mod tests {
         history.insert(event(30, 15));
 
         let keys = history
-            .iter_after(&crate::EventKey { time: 10, event_id: 10 })
+            .iter_after(&crate::contime_events::EventKey { time: 10, event_id: 10 })
             .map(|(key, _event)| (key.time, key.event_id))
             .collect::<Vec<_>>();
 

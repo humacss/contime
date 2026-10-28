@@ -8,7 +8,7 @@ use crate::{
     movement_example::setup::MovementExample,
     support::monitored::backend::{self, Backend},
 };
-use contime_monitor::WorkerMonitor;
+use contime::contime_monitor::WorkerMonitor;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},

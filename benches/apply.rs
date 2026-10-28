@@ -16,7 +16,7 @@ impl contime::checkpoints::Timestamp for Time {
     }
 }
 
-impl contime_worker::AdvanceTime for Time {
+impl contime::contime_worker::AdvanceTime for Time {
     fn saturating_sub(&self, retention: &Self) -> Self {
         Self(self.0.saturating_sub(retention.0))
     }
@@ -86,7 +86,7 @@ fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<Time> {
     ConTimeConfig {
         router_count,
         worker_count,
-        placement: contime_router::Placement::default(),
+        placement: contime::contime_router::Placement::default(),
         pruning_interval: std::time::Duration::from_millis(100),
 
         history_retention: Time(EVENT_COUNT as i64),
@@ -143,8 +143,8 @@ fn measure(iterations: u64, batch_size: usize) -> Duration {
         assert_eq!(rejection_count, 0);
 
         let report = contime.shutdown();
-        assert!(report.routers.iter().all(|outcome| *outcome == contime_runtime::ThreadOutcome::Completed));
-        assert!(report.workers.iter().all(|outcome| *outcome == contime_runtime::ThreadOutcome::Completed));
+        assert!(report.routers.iter().all(|outcome| *outcome == contime::contime_runtime::ThreadOutcome::Completed));
+        assert!(report.workers.iter().all(|outcome| *outcome == contime::contime_runtime::ThreadOutcome::Completed));
     }
 
     measured
@@ -153,7 +153,7 @@ fn measure(iterations: u64, batch_size: usize) -> Duration {
 #[derive(Clone)]
 struct ProbeInput(u128);
 
-impl contime_router::RoutableInput for ProbeInput {
+impl contime::contime_router::RoutableInput for ProbeInput {
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
         emit(self.0);
     }
@@ -163,19 +163,19 @@ fn snapshot_ids_for_workers(worker_count: usize, ids_per_worker: usize) -> Vec<V
     let candidate_count = (worker_count * ids_per_worker * 32).max(1_024);
     let (input_sender, input_receiver) = unbounded();
     input_sender
-        .send(contime_router::InputBatch { inputs: (0..candidate_count as u128).map(ProbeInput).collect(), completion: () })
+        .send(contime::contime_router::InputBatch { inputs: (0..candidate_count as u128).map(ProbeInput).collect(), completion: () })
         .unwrap();
     drop(input_sender);
 
     let mut worker_senders = Vec::with_capacity(worker_count);
     let mut worker_receivers = Vec::with_capacity(worker_count);
     for _ in 0..worker_count {
-        let (sender, receiver) = unbounded::<contime_router::WorkerBatch<ProbeInput, ()>>();
+        let (sender, receiver) = unbounded::<contime::contime_router::WorkerBatch<ProbeInput, ()>>();
         worker_senders.push(sender);
         worker_receivers.push(receiver);
     }
 
-    contime_router::route(contime::Placement::default(), input_receiver, &worker_senders).unwrap();
+    contime::contime_router::route(contime::Placement::default(), input_receiver, &worker_senders).unwrap();
     worker_receivers
         .into_iter()
         .map(|receiver| {
@@ -226,8 +226,8 @@ fn measure_topology(iterations: u64, router_count: usize, worker_count: usize, s
         let report = contime.shutdown();
         assert_eq!(report.routers.len(), router_count);
         assert_eq!(report.workers.len(), worker_count);
-        assert!(report.routers.iter().all(|outcome| *outcome == contime_runtime::ThreadOutcome::Completed));
-        assert!(report.workers.iter().all(|outcome| *outcome == contime_runtime::ThreadOutcome::Completed));
+        assert!(report.routers.iter().all(|outcome| *outcome == contime::contime_runtime::ThreadOutcome::Completed));
+        assert!(report.workers.iter().all(|outcome| *outcome == contime::contime_runtime::ThreadOutcome::Completed));
     }
 
     measured

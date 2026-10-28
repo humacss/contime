@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{unbounded, Select};
 
-use crate::ConTime;
+use crate::contime_runtime::ConTime;
 
 /// Idle could not be confirmed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,7 +37,7 @@ impl std::fmt::Display for IdleError {
 }
 impl std::error::Error for IdleError {}
 
-impl<I: crate::ThreadInput, S, W> ConTime<I, S, W> {
+impl<I: crate::contime_runtime::ThreadInput, S, W> ConTime<I, S, W> {
     /// Observes whether an admission, router, or worker thread has finished.
     /// This sends no probes and does not wait for work, replay, or idle. As
     /// with any health observation, components may stop after it returns.
@@ -102,14 +102,14 @@ impl<I: crate::ThreadInput, S, W> ConTime<I, S, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checkpoints::{ApplyBatch, ApplyEvents, Snapshot};
-    use crate::testing::Time;
-    use crate::Input;
+    use crate::contime_runtime::checkpoints::{ApplyBatch, ApplyEvents, Snapshot};
+    use crate::contime_runtime::testing::Time;
+    use crate::contime_runtime::Input;
 
     #[derive(Clone, Default)]
     struct Value(Time);
 
-    impl crate::checkpoints::Event for Value {
+    impl crate::contime_runtime::checkpoints::Event for Value {
         type Time = Time;
 
         fn time(&self) -> Time {
@@ -142,14 +142,14 @@ mod tests {
 
     fn core() -> ConTime<Value, Value, ()> {
         ConTime::start(
-            crate::ConTimeConfig {
+            crate::contime_runtime::ConTimeConfig {
                 router_count: 1,
                 worker_count: 1,
-                placement: contime_router::Placement::default(),
+                placement: crate::contime_router::Placement::default(),
                 pruning_interval: std::time::Duration::from_millis(100),
 
                 history_retention: Time(0),
-                checkpoints: crate::checkpoints::CheckpointConfig { interval: 100 },
+                checkpoints: crate::contime_runtime::checkpoints::CheckpointConfig { interval: 100 },
             },
             (),
         )

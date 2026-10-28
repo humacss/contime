@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::EventHistory;
-use crate::{Event, EventHistoryIter, EventKey};
+use crate::contime_events::EventHistory;
+use crate::contime_events::{Event, EventHistoryIter, EventKey};
 
 impl<E> Default for EventHistory<E>
 where
@@ -115,7 +115,7 @@ mod tests {
     use std::hint::black_box;
 
     use super::EventHistory;
-    use crate::{Event, EventKey};
+    use crate::contime_events::{Event, EventKey};
 
     struct TestEvent {
         id: u128,
@@ -163,10 +163,10 @@ mod tests {
         let mut history = EventHistory::with_horizon(10);
         history.reserve(3);
 
-        assert_eq!(history.insert(event(1, 9)), crate::Insert::BeforeHorizon);
-        assert_eq!(history.insert(event(2, 10)), crate::Insert::Inserted);
-        assert_eq!(history.insert(event(2, 20)), crate::Insert::Duplicate);
-        assert_eq!(history.insert(event(3, 30)), crate::Insert::Inserted);
+        assert_eq!(history.insert(event(1, 9)), crate::contime_events::Insert::BeforeHorizon);
+        assert_eq!(history.insert(event(2, 10)), crate::contime_events::Insert::Inserted);
+        assert_eq!(history.insert(event(2, 20)), crate::contime_events::Insert::Duplicate);
+        assert_eq!(history.insert(event(3, 30)), crate::contime_events::Insert::Inserted);
         assert_eq!(history.iter().map(|(key, _)| (key.time, key.event_id)).collect::<Vec<_>>(), vec![(10, 2), (30, 3)]);
     }
 

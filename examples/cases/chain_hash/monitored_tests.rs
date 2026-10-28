@@ -1,6 +1,6 @@
 use super::*;
+use contime::contime_monitor::{WorkerMonitor, WorkerReading};
 use contime::{checkpoints::CheckpointConfig, ConTime, ConTimeConfig, Placement};
-use contime_monitor::{WorkerMonitor, WorkerReading};
 use model::{Counter, CounterChanged, Time};
 use std::{
     sync::Arc,

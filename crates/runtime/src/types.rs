@@ -1,4 +1,4 @@
-use crate::RejectionReason;
+use crate::contime_runtime::RejectionReason;
 use std::marker::PhantomData;
 
 #[cfg(test)]
@@ -6,12 +6,12 @@ pub(crate) mod testing {
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
     pub struct Time(pub i64);
 
-    impl contime_checkpoints::Timestamp for Time {
+    impl crate::contime_checkpoints::Timestamp for Time {
         fn previous(&self) -> Option<Self> {
             self.0.checked_sub(1).map(Self)
         }
     }
-    impl contime_worker::AdvanceTime for Time {
+    impl crate::contime_worker::AdvanceTime for Time {
         fn saturating_sub(&self, other: &Self) -> Self {
             Self(self.0.saturating_sub(other.0))
         }
@@ -23,16 +23,16 @@ use crossbeam_channel::{Receiver, Sender};
 /// An immutable event shared by its routed snapshot histories.
 pub struct SharedEvent<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
-    pub(crate) inner: contime_core::SharedEvent<I>,
-    pub(crate) observation: Option<crate::frontier::AdmissionObservation<I::Time>>,
+    pub(crate) inner: crate::contime_core::SharedEvent<I>,
+    pub(crate) observation: Option<crate::contime_runtime::frontier::AdmissionObservation<I::Time>>,
 }
 
 /// Request completion forwarded unchanged from API admission to the worker.
 #[derive(Clone)]
 pub struct CompletionHandle {
-    pub(crate) sender: Sender<contime_api::RejectionMessage<RejectionReason>>,
+    pub(crate) sender: Sender<crate::contime_api::RejectionMessage<RejectionReason>>,
 }
 
 /// A processing or pruning timestamp paired with a closure-based completion.
@@ -47,7 +47,7 @@ pub struct Advance<T> {
 /// One admitted API batch consumed by a router.
 pub struct RouterBatch<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     pub(crate) inputs: Vec<SharedEvent<I>>,
     pub(crate) completion: CompletionHandle,
@@ -68,7 +68,7 @@ pub struct SnapshotQuery<T, S> {
 /// Results retain shared ownership of the original immutable inputs.
 pub struct EventQuery<T, I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     pub(crate) snapshot_id: u128,
     pub(crate) from: T,
@@ -115,7 +115,7 @@ pub struct SnapshotListen<T> {
 /// and shutdown. Those variants must not be sent directly to a router process.
 pub enum RouterMessage<I, S>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     /// Submit an external batch for admission and routing.
     Apply(RouterBatch<I>),
@@ -179,7 +179,7 @@ where
 /// One snapshot-specific route emitted by a router.
 pub struct Route<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     pub(crate) snapshot_id: u128,
     pub(crate) input: SharedEvent<I>,
@@ -188,7 +188,7 @@ where
 /// One routed apply batch consumed by a worker.
 pub struct WorkerBatch<I>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     pub(crate) routes: Vec<Route<I>>,
     pub(crate) completion: CompletionHandle,
@@ -197,7 +197,7 @@ where
 /// Routed requests consumed by one worker owning a set of snapshot histories.
 pub enum WorkerMessage<I, S>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     /// Insert the routes belonging to this worker and schedule affected histories.
     Apply(WorkerBatch<I>),
@@ -215,7 +215,7 @@ where
         /// Zero-based worker index in this runtime.
         worker_id: usize,
         /// Dedicated response stream; disconnected receivers are ignored.
-        response: Sender<contime_worker::WorkerStatus<I::Time>>,
+        response: Sender<crate::contime_worker::WorkerStatus<I::Time>>,
     },
     /// Raise this worker's processing target.
     Advance(Advance<I::Time>),
@@ -237,35 +237,35 @@ where
     },
 }
 
-pub(crate) use contime_core::CheckpointStorageConfig;
+pub(crate) use crate::contime_core::CheckpointStorageConfig;
 
-pub(crate) struct CheckpointStorage<I: crate::ThreadInput, S: contime_checkpoints::Snapshot<Time = I::Time>, W> {
+pub(crate) struct CheckpointStorage<I: crate::contime_runtime::ThreadInput, S: crate::contime_checkpoints::Snapshot<Time = I::Time>, W> {
     pub(crate) snapshot_id: u128,
-    pub(crate) inner: contime_core::CheckpointStorage<I, S, W>,
+    pub(crate) inner: crate::contime_core::CheckpointStorage<I, S, W>,
 }
 
 /// Deterministic router execution supplied to the runtime.
 #[derive(Clone, Debug)]
 pub struct RouterProcess<I, S>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
-    pub(crate) placement: contime_router::Placement,
+    pub(crate) placement: crate::contime_router::Placement,
     pub(crate) activity: Receiver<Sender<bool>>,
-    pub(crate) controls: Receiver<contime_router::Flush>,
+    pub(crate) controls: Receiver<crate::contime_router::Flush>,
     pub(crate) input: PhantomData<fn() -> (I, S)>,
 }
 
 /// Replay worker execution supplied to the runtime.
 pub struct WorkerProcess<I, S, W>
 where
-    I: crate::ThreadInput,
-    S: contime_checkpoints::Snapshot,
+    I: crate::contime_runtime::ThreadInput,
+    S: crate::contime_checkpoints::Snapshot,
 {
-    pub(crate) checkpoints: crate::checkpoints::CheckpointConfig,
+    pub(crate) checkpoints: crate::contime_runtime::checkpoints::CheckpointConfig,
 
     pub(crate) wrapper: W,
     pub(crate) activity: Receiver<Sender<bool>>,
-    pub(crate) coordination: Option<contime_worker::Coordination<I::Time>>,
+    pub(crate) coordination: Option<crate::contime_worker::Coordination<I::Time>>,
     pub(crate) types: PhantomData<fn() -> (I, S)>,
 }

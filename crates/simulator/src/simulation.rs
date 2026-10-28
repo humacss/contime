@@ -1,5 +1,5 @@
-use crate::{Error, Maximum, MaximumConfig, WorkUnit};
-use contime_monitor::{Monitor, Observation, Totals};
+use crate::contime_monitor::{Monitor, Observation, Totals};
+use crate::contime_simulator::{Error, Maximum, MaximumConfig, WorkUnit};
 use std::{num::NonZeroU64, time::Duration};
 
 /// Domain-specific generation and independent query validation.
@@ -26,7 +26,7 @@ pub trait Workload {
 }
 /// A query prefix and its independent domain expectation.
 pub struct Query<E> {
-    token: contime_monitor::Query,
+    token: crate::contime_monitor::Query,
     expected: E,
 }
 /// Simulation or host submission failure.
@@ -43,7 +43,7 @@ pub enum QueryError<E> {
     /// Domain validation failed. No progress was confirmed.
     Validation(E),
     /// The query token or clock was invalid.
-    Monitor(contime_monitor::Error),
+    Monitor(crate::contime_monitor::Error),
     /// The simulation previously failed a submission.
     Poisoned,
 }
@@ -125,15 +125,15 @@ impl<W: Workload> Simulator<W> {
             return Err(QueryError::Poisoned);
         }
         if at < self.maximum.observed_at() {
-            return Err(QueryError::Monitor(contime_monitor::Error::ClockReversed));
+            return Err(QueryError::Monitor(crate::contime_monitor::Error::ClockReversed));
         }
         self.workload.validate(&query.expected, actual).map_err(QueryError::Validation)?;
         self.monitor.complete_query(query.token, at).map_err(QueryError::Monitor)
     }
     /// Record a bounded metrics sample for rates and UI charts.
-    pub fn sample(&mut self, at: Duration) -> Result<contime_monitor::Snapshot, contime_monitor::Error> {
+    pub fn sample(&mut self, at: Duration) -> Result<crate::contime_monitor::Snapshot, crate::contime_monitor::Error> {
         if at < self.maximum.observed_at() {
-            return Err(contime_monitor::Error::ClockReversed);
+            return Err(crate::contime_monitor::Error::ClockReversed);
         }
         self.monitor.sample(at)
     }

@@ -8,14 +8,14 @@
 //! Subscriptions are not exposed by this convenience API. Advanced applications
 //! can use [`WorkerDriver`](crate::manual::WorkerDriver) with their own worker message and storage contracts.
 #![doc = concat!("\n# Counter example\n\n```no_run\n", include_str!("../examples/cases/counter/manual.rs"), "\n```\n")]
-use contime_api::manual::Message;
-pub use contime_core::InsertionRejection;
-use contime_core::{
+use crate::contime_api::manual::Message;
+pub use crate::contime_core::InsertionRejection;
+use crate::contime_core::{
     checkpoints::{ApplyEvents, ApplyWrapper, CheckpointConfig, Snapshot},
     CheckpointStorage, CheckpointStorageConfig, Input, SharedEvent,
 };
-pub use contime_manual::{FrameBudget, FrameReport, ManualConTime as WorkerDriver, ProcessError, StopReason};
-use contime_worker::RoutedInput;
+pub use crate::contime_manual::{FrameBudget, FrameReport, ManualConTime as WorkerDriver, ProcessError, StopReason};
+use crate::contime_worker::RoutedInput;
 use std::{cell::RefCell, num::NonZeroUsize, rc::Rc, time::Duration};
 
 /// Queue capacity and checkpoint spacing for one manually driven worker.
@@ -135,7 +135,7 @@ where
     /// Reports existing orchestration gauges and optional `counters` metrics.
     /// This scans history slots and the due schedule prefix; it neither queries
     /// snapshot state nor changes the queue, replay, target, or pruning horizon.
-    pub fn worker_status(&self) -> contime_worker::WorkerStatus<I::Time> {
+    pub fn worker_status(&self) -> crate::contime_worker::WorkerStatus<I::Time> {
         self.driver.status(0)
     }
     /// Queued messages, including a held prune request; excludes scheduled replay.

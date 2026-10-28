@@ -1,7 +1,7 @@
 //! Shared simulator, monitor-only control and validation; no terminal or process transport.
 use super::{backend::Backend, control, metrics::Metrics, reference, Failure, Options};
 use crate::definition::{Example, Time};
-use contime_monitor::{WorkerMonitor, WorkerReading};
+use contime::contime_monitor::{WorkerMonitor, WorkerReading};
 use crossbeam_channel::unbounded;
 use std::{
     sync::{

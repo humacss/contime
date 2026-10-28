@@ -1,5 +1,5 @@
 //! Counter deltas use elapsed observation time, never application timestamps.
-use crate::WorkerReading;
+use crate::contime_monitor::WorkerReading;
 
 /// Counts and observed rates for one worker. Missing data is never synthetic zero.
 #[derive(Clone, Debug, Default, PartialEq)]

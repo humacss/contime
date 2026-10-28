@@ -37,6 +37,7 @@ host adapters. Terminal formatting/input/rendering do not belong to this data
 layer; the immutable reading can be handed to a separate presenter.
 
 ```no_run
+# use contime::contime_monitor as contime_monitor;
 # #[cfg(feature = "workers")]
 # fn collect_once(contime: &impl contime_monitor::WorkerStatusSource<u64>) -> Result<(), contime_monitor::WorkerMonitorError> {
 // Enable the `runtime` feature to attach directly to a managed ConTime instance.
@@ -124,6 +125,7 @@ No monitoring fields are required on consumer snapshots, and submission counts
 can be recorded once per batch rather than once per event.
 
 ```rust
+# use contime::contime_monitor as contime_monitor;
 use contime_monitor::{Monitor, Totals};
 use std::time::Duration;
 

@@ -29,7 +29,7 @@ impl Placement {
 
 #[cfg(test)]
 mod tests {
-    use crate::Placement;
+    use crate::contime_router::Placement;
 
     #[test]
     fn default_placement_uses_the_full_snapshot_id_without_hashing() {

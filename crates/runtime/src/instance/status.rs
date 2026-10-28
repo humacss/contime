@@ -1,9 +1,9 @@
 //! Read-only observations through the existing private worker queues.
 
-use crate::{ApiError, ConTime, WorkerMessage, WorkerStatus};
+use crate::contime_runtime::{ApiError, ConTime, WorkerMessage, WorkerStatus};
 use crossbeam_channel::{unbounded, Receiver};
 
-impl<I: crate::ThreadInput, S, W> ConTime<I, S, W> {
+impl<I: crate::contime_runtime::ThreadInput, S, W> ConTime<I, S, W> {
     /// Number of worker threads owned by this instance.
     pub fn worker_count(&self) -> usize {
         self.worker_inputs.len()
@@ -32,9 +32,9 @@ impl<I: crate::ThreadInput, S, W> ConTime<I, S, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot};
-    use crate::testing::Time;
-    use crate::{ConTimeConfig, Input, ThreadOutcome};
+    use crate::contime_runtime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot};
+    use crate::contime_runtime::testing::Time;
+    use crate::contime_runtime::{ConTimeConfig, Input, ThreadOutcome};
     use std::time::Duration;
 
     struct Update;
@@ -79,7 +79,7 @@ mod tests {
             ConTimeConfig {
                 router_count: 1,
                 worker_count: workers,
-                placement: crate::Placement::default(),
+                placement: crate::contime_runtime::Placement::default(),
                 pruning_interval: Duration::from_millis(10),
                 history_retention: Time(100),
                 checkpoints: CheckpointConfig { interval: 128 },

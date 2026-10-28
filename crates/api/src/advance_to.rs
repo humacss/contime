@@ -1,9 +1,9 @@
 use crossbeam_channel::{unbounded, Sender};
 
-use crate::{AdvanceOutput, ApiError};
+use crate::contime_api::{AdvanceOutput, ApiError};
 
 traitstub::deps! {
-    send[T](time: T, completion: crossbeam_channel::Sender<()>) -> Result<(), source::ApiError>;
+    send[T](time: T, completion: crossbeam_channel::Sender<()>) -> Result<(), source::contime_api::ApiError>;
 }
 
 /// Forwards `time` and blocks until all downstream completion senders close.
@@ -18,7 +18,7 @@ pub fn advance_to<O, T>(output: &Sender<O>, time: T) -> Result<(), ApiError>
 where
     O: AdvanceOutput<T>,
 {
-    advance_to_with_deps(&Deps(|time, completion| crate::send_advance_to::send_advance_to(output, time, completion)), time)
+    advance_to_with_deps(&Deps(|time, completion| crate::contime_api::send_advance_to::send_advance_to(output, time, completion)), time)
 }
 
 fn advance_to_with_deps<T>(deps: &impl calls::send<T>, time: T) -> Result<(), ApiError> {

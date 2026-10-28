@@ -1,6 +1,6 @@
 //! The simulator creates direction changes, then assigns one bot client to each.
 use crate::movement_example::model::{Direction, Motion, MovementInput, Time};
-use contime_simulator::{EventStream, StreamConfig};
+use contime::contime_simulator::{EventStream, StreamConfig};
 pub fn events(clients: usize, start: u64, time: Time, motion: Motion) -> impl Iterator<Item = MovementInput> {
     let mut sequence = start;
     let mut client = 1;

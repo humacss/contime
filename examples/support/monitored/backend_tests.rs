@@ -2,8 +2,8 @@
 mod counter_domain;
 
 use super::{backend::*, Options, Time};
-use contime_monitor::WorkerMonitor;
-use contime_monitor::WorkerStatusSource;
+use contime::contime_monitor::WorkerMonitor;
+use contime::contime_monitor::WorkerStatusSource;
 use counter_domain::{model::CounterChanged, setup::CounterExample};
 use std::time::Duration;
 #[test]

@@ -5,14 +5,27 @@ edition = "2021"
 rust-version = "1.90"
 license = "MIT"
 description = "Policy-independent bounded progress measurement for ConTime"
-publish = ["crates-io"]
+publish = false
 repository = "https://github.com/humacss/contime"
 documentation = "https://docs.rs/contime-progress"
-readme = "README.md"
+readme = "../README.md"
 authors = ["humacss"]
 keywords = ["events", "history", "replay", "snapshots"]
 categories = ["data-structures", "concurrency"]
-include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
+
+[lib]
+path = "lib.rs"
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[test]]
+name = "coverage"
+path = "../tests/coverage.rs"
+
+[[test]]
+name = "round"
+path = "../tests/round.rs"
+
+[dev-dependencies]
+contime = { path = "../../..", features = ["monitor", "simulator", "manual", "counters"] }

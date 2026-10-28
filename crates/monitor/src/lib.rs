@@ -4,21 +4,21 @@
 mod monitor;
 mod observation;
 
-pub use monitor::Monitor;
-pub use observation::{Error, Observation, Query, Rates, Snapshot, Totals};
+pub use self::monitor::Monitor;
+pub use self::observation::{Error, Observation, Query, Rates, Snapshot, Totals};
 
-#[cfg(feature = "workers")]
+#[cfg(feature = "monitor")]
 mod worker_monitor;
-#[cfg(feature = "workers")]
+#[cfg(feature = "monitor")]
 mod worker_observation;
-#[cfg(feature = "workers")]
-pub use contime_worker::{WorkerCounters, WorkerStatus};
-#[cfg(feature = "workers")]
-pub use worker_monitor::WorkerMonitor;
-#[cfg(feature = "workers")]
-pub use worker_observation::{WorkerMonitorError, WorkerReading, WorkerStatusSource};
+#[cfg(feature = "monitor")]
+pub use self::worker_monitor::WorkerMonitor;
+#[cfg(feature = "monitor")]
+pub use self::worker_observation::{WorkerMonitorError, WorkerReading, WorkerStatusSource};
+#[cfg(feature = "monitor")]
+pub use crate::contime_worker::{WorkerCounters, WorkerStatus};
 
-#[cfg(feature = "workers")]
+#[cfg(feature = "monitor")]
 mod worker_activity;
-#[cfg(feature = "workers")]
-pub use worker_activity::{ApplicationActivity, WorkerActivity};
+#[cfg(feature = "monitor")]
+pub use self::worker_activity::{ApplicationActivity, WorkerActivity};

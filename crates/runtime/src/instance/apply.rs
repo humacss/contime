@@ -1,12 +1,12 @@
 //! Queue external inputs and expose their asynchronous rejection channel.
 
-use contime_api::ApiError;
+use crate::contime_api::ApiError;
 
-use crate::{ConTime, RejectionReason};
+use crate::contime_runtime::{ConTime, RejectionReason};
 
 impl<I, S, W> ConTime<I, S, W>
 where
-    I: crate::ThreadInput,
+    I: crate::contime_runtime::ThreadInput,
 {
     /// Enqueues an external submission without waiting for admission or replay.
     ///
@@ -23,22 +23,22 @@ where
     }
 
     /// Shared rejection stream. Receiving an error is not a completion signal.
-    pub fn errors(&self) -> &crossbeam_channel::Receiver<crate::RejectionMessage<RejectionReason>> {
+    pub fn errors(&self) -> &crossbeam_channel::Receiver<crate::contime_runtime::RejectionMessage<RejectionReason>> {
         &self.errors
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::testing::Time;
+    use crate::contime_runtime::testing::Time;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
-    use crate::checkpoints::{ApplyBatch as CheckpointBatch, ApplyEvents as CheckpointApply, CheckpointConfig, Snapshot};
-    use crate::lanes::{ApplyBatch as LaneBatch, ApplyEvents as LaneApply, ApplyLanes, FilterLanes, Lanes, RawBatch};
+    use crate::contime_runtime::checkpoints::{ApplyBatch as CheckpointBatch, ApplyEvents as CheckpointApply, CheckpointConfig, Snapshot};
+    use crate::contime_runtime::lanes::{ApplyBatch as LaneBatch, ApplyEvents as LaneApply, ApplyLanes, FilterLanes, Lanes, RawBatch};
 
-    use crate::{ConTime, ConTimeConfig, Input};
+    use crate::contime_runtime::{ConTime, ConTimeConfig, Input};
 
     struct TestInput {
         id: u128,
@@ -46,7 +46,7 @@ mod tests {
         observed: Arc<AtomicUsize>,
     }
 
-    impl crate::checkpoints::Event for TestInput {
+    impl crate::contime_runtime::checkpoints::Event for TestInput {
         type Time = Time;
 
         fn time(&self) -> Self::Time {
@@ -111,13 +111,17 @@ mod tests {
 
         fn apply_events(&mut self, batch: CheckpointBatch<'_, '_, Self::Time, TestInput>) {
             let events = batch.events.collect::<Vec<_>>();
-            let filtered = crate::lanes::project::<TestLanes, _, _>(RawBatch {
+            let filtered = crate::contime_runtime::lanes::project::<TestLanes, _, _>(RawBatch {
                 snapshot_id: batch.snapshot_id,
                 time: batch.time,
                 history_event_count: batch.history_event_count,
                 events: &events,
             });
-            crate::lanes::apply::<_, _, TestLanes, TestLanes, _>(self, &crate::lanes::PassThrough, filtered);
+            crate::contime_runtime::lanes::apply::<_, _, TestLanes, TestLanes, _>(
+                self,
+                &crate::contime_runtime::lanes::PassThrough,
+                filtered,
+            );
         }
     }
 
@@ -125,7 +129,7 @@ mod tests {
         ConTimeConfig {
             router_count: 1,
             worker_count: 1,
-            placement: contime_router::Placement::default(),
+            placement: crate::contime_router::Placement::default(),
             pruning_interval: std::time::Duration::from_millis(100),
 
             history_retention: Time(0),

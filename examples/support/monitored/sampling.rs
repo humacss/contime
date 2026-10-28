@@ -1,6 +1,6 @@
 //! Snapshot population/distribution helpers used by simulator assignment callbacks.
 use super::Options;
-use contime_simulator::Random;
+use contime::contime_simulator::Random;
 use std::num::NonZeroU64;
 pub fn assign_snapshot_ids(options: &Options, random: &mut Random, targets: &mut Vec<u128>) {
     assign_with_primary(options, random, targets, None);
