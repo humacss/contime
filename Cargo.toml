@@ -14,7 +14,19 @@ readme = "README.md"
 authors = ["humacss"]
 keywords = ["events", "history", "replay", "snapshots"]
 categories = ["data-structures", "concurrency"]
-include = ["/Cargo.toml", "/LICENSE", "/README.md", "/src/**", "/examples/**", "/tests/**", "/benches/**", "!**/docs/**", "!**/.DS_Store"]
+include = [
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/src/**",
+    "/examples/**",
+    "/tests/**",
+    "/benches/**",
+    "!**/docs/**",
+    "!**/pkg/**",
+    "!**/target/**",
+    "!**/.DS_Store",
+]
 
 [features]
 default = ["runtime"]
