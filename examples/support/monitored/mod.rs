@@ -28,3 +28,6 @@ pub use sampling::{assign_snapshot_ids, assign_with_primary};
 
 #[cfg(all(test, feature = "manual"))]
 mod backend_tests;
+
+#[cfg(test)]
+pub(crate) mod exit_tests;

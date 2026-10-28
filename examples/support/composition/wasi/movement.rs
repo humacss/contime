@@ -105,7 +105,29 @@ fn drive<B: Backend<MovementExample>>(
             }
         }
     })();
-    let completion = result.map_err(|e| e.to_string());
+    let completion = result.map_err(|e| e.to_string()).and_then(|()| crate::exit::success().map_err(|e| e.to_string()));
     let shutdown = backend.shutdown().map_err(|e| e.to_string());
     completion.and(shutdown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn standalone_wasi_movement_exits_after_validation_without_teardown() {
+        use crate::support::monitored::exit_tests::{self, Observed};
+        let name = concat!(module_path!(), "::standalone_wasi_movement_exits_after_validation_without_teardown");
+        let name = name.split_once("::").unwrap().1;
+        exit_tests::assert_fast_exit(name, |marker| {
+            let mut config = Config::parse(
+                ["--headless", "--execution", "manual", "--clients", "2", "--latency-ms", "0", "--jitter-ms", "0"].map(str::to_owned),
+            )
+            .unwrap()
+            .unwrap();
+            config.duration = Some(Duration::from_millis(30));
+            let options = Options { snapshots: 2, ..Default::default() };
+            let backend = Observed::new(backend::Manual::<MovementExample>::new(&options).unwrap(), marker);
+            drive(backend, config, false, None).unwrap();
+        });
+    }
 }

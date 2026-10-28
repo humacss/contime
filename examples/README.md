@@ -124,9 +124,10 @@ uses one source slot, so a one-event window can contain a multi-target event.
 Worker/snapshot-dependent defaults follow worker changes until edited. Use
 `--no-setup` to run directly, `--headless --duration 5` for a finite comparison,
 and `--execution manual` with `--features manual,monitor,counters` for Manual.
-Native headless runs default to five seconds; browser/WASI stop automatically
-only with an explicit duration. Explicit durations have no upper cap; omit the
-duration for an interactive run that continues until stopped. Press q, Escape or Ctrl-C to stop native runs.
+Native counter/hash headless runs default to five seconds. Native movement and
+browser/WASI runs stop automatically only with an explicit duration. Explicit
+durations have no upper cap; omit the duration for an interactive run that
+continues until stopped. Press q, Escape or Ctrl-C to stop native runs.
 
 ## Fanout and distribution
 
@@ -169,7 +170,8 @@ digests for its preview. All environments show cumulative per-worker averages.
 ## Validation and shutdown
 
 Native hosts stop production, confirm outstanding work through monitoring,
-validate all final state, restore the terminal and shut down their backend.
-WASI guests flush a final validated record before process exit. Browser sessions
-preserve their frame allowance and pause/resume ownership. The independent finite
+validate all final state, restore the terminal, print a summary and exit without
+tearing down retained histories. Reusable runners and tests shut down normally.
+WASI guests likewise flush a final validated record before process exit. Browser
+sessions preserve their frame allowance and pause/resume ownership. The independent finite
 portable scenario covers late events, duplicates, rejection and pruning.

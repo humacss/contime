@@ -35,18 +35,21 @@ pub fn run(config: Config) -> Result<(), Failure> {
         headless: false,
         ..Default::default()
     };
-    let summary = if config.manual {
+    if config.manual {
         #[cfg(feature = "manual")]
         {
-            run_backend(backend::Manual::<MovementExample>::new(&options)?, &config)?
+            run_backend(backend::Manual::<MovementExample>::new(&options)?, &config, true)?;
         }
         #[cfg(not(feature = "manual"))]
         {
             return Err("Enable the manual feature for Manual execution".into());
         }
     } else {
-        run_backend(backend::runtime::<MovementExample>(&options)?, &config)?
-    };
+        run_backend(backend::runtime::<MovementExample>(&options)?, &config, true)?;
+    }
+    Ok(())
+}
+fn print_summary(summary: &Summary) {
     println!(
         "Validated {} delivered inputs; {} reordered arrivals; {} corrected histories; {} rendering updates",
         crate::support::number(summary.submitted),
@@ -55,13 +58,20 @@ pub fn run(config: Config) -> Result<(), Failure> {
         crate::support::number(summary.updates)
     );
     println!("{} keyboard inputs delivered", crate::support::number(summary.keyboard_inputs));
-    Ok(())
 }
-fn run_backend<B: Backend<MovementExample>>(backend: B, config: &Config) -> Result<Summary, Failure> {
-    let result = native::run(config.headless, |terminal, cancelled| drive(&backend, config, cancelled, &mut View::new(terminal)?));
+fn run_backend<B: Backend<MovementExample>>(backend: B, config: &Config, exit_on_success: bool) -> Result<Summary, Failure> {
+    let result = native::run(config.headless, |terminal, cancelled| drive(&backend, config, cancelled, &mut View::new(terminal)?))
+        .and_then(|summary| {
+            if exit_on_success {
+                print_summary(&summary);
+                crate::support::exit::success()?;
+            }
+            Ok(summary)
+        });
     let shutdown = backend.shutdown();
     let summary = result?;
     shutdown?;
+    print_summary(&summary);
     Ok(summary)
 }
 fn drive<B: Backend<MovementExample>>(
@@ -123,6 +133,21 @@ fn drive<B: Backend<MovementExample>>(
 mod tests {
     use super::*;
     #[test]
+    fn standalone_movement_exits_after_validation_without_teardown() {
+        use crate::support::monitored::exit_tests::{self, Observed};
+        let name = concat!(module_path!(), "::standalone_movement_exits_after_validation_without_teardown");
+        let name = name.split_once("::").unwrap().1;
+        exit_tests::assert_fast_exit(name, |marker| {
+            let mut config = Config::parse(["--headless", "--clients", "2", "--latency-ms", "0", "--jitter-ms", "0"].map(str::to_owned))
+                .unwrap()
+                .unwrap();
+            config.duration = Some(Duration::from_millis(30));
+            let options = crate::support::monitored::Options { workers: 1, snapshots: 2, ..Default::default() };
+            let backend = Observed::new(backend::runtime::<MovementExample>(&options).unwrap(), marker);
+            run_backend(backend, &config, true).unwrap();
+        });
+    }
+    #[test]
     fn live_inputs_drain_and_validate_through_both_execution_adapters() {
         for manual in [false, true] {
             if manual && !cfg!(feature = "manual") {
@@ -145,14 +170,14 @@ mod tests {
             let summary = if manual {
                 #[cfg(feature = "manual")]
                 {
-                    run_backend(backend::Manual::<MovementExample>::new(&options).unwrap(), &config).unwrap()
+                    run_backend(backend::Manual::<MovementExample>::new(&options).unwrap(), &config, false).unwrap()
                 }
                 #[cfg(not(feature = "manual"))]
                 {
                     unreachable!()
                 }
             } else {
-                run_backend(backend::runtime::<MovementExample>(&options).unwrap(), &config).unwrap()
+                run_backend(backend::runtime::<MovementExample>(&options).unwrap(), &config, false).unwrap()
             };
             assert!(summary.submitted > 4);
             assert!(summary.updates > 1);

@@ -9,7 +9,8 @@ use crate::support::native;
 use crate::support::ui::workers::WorkerView;
 use contime_monitor::WorkerReading;
 use std::{sync::Arc, time::Duration};
-/// Common startup form and simulator callbacks, with only execution selected.
+/// Standalone startup form and simulator callbacks; successful runs exit the process.
+/// Reusable hosts and tests use the returning `run_*_with_options` helpers.
 pub fn run_configured<M, G, It>(manual_default: bool, generate: G, delivery: Delivery) -> Result<(), Failure>
 where
     M: Example,
@@ -30,7 +31,8 @@ where
         Kind::Manual => {
             #[cfg(feature = "manual")]
             {
-                run_manual_with_options::<M, G, It>(options, generate, delivery).map(|_| ())
+                let contime = backend::Manual::<M>::new(&options)?;
+                run_backend::<M, G, It, _>(contime, options, generate, delivery, true).map(|_| ())
             }
             #[cfg(not(feature = "manual"))]
             {
@@ -40,7 +42,9 @@ where
         Kind::Runtime => {
             #[cfg(feature = "runtime")]
             {
-                run_with_options::<M, G, It>(options, generate, delivery).map(|_| ())
+                options.validate()?;
+                let contime = backend::runtime::<M>(&options)?;
+                run_backend::<M, G, It, _>(contime, options, generate, delivery, true).map(|_| ())
             }
             #[cfg(not(feature = "runtime"))]
             {
@@ -60,7 +64,7 @@ where
 {
     options.validate()?;
     let contime = backend::runtime::<M>(&options)?;
-    run_backend::<M, G, It, _>(contime, options, generate, delivery)
+    run_backend::<M, G, It, _>(contime, options, generate, delivery, false)
 }
 #[cfg(feature = "manual")]
 pub fn run_manual_with_options<M, G, It>(options: Options, generate: G, delivery: Delivery) -> Result<Summary, Failure>
@@ -70,9 +74,15 @@ where
     It: Iterator<Item = M::Event>,
 {
     let contime = backend::Manual::<M>::new(&options)?;
-    run_backend::<M, G, It, _>(contime, options, generate, delivery)
+    run_backend::<M, G, It, _>(contime, options, generate, delivery, false)
 }
-fn run_backend<M, G, It, B>(contime: B, options: Options, generate: G, delivery: Delivery) -> Result<Summary, Failure>
+fn run_backend<M, G, It, B>(
+    contime: B,
+    options: Options,
+    generate: G,
+    delivery: Delivery,
+    exit_on_success: bool,
+) -> Result<Summary, Failure>
 where
     M: Example,
     B: Backend<M>,
@@ -81,10 +91,23 @@ where
 {
     let result = native::run(options.headless, |terminal, cancelled| {
         driver::drive::<M, G, It, B, _>(&contime, &options, &generate, delivery, cancelled, &mut NativeView::new(terminal, &options)?)
+    })
+    .and_then(|summary| {
+        if exit_on_success {
+            print_summary(&summary, delivery);
+            // The host has restored the terminal and the driver validated final state.
+            crate::support::exit::success()?;
+        }
+        Ok(summary)
     });
+    // Reusable runners and errors still release resources and inspect shutdown.
     let shutdown = contime.shutdown();
     let summary = result?;
     shutdown?;
+    print_summary(&summary, delivery);
+    Ok(summary)
+}
+fn print_summary(summary: &Summary, delivery: Delivery) {
     println!(
         "Validated {} events / {} snapshot applications; {} worker readings",
         format::number(summary.events),
@@ -104,7 +127,6 @@ where
             format::number(summary.queries)
         );
     }
-    Ok(summary)
 }
 
 struct NativeView<'a> {
@@ -168,3 +190,7 @@ impl<M: Example> Observer<M> for NativeView<'_> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;

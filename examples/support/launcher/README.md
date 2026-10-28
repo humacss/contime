@@ -94,9 +94,10 @@ Common flags include `--snapshots`, `--workers`,
 `--average-snapshots-per-event`, `--max-snapshots-per-event`,
 `--events-per-second`, `--query-hz`, `--retention-ms`, `--checkpoint-interval`,
 `--max-pending`, and optional `--duration SECONDS`. Maximum event production
-retains processing and pending-work limits. Native `--headless` preserves its
-five-second default when no duration is supplied; portable hosts need no
-headless flag to run without a terminal.
+retains processing and pending-work limits. Native counter/hash `--headless` runs
+default to five seconds when no duration is supplied. Movement runs until stopped
+unless a duration is supplied. Portable hosts need no headless flag to run
+without a terminal.
 
 ## Tools
 

@@ -17,3 +17,7 @@ pub mod reference;
 mod sampling;
 pub use options::Options;
 pub use sampling::{assign_snapshot_ids, assign_with_primary};
+
+#[cfg(test)]
+#[path = "exit_tests.rs"]
+pub(crate) mod exit_tests;

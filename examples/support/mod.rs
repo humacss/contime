@@ -52,3 +52,6 @@ mod movement_configure;
 
 #[path = "movement/presentation.rs"]
 pub mod movement_report;
+
+#[allow(dead_code)] // Only standalone application hosts exit the process.
+pub(crate) mod exit;
