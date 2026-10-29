@@ -1,11 +1,9 @@
 # Manual counters
 
-The minimal walkthrough stays self-contained in `manual.rs`. It submits two
-counters, requests queries, and calls `process()` once per host-loop turn:
-
-```sh
-cargo run --features manual --example manual_counter
-```
+The self-contained code sample in [`manual.rs`](manual.rs) submits two counters,
+requests queries, and calls `process()` once per host-loop turn. It is included
+in ConTime's Rust documentation rather than registered as a separate executable.
+Use the shared live counter below to try Manual processing.
 
 ## Live simulator and monitor
 
@@ -14,14 +12,14 @@ UI as native Runtime counters. The execution adapter is the only difference:
 Manual calls `process()` once per host-loop turn, on the calling thread.
 
 ```sh
-cargo run --release --features manual,monitor,simulator --example manual_counter_live
-cargo run --release --features manual,monitor,simulator --example manual_counter_live -- --headless --duration 2 --snapshots 8 --events-per-second 1000
+cargo run --release --all-features --example counter -- --execution manual
+cargo run --release --all-features --example counter -- --headless --duration 2 --snapshots 8 --events-per-second 1000 --execution manual
 ```
 
 The launcher selects this same host when you choose Native / Manual / Counter:
 
 ```sh
-cargo run --release --features monitor --example launcher
+cargo run --release --example launcher
 ```
 
 Settings are fixed before processing starts. Manual uses one worker, so
@@ -51,6 +49,6 @@ waits for monitor-confirmed completion, validates every counter against its
 reference, restores the terminal, closes the backend and prints the summary.
 Finite headless runs default to five seconds unless a duration is supplied.
 
-With the `runtime` feature enabled too, `--execution runtime` selects Runtime;
-this entry point defaults to Manual. WASI counters also use this shared driver, with their workload inside WebAssembly
+Both execution modes are compiled together. `--execution manual` selects Manual;
+`--execution runtime` selects the default Runtime mode. WASI counters also use this shared driver, with their workload inside WebAssembly
 and terminal presentation in the launcher. Browser Manual counters share the same simulator, monitor and controller through a frame-budgeted adapter.

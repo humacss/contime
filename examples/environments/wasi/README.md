@@ -14,7 +14,7 @@ paces events instead. Both modes validate every snapshot before a timed run ends
 
 ```sh
 # From the repository root: select the environment, execution and settings.
-cargo run --release --features monitor --example launcher
+cargo run --release --example launcher
 ```
 
 The terminal UI shows target source events/s, cumulative completed source events/s,
@@ -122,8 +122,8 @@ a persistent direction; Space stops; q/Esc drains and validates before exit.
 Standard WASI uses Manual; WASI Threads supports Manual and Runtime.
 
 ```sh
-cargo run --release --features monitor --example launcher -- --environment wasm --example client-movement
-cargo run --release --features monitor --example launcher -- --environment wasm-threads --example client-movement --execution runtime
+cargo run --release --example launcher -- --environment wasm --example client-movement
+cargo run --release --example launcher -- --environment wasm-threads --example client-movement --execution runtime
 ```
 
 Guest control input is a private stdin pipe, enabled by the launcher. Node uses

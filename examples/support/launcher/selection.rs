@@ -89,7 +89,7 @@ impl Domain {
     }
     pub fn binary(self) -> &'static str {
         match self {
-            Self::Counter => "counter_live",
+            Self::Counter => "counter",
             Self::Movement => "client_movement",
             Self::Hash => "chain_hash",
         }

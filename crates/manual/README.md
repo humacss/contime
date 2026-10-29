@@ -45,11 +45,12 @@ or use `process_with_clock` when allocating a time/work allowance. Query callbac
 during processing and may capture thread-local state. `take_rejections` drains
 insertion failures. Subscriptions are not exposed by that convenience API.
 
-The [manual counter example](../../examples/cases/counter/manual.rs) demonstrates a
-host loop using only the root crate. Run it with:
+The [Manual code sample](../../examples/cases/counter/manual.rs), included in the
+Rust documentation, demonstrates a host loop using only the root crate. To try
+Manual processing in the shared live counter, run:
 
 ```sh
-cargo run --features manual --example manual_counter
+cargo run --all-features --example counter -- --execution manual
 ```
 
 Advanced callers can still use this crate directly, or the root API's

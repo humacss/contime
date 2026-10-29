@@ -63,19 +63,19 @@ establish correct event ordering; the chain-hash case checks that separately.
 
 ## Run
 
-For a small public-API walkthrough, start with [`main.rs`](main.rs), the program
+For a small public-API walkthrough, start with [`readme.rs`](readme.rs), the program
 shown in the root README. It runs two counters for five seconds and queries them
 at 20 Hz. Its small random changes and printing are self-contained.
 
 ```sh
-cargo run --example counter
+cargo run --example readme
 ```
 
 For the configurable live dashboard:
 
 ```sh
-cargo run --release --features manual,monitor,simulator --example counter_live
-cargo run --release --features manual,monitor,simulator --example counter_live -- --execution manual
+cargo run --release --all-features --example counter
+cargo run --release --all-features --example counter -- --execution manual
 ```
 
 Choose settings before startup; q, Escape or Ctrl-C stops production and validates
@@ -85,7 +85,7 @@ settings, defaults and measurement semantics. The native composition entry point
 is [`support/entrypoints/counter.rs`](../../support/entrypoints/counter.rs).
 
 ```sh
-cargo run --release --features manual,monitor,simulator --example counter_live -- \
+cargo run --release --all-features --example counter -- \
   --no-setup --headless --duration 5 --snapshots 1000 --workers 4 \
   --events-per-second 100000 --average-snapshots-per-event 1.1 \
   --max-snapshots-per-event 2 --snapshot-skew 90
@@ -98,7 +98,7 @@ same model and host with a smaller direct command-line interface.
 ## Check
 
 ```sh
-cargo test --example counter_live --features manual,monitor,simulator --example manual_counter_live
+cargo test --all-features --example counter
 ```
 
 Tests cover late arrivals after earlier queries, retained duplicate IDs,

@@ -52,8 +52,7 @@ pub fn movement_command(root: &Path, selection: Selection, settings: &[String]) 
         "--release".into(),
         "--manifest-path".into(),
         root.join("Cargo.toml").display().to_string(),
-        "--features".into(),
-        "manual,monitor,simulator".into(),
+        "--all-features".into(),
         "--example".into(),
         "client_movement".into(),
         "--".into(),
@@ -73,8 +72,7 @@ pub fn native_command(root: &Path, selection: Selection, settings: &Settings) ->
         "--release".into(),
         "--manifest-path".into(),
         root.join("Cargo.toml").display().to_string(),
-        "--features".into(),
-        "manual,monitor,simulator".into(),
+        "--all-features".into(),
         "--example".into(),
         selection.domain.binary().into(),
         "--".into(),
@@ -422,7 +420,7 @@ mod tests {
         let command = native_command(Path::new("/a checkout with spaces"), selection, &settings);
         let args = command.args.iter().map(|s| s.to_string_lossy().to_string()).collect::<Vec<_>>();
         assert_eq!(command.cwd, Path::new("/a checkout with spaces"));
-        assert!(args.windows(2).any(|pair| pair == ["--example", "counter_live"]));
+        assert!(args.windows(2).any(|pair| pair == ["--example", "counter"]));
         assert!(args.windows(2).any(|pair| pair == ["--average-snapshots-per-event", "1.1"]));
         assert!(args.windows(2).any(|pair| pair == ["--max-snapshots-per-event", "4"]));
         assert!(args.windows(2).any(|pair| pair == ["--execution", "manual"]));
@@ -540,8 +538,8 @@ mod monitor_features_tests {
                 } else {
                     native_command(Path::new("/checkout"), selection, &Settings::parse(std::iter::empty(), false).unwrap().unwrap().0)
                 };
-                assert!(command.args.windows(2).any(|pair| pair[0] == "--features" && pair[1] == "manual,monitor,simulator"));
-                assert!(!command.args.iter().any(|arg| arg == "--no-default-features"));
+                assert!(command.args.iter().any(|arg| arg == "--all-features"));
+                assert!(!command.args.iter().any(|arg| arg == "--no-default-features" || arg == "--features"));
                 assert!(command.args.windows(2).any(|pair| pair[0] == "--execution" && pair[1] == execution.slug()));
             }
         }

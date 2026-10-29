@@ -10,10 +10,10 @@ A running application usually submits events as they arrive and queries state wh
 
 This walkthrough starts an in-memory ConTime engine with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
 
-The Rust blocks form one complete program, in order. The same program is available as [`examples/cases/counter/main.rs`](https://github.com/humacss/contime/blob/main/examples/cases/counter/main.rs). Run it from a ConTime checkout with:
+The Rust blocks form one complete program, in order. The same program is available as [`examples/cases/counter/readme.rs`](https://github.com/humacss/contime/blob/main/examples/cases/counter/readme.rs). Run it from a ConTime checkout with:
 
 ```bash
-cargo run -p contime --example counter
+cargo run -p contime --example readme
 ```
 
 ## Dependencies and Features
@@ -279,11 +279,12 @@ to define worker messages or storage adapters.
 contime = { version = "0.1", features = ["manual"] }
 ```
 
-The complete [manual counter example](../../examples/cases/counter/manual.rs) drives two
-counters from a host loop at 20 frames per second:
+The self-contained [Manual code sample](../../examples/cases/counter/manual.rs),
+also included in the Rust documentation, drives two counters from a host loop
+at 20 frames per second. To run the live counter with Manual processing:
 
 ```sh
-cargo run --features manual --example manual_counter
+cargo run --all-features --example counter -- --execution manual
 ```
 
 For a constrained build that omits the managed runtime, monitoring, counters, and
@@ -298,7 +299,7 @@ Runtime without worker counters or the monitoring and simulation tools. Feature
 selection controls available code; enabling a tool never starts collection,
 event generation, or background threads by itself.
 
-Its loop schedules submissions and display requests at 20 Hz, while giving
+The self-contained sample schedules submissions and display requests at 20 Hz, while giving
 ConTime one processing opportunity on every loop turn. The key operations are:
 
 ```rust,ignore
@@ -338,19 +339,21 @@ live dashboards. Each scenario has its own folder and reader guide. Start with
 its application model and ConTime loop; UI code lives separately under `ui/`.
 
 ```sh
-cargo run --release --features manual,monitor,simulator --example counter_live
-cargo run --release --features manual,monitor,simulator --example client_movement
-cargo run --release --features manual,monitor,simulator --example manual_counter_live
+cargo run --release --all-features --example counter
+cargo run --release --all-features --example client_movement
+cargo run --release --all-features --example counter -- --execution manual
 ```
 
-Start the central example launcher with `cargo run --release --features monitor --example launcher`
+Start the central example launcher with `cargo run --release --example launcher`
 to select a terminal, standalone WebAssembly, or browser host, execution model,
 application definition, and settings. See the [launcher guide](../../examples/support/launcher/README.md).
 
 Live application definitions are shared across hosts: each example's `model.rs`
 and `setup.rs` contain its event and snapshot contracts, while `examples/support`
 contains load generation, execution and UI. Pass `--execution manual` to a native
-live example to use caller-driven processing; enable `manual` to include that API.
+live example to use caller-driven processing. All Cargo example targets compile
+both backends and the monitoring/simulation tools; ordinary library feature
+selection remains independent.
 All live cases use the simulator and worker monitor
 with cumulative per-worker throughput averages. WASI workload processing and full
 validation stay inside WebAssembly; its UI runs in the launcher. Browser hosts
@@ -386,7 +389,7 @@ isolated engine benchmarks.
 The separate [`chain_hash` example](https://github.com/humacss/contime/blob/main/examples/support/entrypoints/chain_hash.rs) runs an interactive dashboard that checks a hash chain for each history. Every new digest depends on the previous digest and the event, so it carries the contribution of the entire accepted sequence. Checkpoints preserve the digest when older events are pruned. Unlike addition, the result depends on event order.
 
 ```bash
-cargo run -p contime --features manual,monitor,simulator --example chain_hash -- --snapshots 6 --workers 4 --events-per-second 100
+cargo run -p contime --all-features --example chain_hash -- --snapshots 6 --workers 4 --events-per-second 100
 ```
 
 The example submits event groups in reverse order and queries fully admitted timestamp ranges. Its dashboard shows the target and average completed source-event rates, monitor-unconfirmed work, worker activity, and last verified and latest produced hashes. Each queried digest must match its captured canonical reference state; an invalid result stops the example with an error. It runs until `q`, Escape, or Ctrl-C. See the [example guide](https://github.com/humacss/contime/blob/main/examples/cases/chain_hash/README.md) for configuration and verification details. The counter walkthrough above needs no hashing or terminal UI dependencies.
@@ -405,7 +408,7 @@ With the [browser prerequisites](../../examples/environments/browser/README.md#b
 installed, run from the repository root:
 
 ```sh
-cargo run --release --features monitor --example launcher -- \
+cargo run --release --example launcher -- \
   --environment browser --execution manual --example client-movement --budget-ms 2 --no-setup -- \
   --clients 16 --client-spacing 8 --movement-speed 12 --input-hz 3 --query-hz 20 \
   --average-latency-ms 600 --jitter-ms 600 --trail-ms 2500 --fade-ms 1500

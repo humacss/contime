@@ -81,8 +81,8 @@ configurable browser host.
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p contime --example counter
-cargo run -p contime --features manual,monitor,simulator --example client_movement -- --headless --duration 2
+cargo run -p contime --example readme
+cargo run -p contime --all-features --example client_movement -- --headless --duration 2
 cargo test --doc --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
@@ -93,8 +93,43 @@ its focused tests and benchmarks. Recorded component results stay in those
 READMEs; public pipeline and terminal-presentation results are in
 [`benches/README.md`](../../benches/README.md).
 
+### Integration suites
+
+Root integration tests are grouped by public feature. Each folder has a `main.rs`
+that declares topic modules; the individual test files remain separate. Shared
+fixtures live under `tests/support/`. Component-specific tests and unit tests stay
+in their development crates.
+
+| Suite | Folder | Coverage |
+| --- | --- | --- |
+| `runtime` | `tests/runtime/` | Admission, queries, listening, progress, batching and replay |
+| `manual` | `tests/manual/` | Caller-driven processing and callbacks |
+| `monitor` | `tests/monitor/` | Prefix accounting, worker collection and activity reporting |
+| `simulator` | `tests/simulator/` | Event generation, late replay and adaptive monitoring feedback |
+
+Run a suite or select a topic within it:
+
+```sh
+cargo test -p contime --test runtime
+cargo test -p contime --test runtime query::
+cargo test -p contime --no-default-features --features manual --test manual
+cargo test -p contime --features monitor --test monitor
+cargo test -p contime --features simulator --test simulator
+cargo test -p contime --all-features --tests
+```
+
+Monitor and Simulator also run without an execution backend. Their Runtime and
+Manual integration modules run only when the corresponding backend is enabled;
+adaptive simulation checks additionally require `monitor`. Neither suite enables
+additional features automatically. For independent tool checks:
+
+```sh
+cargo test -p contime --no-default-features --features monitor --test monitor
+cargo test -p contime --no-default-features --features simulator --test simulator
+```
+
 The [coverage workflow](../../.github/workflows/coverage.yml) combines workspace tests
-with default and optional features, Manual-only tests, and example verification
+with default and optional features, independent Manual/Monitor/Simulator suites, and example verification
 tests. It reports library coverage to [Qlty](https://qlty.sh/gh/humacss/projects/contime),
 excluding test, benchmark, and example source. Browser and WASI packages are
 separate workspaces and are not included in this native coverage report.

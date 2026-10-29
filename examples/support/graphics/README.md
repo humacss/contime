@@ -23,7 +23,7 @@ across query updates, rather than unique inputs. Settings cannot be edited here.
 From the repository root:
 
 ```sh
-cargo run --release --features monitor --example launcher
+cargo run --release --example launcher
 ```
 
 Choose Client movement and any environment. Native and both WASI choices open a

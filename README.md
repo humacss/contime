@@ -29,7 +29,7 @@ including Rust 1.95 for the isolated graphics example and the matching wasm-bind
 ConTime itself requires Rust 1.90. Then start the example launcher:
 
 ```sh
-cargo run --release --features monitor --example launcher
+cargo run --example launcher
 ```
 
 Choose **Browser → Manual → Client movement**. Click the map to control a client
@@ -128,7 +128,7 @@ caller instead of panicking. The [complete usage guide](guides/usage/README.md) 
 each of them in a runnable counter walkthrough:
 
 ```sh
-cargo run --example counter
+cargo run --example readme
 ```
 
 `apply` queues work. Queries read available admitted history, so a running

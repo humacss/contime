@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.90"
 autobenches = false
 autoexamples = false
+autotests = false
 license = "MIT"
 description = "Continuous-time state from unreliable event streams"
 publish = ["crates-io"]
@@ -96,78 +97,56 @@ members = [
 [package.metadata.docs.rs]
 all-features = true
 
-[[example]]
-name = "chain_hash"
-path = "examples/support/entrypoints/chain_hash.rs"
-required-features = ["runtime", "monitor", "simulator"]
-
-[[example]]
-name = "counter"
-path = "examples/cases/counter/main.rs"
-required-features = ["runtime"]
-
-[[test]]
-name = "advance"
-required-features = ["runtime"]
-
-[[test]]
-name = "incremental"
-required-features = ["runtime"]
-
-[[test]]
-name = "internal_batching"
-required-features = ["runtime"]
-
-[[test]]
-name = "listen"
-required-features = ["runtime"]
-
-[[test]]
-name = "manual"
-required-features = ["manual"]
-
-[[test]]
-name = "progress"
-required-features = ["runtime"]
-
-[[test]]
-name = "query"
-required-features = ["runtime"]
-
-[[test]]
-name = "replay_boundary"
-required-features = ["runtime"]
-
-[[test]]
-name = "replay_frontier"
-required-features = ["runtime"]
-
-[[example]]
-name = "manual_counter"
-path = "examples/cases/counter/manual.rs"
-required-features = ["manual"]
-
-[[example]]
-name = "counter_live"
-path = "examples/support/entrypoints/counter.rs"
-required-features = ["runtime", "monitor", "simulator"]
-
-[[example]]
-name = "manual_counter_live"
-path = "examples/support/entrypoints/manual_counter.rs"
-required-features = ["manual", "monitor", "simulator"]
-
-[[example]]
-name = "launcher"
-path = "examples/support/launcher/main.rs"
-required-features = ["runtime", "monitor"]
-
 [[bench]]
 name = "monitor_ui"
 harness = false
 required-features = ["monitor"]
 
+# Integration suites are grouped by public feature; topic files remain modules.
+
+[[test]]
+name = "runtime"
+path = "tests/runtime/main.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "manual"
+path = "tests/manual/main.rs"
+required-features = ["manual"]
+
+[[test]]
+name = "monitor"
+path = "tests/monitor/main.rs"
+required-features = ["monitor"]
+
+[[test]]
+name = "simulator"
+path = "tests/simulator/main.rs"
+required-features = ["simulator"]
+
+# The launcher enables its dashboard and workload features automatically.
+# Start with `cargo run --example launcher`; use --release for performance runs.
+
+[[example]]
+name = "launcher"
+path = "examples/support/launcher/main.rs"
+
+[[example]]
+name = "readme"
+path = "examples/cases/counter/readme.rs"
+required-features = ["runtime"]
+
+[[example]]
+name = "counter"
+path = "examples/support/entrypoints/counter.rs"
+required-features = ["runtime", "manual", "monitor", "simulator"]
+
+[[example]]
+name = "chain_hash"
+path = "examples/support/entrypoints/chain_hash.rs"
+required-features = ["runtime", "manual", "monitor", "simulator"]
+
 [[example]]
 name = "client_movement"
 path = "examples/support/entrypoints/client_movement.rs"
-required-features = ["runtime", "monitor", "simulator"]
+required-features = ["runtime", "manual", "monitor", "simulator"]

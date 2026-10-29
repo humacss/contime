@@ -1,6 +1,6 @@
 //! Two counters driven by a host loop, without ConTime background threads.
 //!
-//! Run `cargo run --no-default-features --features manual --example manual_counter`.
+//! Included as a complete code sample in the Manual Rust documentation.
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
 use contime::manual::{ManualConTime, ManualConfig};
 use contime::{AdvanceTime, Input};

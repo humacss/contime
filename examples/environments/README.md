@@ -11,7 +11,7 @@ pieces and supplies them to the environment.
 | [WASI](wasi/README.md) | WASI target and host transport; composition stays in support | Manual on standard WASI; Runtime or Manual on threaded WASI |
 | [Browser](browser/README.md) | WebAssembly clock bindings and generic frame scheduling | Manual with a configurable frame budget |
 
-Use `cargo run --release --features monitor --example launcher` from the repository root to select a
+Use `cargo run --release --example launcher` from the repository root to select a
 case, environment, execution mode and settings. Its entry point and shared
 selection logic live under [support/launcher](../support/launcher/README.md).
 Shared `execution.rs` starts Runtime/Manual instances from supplied contracts and

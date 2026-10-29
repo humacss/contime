@@ -13,20 +13,20 @@ and final validation. WASI and browser compositions reuse these components too.
 Run from the repository root:
 
 ```sh
-cargo run --release --features monitor --example launcher
-cargo run --release --features manual,monitor,simulator --example counter_live
+cargo run --release --example launcher
+cargo run --release --all-features --example counter
 ```
 
 Startup settings are fixed for a run. These headless commands skip the form:
 
 ```sh
 # Maximum throughput, two workers, shared events and concentrated traffic.
-cargo run --release --features manual,monitor,simulator --example counter_live -- \
+cargo run --release --all-features --example counter -- \
   --workers 2 --snapshots 1000 --average-snapshots-per-event 1.5 \
   --max-snapshots-per-event 3 --snapshot-skew 90 --headless --duration 5
 
 # Fixed-rate comparison with the same monitor-confirmed completion feedback.
-cargo run --release --features manual,monitor,simulator --example counter_live -- \
+cargo run --release --all-features --example counter -- \
   --events-per-second 100000 --headless --duration 5
 ```
 
@@ -37,8 +37,8 @@ The [counter guide](../README.md) explains the event and snapshot model.
 ## Verification
 
 ```sh
-cargo test --example counter_live --features manual,monitor,simulator --example manual_counter_live
-cargo clippy --example counter_live --features manual,monitor,simulator --example manual_counter_live -- -D warnings
+cargo test --all-features --example counter
+cargo clippy --all-features --example counter -- -D warnings
 ```
 
 Tests preserve fixed/Maximum production, multiple workers and destinations,

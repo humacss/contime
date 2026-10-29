@@ -42,6 +42,10 @@ jobs:
         run: cargo +1.90.0 llvm-cov --workspace --all-features --lib --tests --no-report
       - name: Cover Manual without managed Runtime
         run: cargo +1.90.0 llvm-cov -p contime --no-default-features --features manual --test manual --no-report
+      - name: Cover Monitor without an execution backend
+        run: cargo +1.90.0 llvm-cov -p contime --no-default-features --features monitor --test monitor --no-report
+      - name: Cover Simulator without monitoring or an execution backend
+        run: cargo +1.90.0 llvm-cov -p contime --no-default-features --features simulator --test simulator --no-report
       - name: Cover example verification tests
         run: cargo +1.90.0 llvm-cov -p contime --all-features --examples --no-report
       - name: Export library coverage

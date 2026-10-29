@@ -6,8 +6,7 @@ native process lifetime come from the generic environment adapters.
 
 | File | Cargo example | Case |
 | --- | --- | --- |
-| `counter.rs` | `counter_live` | Counter |
-| `manual_counter.rs` | `manual_counter_live` | Counter, defaulting to Manual |
+| `counter.rs` | `counter` | Counter |
 | `chain_hash.rs` | `chain_hash` | Chain hash verification |
 | `client_movement.rs` | `client_movement` | Client movement |
 

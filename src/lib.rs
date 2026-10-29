@@ -50,9 +50,9 @@ submissions; inspect its [`ShutdownReport`] for router and worker outcomes.
 
 # Example
 
-Run this example with `cargo run -p contime --example counter`."###
+Run this example with `cargo run -p contime --example readme`."###
 )]
-#![cfg_attr(feature = "runtime", doc = concat!("```rust\n", include_str!("../examples/cases/counter/main.rs"), "\n```\n"))]
+#![cfg_attr(feature = "runtime", doc = concat!("```rust\n", include_str!("../examples/cases/counter/readme.rs"), "\n```\n"))]
 
 /// Shared application contracts and storage adapters for either execution mode.
 pub use crate::contime_core as core;
