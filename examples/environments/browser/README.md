@@ -9,7 +9,7 @@ then validates full digests independently of production feedback.
 
 ## Launch
 
-Run `cargo run --release --example launcher` from the repository root, then
+Run `cargo run --release --features monitor --example launcher` from the repository root, then
 choose Browser and Manual. Common startup settings match the terminal hosts:
 snapshot count, event rate, average/maximum snapshots per event, query frequency,
 retention, checkpoint interval and, for numeric rates, pending capacity. The browser additionally
@@ -120,7 +120,7 @@ input is delayed and replayed in Rust before queried positions reach Bevy.
 All clients are validated even when only a bounded camera-region preview is drawn.
 
 ```sh
-cargo run --release --example launcher -- --environment browser --example client-movement
+cargo run --release --features monitor --example launcher -- --environment browser --example client-movement
 ```
 
 ## Hosted demo and GitHub Pages

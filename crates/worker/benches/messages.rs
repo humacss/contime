@@ -82,7 +82,7 @@ impl SnapshotStore<TestEvent> for TestStore {
             }
         }
     }
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     fn process_until_counted(&mut self, time: &Time, context: &mut Context) -> Option<u64> {
         let before = self.observed.processed.get();
         self.process_until(time, context);
@@ -319,12 +319,12 @@ fn status_fixture(slots: u64, metadata_only: bool) -> (MessageWorker<'static, Me
     assert_eq!(report.worker_id, 3);
     assert_eq!(report.history_stores, if metadata_only { 0 } else { slots as usize });
     assert_eq!(report.metadata_only, if metadata_only { slots as usize } else { 0 });
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     assert_eq!(
         report.counters,
         Some(contime_worker::WorkerCounters { inserted_applications: if metadata_only { 0 } else { slots }, ..Default::default() })
     );
-    #[cfg(not(feature = "counters"))]
+    #[cfg(not(feature = "monitor"))]
     assert_eq!(report.counters, None);
     assert_eq!(report.pending_histories, report.history_stores);
     assert_eq!(report.due_histories, if metadata_only { 0 } else { slots.div_ceil(2) as usize });

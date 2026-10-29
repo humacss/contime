@@ -14,7 +14,7 @@ fn reading(count: usize) -> Arc<WorkerReading<u64>> {
             .map(|worker_id| WorkerStatus {
                 worker_id,
                 history_stores: 1000,
-                counters: cfg!(feature = "counters").then_some(contime::contime_monitor::WorkerCounters {
+                counters: cfg!(feature = "monitor").then_some(contime::contime_monitor::WorkerCounters {
                     inserted_applications: 1_000_000,
                     replay_applications: Some(2_000_000),
                     saturated: false,

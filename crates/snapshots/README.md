@@ -37,7 +37,7 @@ crate or execution topology.
 - `prune` physically removes obsolete history after forwarding, preserving the
   predecessor checkpoint. Repeating cleanup is harmless.
 
-The optional `counters` feature adds `process_until_counted`, which performs the
+The optional `monitor` feature adds `process_until_counted`, which performs the
 same replay and returns the number of raw canonical events traversed during that
 call. The count includes drained events ignored by application logic and prefixes
 reconstructed after late insertion. Query and forwarding work are excluded. It
@@ -349,7 +349,8 @@ remain those defined in each benchmark source.
 Feature variants were measured in separate sequential runs, not interleaved
 paired trials; changing background load can affect their differences.
 
-Feature sets: `all-features` is the workspace feature union, including optional
+Historical 0.1.0 feature sets (before monitoring enabled counting automatically):
+`all-features` is the workspace feature union, including optional
 worker counters; `default` disables optional counters; `status-no-counters`
 enables Monitor's `runtime` feature without counters. Each table states the
 actual sample count. Inline tests may contain multiple Criterion cases.

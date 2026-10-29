@@ -51,7 +51,7 @@ fn cancelled_collection_does_not_keep_runtime_alive() {
     assert!(started.elapsed() < Duration::from_secs(10));
 }
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 mod counters {
     use super::fixture;
     use contime_runtime::{

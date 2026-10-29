@@ -82,7 +82,7 @@ cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p contime --example counter
-cargo run -p contime --features monitor,counters --example client_movement -- --headless --duration 2
+cargo run -p contime --features manual,monitor,simulator --example client_movement -- --headless --duration 2
 cargo test --doc --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```

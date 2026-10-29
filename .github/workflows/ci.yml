@@ -36,17 +36,36 @@ jobs:
           cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features monitor --lib
           cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features workers --lib
           cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features runtime --lib
-          cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features counters --lib
+      - name: Test independent simulation
+        run: |
+          cargo +${{ matrix.toolchain }} test -p contime --no-default-features --features simulator --lib
+          cargo +${{ matrix.toolchain }} test -p contime-simulator --no-default-features
+          cargo +${{ matrix.toolchain }} test -p contime-simulator --features monitor
       - name: Test Manual without managed Runtime
         run: cargo +${{ matrix.toolchain }} test -p contime --no-default-features --features manual --test manual
+      - name: Test lean Runtime without tools or counters
+        run: cargo +${{ matrix.toolchain }} test -p contime --no-default-features --features runtime
+      - name: Test monitoring without Manual or simulation
+        run: cargo +${{ matrix.toolchain }} test -p contime --features monitor --test progress
       - name: Test example verification logic
-        run: cargo +${{ matrix.toolchain }} test -p contime --features manual,monitor,counters --examples
+        run: cargo +${{ matrix.toolchain }} test -p contime --all-features --examples
       - name: Check all targets, including benchmarks
         run: cargo +${{ matrix.toolchain }} check --workspace --all-targets
+      - name: Check minimal example feature sets
+        run: |
+          cargo +${{ matrix.toolchain }} check -p contime --all-targets
+          cargo +${{ matrix.toolchain }} check -p contime --no-default-features --features runtime --all-targets
+          cargo +${{ matrix.toolchain }} check -p contime --no-default-features --features runtime,monitor --example launcher
+          cargo +${{ matrix.toolchain }} check -p contime --no-default-features --features runtime,monitor --all-targets
+          cargo +${{ matrix.toolchain }} check -p contime --no-default-features --features manual,monitor --all-targets
+          cargo +${{ matrix.toolchain }} check -p contime --no-default-features --features runtime,monitor,simulator --example counter_live --example chain_hash --example client_movement
+          cargo +${{ matrix.toolchain }} check -p contime --no-default-features --features manual,monitor,simulator --example manual_counter_live
+      - name: Run native counter through the launcher
+        run: cargo +${{ matrix.toolchain }} run -p contime --features monitor --example launcher -- --environment native --example counter --no-setup -- --headless --duration 1 --workers 2 --snapshots 8 --events-per-second 1000
       - name: Run counter walkthrough
         run: cargo +${{ matrix.toolchain }} run -p contime --example counter
       - name: Run client-movement example
-        run: cargo +${{ matrix.toolchain }} run -p contime --features monitor,counters --example client_movement -- --headless --duration 1 --clients 8
+        run: cargo +${{ matrix.toolchain }} run -p contime --features manual,monitor,simulator --example client_movement -- --headless --duration 1 --clients 8
 
   release-checks:
     runs-on: ubuntu-latest
@@ -68,3 +87,7 @@ jobs:
         run: cargo +1.90.0 run -p contime --example counter
       - name: Verify single-package release without uploading
         run: cargo +1.90.0 publish -p contime --all-features --dry-run
+      - name: Test packaged examples
+        run: |
+          package_version="$(cargo +1.90.0 metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "contime"))')"
+          cargo +1.90.0 test --manifest-path "target/package/contime-${package_version}/Cargo.toml" --all-features --examples

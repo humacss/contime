@@ -1,8 +1,11 @@
 //! Continuous-time state with managed background or caller-driven processing.
 //!
-//! The default `runtime` feature exposes the managed `contime-runtime` API.
-//! With `default-features = false` and `features = ["manual"]`, use `contime::manual`
-//! to drive a worker yourself without depending on the threaded runtime.
+//! Runtime is enabled by default. Start managed processing with `ConTime::start`.
+//! Enable `manual` to drive a worker yourself through `contime::manual`; creating
+//! a Manual instance starts no threads. For Manual alone, disable default features
+//! and select `features = ["manual"]`. The optional `monitor` feature also enables
+//! worker application counts. The independent `simulator` feature provides event
+//! generation; enable both tools for adaptive monitoring-based load control.
 #![deny(missing_docs)]
 #![cfg_attr(
     feature = "runtime",

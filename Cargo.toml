@@ -1,6 +1,6 @@
 [package]
 name = "contime"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.90"
 autobenches = false
@@ -35,8 +35,7 @@ include = [
 default = ["runtime"]
 runtime = ["dep:traitstub"]
 monitor = []
-counters = []
-simulator = ["monitor"]
+simulator = []
 manual = ["dep:traitstub"]
 
 [dependencies]
@@ -100,7 +99,7 @@ all-features = true
 [[example]]
 name = "chain_hash"
 path = "examples/support/entrypoints/chain_hash.rs"
-required-features = ["runtime", "monitor", "counters"]
+required-features = ["runtime", "monitor", "simulator"]
 
 [[example]]
 name = "counter"
@@ -151,17 +150,17 @@ required-features = ["manual"]
 [[example]]
 name = "counter_live"
 path = "examples/support/entrypoints/counter.rs"
-required-features = ["runtime", "monitor", "counters"]
+required-features = ["runtime", "monitor", "simulator"]
 
 [[example]]
 name = "manual_counter_live"
 path = "examples/support/entrypoints/manual_counter.rs"
-required-features = ["manual", "monitor", "counters"]
+required-features = ["manual", "monitor", "simulator"]
 
 [[example]]
 name = "launcher"
 path = "examples/support/launcher/main.rs"
-required-features = ["runtime"]
+required-features = ["runtime", "monitor"]
 
 [[bench]]
 name = "monitor_ui"
@@ -171,4 +170,4 @@ required-features = ["monitor"]
 [[example]]
 name = "client_movement"
 path = "examples/support/entrypoints/client_movement.rs"
-required-features = ["runtime", "monitor", "counters"]
+required-features = ["runtime", "monitor", "simulator"]

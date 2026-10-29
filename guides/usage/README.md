@@ -22,14 +22,24 @@ To use ConTime 0.1 in your own Rust binary project, add:
 
 ```toml
 [dependencies]
-contime = "0.1.0"
+contime = "0.1.1"
 fastrand = "2"
 ```
 
-ConTime supports Rust 1.90 or newer. The default `runtime` feature starts managed background threads. For caller-driven processing, use `contime = { version = "0.1", default-features = false, features = ["manual"] }` and create a `contime::manual::ManualConTime` instance. Creating that instance starts no threads; your application calls `process()` between its other work, with an optional `process_with_clock` helper for budgeted processing. The [manual crate](../../crates/manual/README.md) describes its worker contracts and processing budget. Both features may be enabled together. Shared application and storage adapters are available through `contime::core`. `fastrand` only varies the example's event intervals and increments; it is not required by ConTime. For local development, you can instead use `contime = { path = "/path/to/contime" }`.
+ConTime supports Rust 1.90 or newer. Runtime is enabled by default, so ordinary
+applications need no feature list. Enable `manual` for caller-driven processing,
+`monitor` for monitoring, or `simulator` for traffic generation and feedback tools.
+Call `ConTime::start` for managed background processing, or create a
+`contime::manual::ManualConTime` instance and call `process()` from your own loop.
+Creating a Manual instance starts no threads. `process_with_clock` is an optional
+helper for budgeted processing. The [manual crate](../../crates/manual/README.md)
+describes its worker contracts and processing budget. Shared contracts and storage
+adapters are available through `contime::core`. `fastrand` only varies the example
+traffic and is not required by ConTime. For local development, you can instead use
+`contime = { path = "/path/to/contime" }`.
 
-The optional `counters` feature records worker-owned insertion and live replay
-application totals. It is disabled by default. With `monitor` enabled, totals and
+The optional `monitor` feature automatically records worker-owned insertion and live replay
+application totals. Without monitoring, this bookkeeping is compiled out. Totals and
 observed rates are available through worker status; one source event targeting
 three snapshots counts as three applications. Queries and retention reconstruction
 are excluded. See the [monitor guide](../../crates/monitor/README.md) for counter and rate semantics.
@@ -40,11 +50,11 @@ reconstructing snapshots. Collection and rate calculation are separate from
 presentation; the crate has no UI dependencies. Reports are observations of
 individual workers, not a synchronized global snapshot or completion fence.
 
-The optional `simulator` feature exposes `contime::simulator`. Its seeded
+The independent optional `simulator` feature exposes `contime::simulator`. Its seeded
 `EventStream` iterator creates events and assigns their snapshot-identifying
 fields through two caller-provided functions. The crate also provides
-caller-driven adaptive admission and query validation tools using monitor
-observations. It starts no threads and changes no execution or replay rules.
+caller-driven adaptive admission and query validation tools when `monitor` is
+also enabled. Event generation alone does not enable worker bookkeeping. It starts no threads and changes no execution or replay rules.
 See the [simulator guide](../../crates/simulator/README.md) for the APIs and examples.
 
 ## Define Time
@@ -266,15 +276,27 @@ when it processes work. No ConTime background threads are started. Use the same
 to define worker messages or storage adapters.
 
 ```toml
-contime = { version = "0.1", default-features = false, features = ["manual"] }
+contime = { version = "0.1", features = ["manual"] }
 ```
 
 The complete [manual counter example](../../examples/cases/counter/manual.rs) drives two
 counters from a host loop at 20 frames per second:
 
 ```sh
-cargo run --no-default-features --features manual --example manual_counter
+cargo run --features manual --example manual_counter
 ```
+
+For a constrained build that omits the managed runtime, monitoring, counters, and
+simulator, explicitly select only Manual:
+
+```toml
+contime = { version = "0.1", default-features = false, features = ["manual"] }
+```
+
+Likewise, `default-features = false, features = ["runtime"]` selects a lean
+Runtime without worker counters or the monitoring and simulation tools. Feature
+selection controls available code; enabling a tool never starts collection,
+event generation, or background threads by itself.
 
 Its loop schedules submissions and display requests at 20 Hz, while giving
 ConTime one processing opportunity on every loop turn. The key operations are:
@@ -316,19 +338,19 @@ live dashboards. Each scenario has its own folder and reader guide. Start with
 its application model and ConTime loop; UI code lives separately under `ui/`.
 
 ```sh
-cargo run --release --features monitor,counters --example counter_live
-cargo run --release --features monitor,counters --example client_movement
-cargo run --release --no-default-features --features manual,monitor,counters --example manual_counter_live
+cargo run --release --features manual,monitor,simulator --example counter_live
+cargo run --release --features manual,monitor,simulator --example client_movement
+cargo run --release --features manual,monitor,simulator --example manual_counter_live
 ```
 
-Start the central example launcher with `cargo run --release --example launcher`
+Start the central example launcher with `cargo run --release --features monitor --example launcher`
 to select a terminal, standalone WebAssembly, or browser host, execution model,
 application definition, and settings. See the [launcher guide](../../examples/support/launcher/README.md).
 
 Live application definitions are shared across hosts: each example's `model.rs`
 and `setup.rs` contain its event and snapshot contracts, while `examples/support`
-contains load generation, execution and UI. Add `--features manual` and pass
-`--execution manual` to a native live example to use caller-driven processing.
+contains load generation, execution and UI. Pass `--execution manual` to a native
+live example to use caller-driven processing; enable `manual` to include that API.
 All live cases use the simulator and worker monitor
 with cumulative per-worker throughput averages. WASI workload processing and full
 validation stay inside WebAssembly; its UI runs in the launcher. Browser hosts
@@ -364,7 +386,7 @@ isolated engine benchmarks.
 The separate [`chain_hash` example](https://github.com/humacss/contime/blob/main/examples/support/entrypoints/chain_hash.rs) runs an interactive dashboard that checks a hash chain for each history. Every new digest depends on the previous digest and the event, so it carries the contribution of the entire accepted sequence. Checkpoints preserve the digest when older events are pruned. Unlike addition, the result depends on event order.
 
 ```bash
-cargo run -p contime --features monitor,counters --example chain_hash -- --snapshots 6 --workers 4 --events-per-second 100
+cargo run -p contime --features manual,monitor,simulator --example chain_hash -- --snapshots 6 --workers 4 --events-per-second 100
 ```
 
 The example submits event groups in reverse order and queries fully admitted timestamp ranges. Its dashboard shows the target and average completed source-event rates, monitor-unconfirmed work, worker activity, and last verified and latest produced hashes. Each queried digest must match its captured canonical reference state; an invalid result stops the example with an error. It runs until `q`, Escape, or Ctrl-C. See the [example guide](https://github.com/humacss/contime/blob/main/examples/cases/chain_hash/README.md) for configuration and verification details. The counter walkthrough above needs no hashing or terminal UI dependencies.
@@ -383,7 +405,7 @@ With the [browser prerequisites](../../examples/environments/browser/README.md#b
 installed, run from the repository root:
 
 ```sh
-cargo run --release --example launcher -- \
+cargo run --release --features monitor --example launcher -- \
   --environment browser --execution manual --example client-movement --budget-ms 2 --no-setup -- \
   --clients 16 --client-spacing 8 --movement-speed 12 --input-hz 3 --query-hz 20 \
   --average-latency-ms 600 --jitter-ms 600 --trail-ms 2500 --fade-ms 1500

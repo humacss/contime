@@ -239,7 +239,7 @@ impl Default for WorkerCounters {
     }
 }
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 impl WorkerCounters {
     pub(crate) fn add_inserted(&mut self, count: u64) {
         self.inserted_applications = Self::add(self.inserted_applications, count, &mut self.saturated);
@@ -288,7 +288,7 @@ pub struct WorkerStatus<T> {
     pub pending_prune_passes: usize,
     /// Reported coordination round whose resolution is needed before replay.
     pub awaiting_resolution: Option<u64>,
-    /// Optional cumulative counts; `None` when the `counters` feature is disabled.
+    /// Optional cumulative counts; `None` when the `monitor` feature is disabled.
     pub counters: Option<WorkerCounters>,
 }
 
@@ -397,7 +397,7 @@ pub trait SnapshotStore<I>: Sized {
     /// Include repeated canonical traversals after late insertion; exclude query
     /// reconstruction and retention forwarding. `None` means counting is unavailable.
     /// The default preserves custom stores by calling [`Self::process_until`].
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     fn process_until_counted(&mut self, time: &Self::Time, context: &mut Self::Context) -> Option<u64> {
         self.process_until(time, context);
         None
@@ -431,7 +431,7 @@ impl<S> StoreSlot<S> {
     }
 }
 
-#[cfg(all(test, feature = "counters"))]
+#[cfg(all(test, feature = "monitor"))]
 mod counter_tests {
     use super::WorkerCounters;
 

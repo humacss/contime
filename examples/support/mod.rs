@@ -23,7 +23,7 @@ pub use targets::Average;
 #[allow(dead_code)] // Individual examples bypass the central launcher.
 pub mod launcher;
 
-#[cfg(all(any(feature = "runtime", feature = "manual"), feature = "monitor", feature = "counters"))]
+#[cfg(all(any(feature = "runtime", feature = "manual"), feature = "monitor", feature = "simulator"))]
 pub mod monitored;
 
 #[allow(dead_code)]

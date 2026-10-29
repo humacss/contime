@@ -15,7 +15,7 @@ keywords = ["events", "history", "replay", "snapshots"]
 categories = ["data-structures", "concurrency"]
 
 [features]
-counters = ["contime-worker/counters", "contime-core/counters"]
+monitor = ["contime-worker/monitor", "contime-core/monitor"]
 
 [dependencies]
 traitstub = "0.1.0"

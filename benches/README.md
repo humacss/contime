@@ -4,6 +4,14 @@ These benchmarks exercise the public ConTime pipeline and example-owned terminal
 presentation. Component benchmark results live in each crate's README. Timing
 boundaries and fixture definitions are in the corresponding benchmark sources.
 
+Runtime is the public package's default feature. Enable `monitor` to include
+worker application bookkeeping; there is no separate counters feature. The dated
+results below retain their original feature labels: `counters` and
+`status-no-counters` describe the 0.1.0 configuration used for those measurements.
+Use `cargo bench -p contime` for the unmonitored root pipeline and
+`cargo bench -p contime --features monitor` for a monitored build. The scaling
+probes explicitly select the uncounted Runtime.
+
 Run the public pipeline and presentation targets from the repository root:
 
 ```sh
@@ -42,7 +50,8 @@ remain those defined in each benchmark source.
 Feature variants were measured in separate sequential runs, not interleaved
 paired trials; changing background load can affect their differences.
 
-Feature sets: `all-features` is the workspace feature union, including optional
+Historical 0.1.0 feature sets (before monitoring enabled counting automatically):
+`all-features` is the workspace feature union, including optional
 worker counters; `default` disables optional counters; `status-no-counters`
 enables Monitor's `runtime` feature without counters. Each table states the
 actual sample count. Inline tests may contain multiple Criterion cases.

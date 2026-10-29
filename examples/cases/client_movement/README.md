@@ -7,8 +7,8 @@ Initial stopped characters are seeded before simulated traffic starts.
 The example includes simple arena-wall collisions; it has no network server or client-side prediction.
 
 ```sh
-cargo run --release --features monitor,counters --example client_movement
-cargo run --release --features manual,monitor,counters --example client_movement -- --execution manual
+cargo run --release --features manual,monitor,simulator --example client_movement
+cargo run --release --features manual,monitor,simulator --example client_movement -- --execution manual
 ```
 
 The direct commands above retain the terminal view. For the shared Bevy graphics,
@@ -71,10 +71,10 @@ This real-time demonstration is not Maximum throughput mode; use Counter for tha
 ## Configuration and validation
 
 ```sh
-cargo run --release --features monitor,counters --example client_movement -- \
+cargo run --release --features manual,monitor,simulator --example client_movement -- \
   --no-setup --clients 64 --workers 4 --input-hz 5 --query-hz 20 \
   --average-latency-ms 350 --jitter-ms 300 --trail-ms 2000 --fade-ms 1000
-cargo run --features monitor,counters --example client_movement -- \
+cargo run --features manual,monitor,simulator --example client_movement -- \
   --headless --duration 2 --clients 8
 ```
 
@@ -102,7 +102,7 @@ late turns after materialized queries, duplicate inputs, both execution modes,
 retention, keyboard decoding, delayed delivery and fading/correction detection.
 
 ```sh
-cargo test --features manual,monitor,counters --example client_movement
+cargo test --features manual,monitor,simulator --example client_movement
 ```
 
 ## Shared driver, different hosts
@@ -130,7 +130,7 @@ starting positions and 6 world units/second. Both accept whole numbers from
 stationary while inputs and replay validation continue.
 
 ```sh
-cargo run --release --example launcher -- --environment browser --example client-movement -- \
+cargo run --release --features monitor --example launcher -- --environment browser --example client-movement -- \
   --client-spacing 9 --movement-speed 10
 ```
 

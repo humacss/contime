@@ -15,7 +15,7 @@ keywords = ["events", "history", "replay", "snapshots"]
 categories = ["data-structures", "concurrency"]
 
 [features]
-counters = ["contime-worker/counters", "contime-checkpoints/counters"]
+monitor = ["contime-worker/monitor", "contime-checkpoints/monitor"]
 
 [dependencies]
 contime-checkpoints = { package = "contime-snapshots", path = "../../snapshots/dev", version = "0.1.0" }

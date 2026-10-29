@@ -96,9 +96,9 @@ Finite portable regression scenarios independently cover replay and retention.
 Run focused verification from the repository root:
 
 ```sh
-cargo test --features monitor,counters --example counter_live --example chain_hash
-cargo test --features manual,monitor,counters --example launcher --example chain_hash
-cargo clippy --features monitor,counters --example counter_live --example chain_hash -- -D warnings
+cargo test --features manual,monitor,simulator --example counter_live --example chain_hash
+cargo test --features monitor --example launcher --example chain_hash
+cargo clippy --features manual,monitor,simulator --example counter_live --example chain_hash -- -D warnings
 ```
 
 ## WASI presentation boundary

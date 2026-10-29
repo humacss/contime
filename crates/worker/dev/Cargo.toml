@@ -16,7 +16,7 @@ categories = ["data-structures", "concurrency"]
 
 [features]
 default = []
-counters = []
+monitor = []
 
 [dependencies]
 ahash = "0.8"

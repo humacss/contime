@@ -1,5 +1,11 @@
 # ConTime Simulator
 
+Enable `simulator` on the public `contime` crate for event generation. It does not
+enable monitoring or worker bookkeeping. Enable `monitor` separately if you also
+need the adaptive controller and query-validation helpers. The standalone
+development crate likewise has no default features; its optional `monitor`
+feature adds those helpers.
+
 ## Generate an event stream
 
 `EventStream` is a lazy iterator configured with an event count, a seed, and your
@@ -70,7 +76,8 @@ cargo run -p contime-simulator --example event_stream
 ## Adaptive simulation API
 
 The older `Simulator`, `Workload`, and `Maximum` interfaces below remain available
-for existing consumers. They are separate from the independent event iterator.
+when both `simulator` and `monitor` are enabled. They are separate from the
+independent event iterator.
 
 Test a ConTime setup with generated events, independent query validation, and
 adaptive load. The simulator uses a clock supplied by its caller and creates no
@@ -116,6 +123,8 @@ No snapshot counter, hash, ID format or timestamp type is required. `Simulator`
 combines that model with Maximum and a monitor; it does not start ConTime.
 
 ```rust
+# #[cfg(feature = "monitor")]
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 # use contime::contime_simulator as contime_simulator;
 use contime_simulator::{MaximumConfig, Simulator, Workload};
 use std::{num::NonZeroU64, time::Duration};
@@ -151,7 +160,10 @@ let query = simulation.start_query(Duration::ZERO)?;
 simulation.complete_query(query, &[state], Duration::from_millis(1)).unwrap();
 let metrics = simulation.sample(Duration::from_millis(1))?;
 assert_eq!(metrics.confirmed.events, 1);
-# Ok::<(), Box<dyn std::error::Error>>(())
+# Ok(())
+# }
+# #[cfg(not(feature = "monitor"))]
+# fn main() {}
 ```
 
 The host must query the exact submitted prefix represented by the captured

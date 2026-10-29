@@ -41,7 +41,7 @@ where
     fn process_until(&mut self, time: &I::Time, context: &mut W) {
         self.inner.process_until(time, context);
     }
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     fn process_until_counted(&mut self, time: &I::Time, context: &mut W) -> Option<u64> {
         self.inner.process_until_counted(time, context)
     }
@@ -289,7 +289,7 @@ mod tests {
         assert_eq!(context.effects, expected_effects);
     }
 
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     #[test]
     fn counted_replay_reports_raw_events_despite_partial_wrapper_consumption() {
         let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 3 } };
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(store.query(Time(20), &mut context).unwrap().recent, 13);
     }
 
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     #[test]
     fn counted_replay_excludes_silent_query_forward_and_prune() {
         let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 1 } };

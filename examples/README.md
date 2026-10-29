@@ -7,13 +7,19 @@ repository root. Use `--release` when comparing performance.
 | Example | Command | Read first |
 | --- | --- | --- |
 | Counter walkthrough | `cargo run --example counter` | [`cases/counter/main.rs`](cases/counter/main.rs), the complete README program |
-| Live counters | `cargo run --release --features monitor,counters --example counter_live` | [`cases/counter/model.rs`](cases/counter/model.rs), then [`cases/counter/setup.rs`](cases/counter/setup.rs) |
-| Order-sensitive hash chains | `cargo run --release --features monitor,counters --example chain_hash` | [`cases/chain_hash/model.rs`](cases/chain_hash/model.rs), then [`cases/chain_hash/setup.rs`](cases/chain_hash/setup.rs) |
-| Client movement | `cargo run --release --features monitor,counters --example client_movement` | [`cases/client_movement/model.rs`](cases/client_movement/model.rs), then [`cases/client_movement/setup.rs`](cases/client_movement/setup.rs) |
-| Manual walkthrough | `cargo run --no-default-features --features manual --example manual_counter` | [`cases/counter/manual.rs`](cases/counter/manual.rs) |
-| Live manual counters | `cargo run --release --no-default-features --features manual,monitor,counters --example manual_counter_live` | [`cases/counter/model.rs`](cases/counter/model.rs), then [`cases/counter/setup.rs`](cases/counter/setup.rs) |
+| Live counters | `cargo run --release --features manual,monitor,simulator --example counter_live` | [`cases/counter/model.rs`](cases/counter/model.rs), then [`cases/counter/setup.rs`](cases/counter/setup.rs) |
+| Order-sensitive hash chains | `cargo run --release --features manual,monitor,simulator --example chain_hash` | [`cases/chain_hash/model.rs`](cases/chain_hash/model.rs), then [`cases/chain_hash/setup.rs`](cases/chain_hash/setup.rs) |
+| Client movement | `cargo run --release --features manual,monitor,simulator --example client_movement` | [`cases/client_movement/model.rs`](cases/client_movement/model.rs), then [`cases/client_movement/setup.rs`](cases/client_movement/setup.rs) |
+| Manual walkthrough | `cargo run --features manual --example manual_counter` | [`cases/counter/manual.rs`](cases/counter/manual.rs) |
+| Live manual counters | `cargo run --release --features manual,monitor,simulator --example manual_counter_live` | [`cases/counter/model.rs`](cases/counter/model.rs), then [`cases/counter/setup.rs`](cases/counter/setup.rs) |
 | WebAssembly without a browser | See [`environments/wasi/README.md`](environments/wasi/README.md) | [`support/composition/wasi/main.rs`](support/composition/wasi/main.rs), then [`support/load/verification.rs`](support/load/verification.rs) |
 | WebAssembly in a browser | See [`environments/browser/README.md`](environments/browser/README.md) | Shared WebAssembly Rust code, then [`environments/browser/src/clock.rs`](environments/browser/src/clock.rs) |
+
+ConTime enables Runtime by default. The launcher uses `--features monitor` for
+its dashboard, then enables simulation and Manual support for its child programs
+automatically. Direct live examples use `--features manual,monitor,simulator`; the Manual
+walkthrough needs only `--features manual`. These live examples use both simulation
+and monitoring; event generation itself does not require monitoring.
 
 ## Folder layout
 
@@ -31,7 +37,7 @@ an environment, rather than a separate application case. The launcher composes t
 ## Start from one place
 
 ```sh
-cargo run --release --example launcher
+cargo run --release --features monitor --example launcher
 ```
 
 The [launcher](support/launcher/README.md) selects the environment, execution, example,
@@ -54,12 +60,12 @@ capabilities and execution resources.
 Execution is a separate choice: **Runtime** manages background threads, while
 **Manual** makes one `process()` call per host-loop turn. Native live entry
 points accept `--execution runtime|manual`. Runtime is the default, except for
-`manual_counter_live`, which defaults to Manual. Enable the `manual` feature to use Manual from a Runtime entry point:
+`manual_counter_live`, which defaults to Manual. To use Manual from a Runtime entry point:
 
 ```sh
-cargo run --release --features manual,monitor,counters --example counter_live -- --execution manual
-cargo run --release --features manual,monitor,counters --example client_movement -- --execution manual
-cargo run --release --features manual,monitor,counters --example chain_hash -- --execution manual
+cargo run --release --features manual,monitor,simulator --example counter_live -- --execution manual
+cargo run --release --features manual,monitor,simulator --example client_movement -- --execution manual
+cargo run --release --features manual,monitor,simulator --example chain_hash -- --execution manual
 ```
 
 Environment is a third choice. The WASI command and browser host import the same
@@ -123,7 +129,7 @@ uses one source slot, so a one-event window can contain a multi-target event.
 
 Worker/snapshot-dependent defaults follow worker changes until edited. Use
 `--no-setup` to run directly, `--headless --duration 5` for a finite comparison,
-and `--execution manual` with `--features manual,monitor,counters` for Manual.
+and `--execution manual` for Manual. Enable `manual` to make both APIs available.
 Native counter/hash headless runs default to five seconds. Native movement and
 browser/WASI runs stop automatically only with an explicit duration. Explicit
 durations have no upper cap; omit the duration for an interactive run that
@@ -139,7 +145,7 @@ coverage or a fixed proportion of active snapshots. Hash groups retain a common
 primary destination so reversed delivery exercises ordering within a history.
 
 ```sh
-cargo run --release --features monitor,counters --example counter_live -- \
+cargo run --release --features manual,monitor,simulator --example counter_live -- \
   --snapshots 1000 --workers 4 --average-snapshots-per-event 1.5 \
   --max-snapshots-per-event 3 --snapshot-skew 90 --headless --duration 5
 ```

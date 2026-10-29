@@ -179,15 +179,15 @@ fn worker_status_observes_manual_work_without_driving_it() {
         assert_eq!(status.history_stores, 0);
         assert_eq!(status.processing_target.0, 0);
         assert_eq!(engine.queued(), queued);
-        #[cfg(feature = "counters")]
+        #[cfg(feature = "monitor")]
         assert_eq!(status.counters.unwrap().inserted_applications, 0);
-        #[cfg(not(feature = "counters"))]
+        #[cfg(not(feature = "monitor"))]
         assert!(status.counters.is_none());
     }
     assert!(engine.process().unwrap()); // insertion only
     let status = engine.worker_status();
     assert_eq!(status.history_stores, 2);
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     {
         let counters = status.counters.unwrap();
         assert_eq!(counters.inserted_applications, 2);
@@ -198,7 +198,7 @@ fn worker_status_observes_manual_work_without_driving_it() {
     assert_eq!(status.processing_target.0, 10);
     assert_eq!(status.pending_histories, 0);
     assert_eq!(status.due_histories, 0);
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     assert_eq!(status.counters.unwrap().replay_applications, Some(2));
     engine.prune_before(Time(6)).unwrap();
     process(&mut engine);

@@ -74,8 +74,8 @@ cargo run --example counter
 For the configurable live dashboard:
 
 ```sh
-cargo run --release --features monitor,counters --example counter_live
-cargo run --release --features manual,monitor,counters --example counter_live -- --execution manual
+cargo run --release --features manual,monitor,simulator --example counter_live
+cargo run --release --features manual,monitor,simulator --example counter_live -- --execution manual
 ```
 
 Choose settings before startup; q, Escape or Ctrl-C stops production and validates
@@ -85,7 +85,7 @@ settings, defaults and measurement semantics. The native composition entry point
 is [`support/entrypoints/counter.rs`](../../support/entrypoints/counter.rs).
 
 ```sh
-cargo run --release --features monitor,counters --example counter_live -- \
+cargo run --release --features manual,monitor,simulator --example counter_live -- \
   --no-setup --headless --duration 5 --snapshots 1000 --workers 4 \
   --events-per-second 100000 --average-snapshots-per-event 1.1 \
   --max-snapshots-per-event 2 --snapshot-skew 90
@@ -98,7 +98,7 @@ same model and host with a smaller direct command-line interface.
 ## Check
 
 ```sh
-cargo test --features manual,monitor,counters --example counter_live --example manual_counter_live
+cargo test --example counter_live --features manual,monitor,simulator --example manual_counter_live
 ```
 
 Tests cover late arrivals after earlier queries, retained duplicate IDs,

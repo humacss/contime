@@ -7,6 +7,6 @@ publish = false
 [workspace]
 
 [dependencies]
-contime = { path = "../.." }
+contime = { path = "../..", default-features = false, features = ["runtime"] }
 crossbeam-channel = "0.5"
 libc = "0.2"

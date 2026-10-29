@@ -53,7 +53,7 @@ pub fn movement_command(root: &Path, selection: Selection, settings: &[String]) 
         "--manifest-path".into(),
         root.join("Cargo.toml").display().to_string(),
         "--features".into(),
-        "runtime,manual,monitor,counters".into(),
+        "manual,monitor,simulator".into(),
         "--example".into(),
         "client_movement".into(),
         "--".into(),
@@ -74,7 +74,7 @@ pub fn native_command(root: &Path, selection: Selection, settings: &Settings) ->
         "--manifest-path".into(),
         root.join("Cargo.toml").display().to_string(),
         "--features".into(),
-        "runtime,manual,monitor,counters".into(),
+        "manual,monitor,simulator".into(),
         "--example".into(),
         selection.domain.binary().into(),
         "--".into(),
@@ -531,14 +531,18 @@ mod threaded_tests {
 mod monitor_features_tests {
     use super::*;
     #[test]
-    fn native_counter_and_hash_builds_enable_monitor_counters_for_both_execution_choices() {
-        for domain in [Domain::Counter, Domain::Hash] {
+    fn native_launches_enable_tools_for_each_case_and_execution() {
+        for domain in [Domain::Counter, Domain::Hash, Domain::Movement] {
             for execution in [Execution::Runtime, Execution::Manual] {
                 let selection = Selection::new(Environment::Terminal, execution, domain).unwrap();
-                let command =
-                    native_command(Path::new("/checkout"), selection, &Settings::parse(std::iter::empty(), false).unwrap().unwrap().0);
-                let features = command.args.windows(2).find(|pair| pair[0] == "--features").unwrap();
-                assert_eq!(features[1], "runtime,manual,monitor,counters");
+                let command = if domain == Domain::Movement {
+                    movement_command(Path::new("/checkout"), selection, &[])
+                } else {
+                    native_command(Path::new("/checkout"), selection, &Settings::parse(std::iter::empty(), false).unwrap().unwrap().0)
+                };
+                assert!(command.args.windows(2).any(|pair| pair[0] == "--features" && pair[1] == "manual,monitor,simulator"));
+                assert!(!command.args.iter().any(|arg| arg == "--no-default-features"));
+                assert!(command.args.windows(2).any(|pair| pair[0] == "--execution" && pair[1] == execution.slug()));
             }
         }
     }

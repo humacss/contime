@@ -85,10 +85,12 @@ coordination round. Due work can still be blocked by pruning or coordination.
 The horizon records accepted admission policy, not completed pruning. These
 are history gauges, not retained-event counts.
 
-The optional `counters` feature adds cumulative event-to-history application
-counts to `WorkerStatus::counters`. It is disabled by default; the status field
-always exists and is `None` in disabled builds. `WorkerCounters` is always
-available. Insertions count accepted canonical changes, excluding duplicates and
+The optional `monitor` feature adds cumulative event-to-history application
+counts to `WorkerStatus::counters`. The standalone development crate disables it
+by default, as does the published `contime` package. Enabling monitoring also
+enables this bookkeeping automatically. The status
+field always exists and is `None` when counting is disabled. `WorkerCounters`
+is always available. Insertions count accepted canonical changes, excluding duplicates and
 rejections. Live replay counts raw canonical traversals, including repeated
 prefix replay after late input, and excludes queries and retention forwarding.
 These are per-history applications, so one input routed to several histories
@@ -134,7 +136,7 @@ request/response transport, with initialized stores or listener-only metadata.
 Store fixtures mix due and future histories; setup is excluded from timing.
 Filter it with `cargo bench -p contime-worker --bench messages -- worker/status`.
 
-Compare the same fixture with and without `--features counters` in separate
+Compare the same fixture with and without `--features monitor` in separate
 builds to measure optional counting overhead. The benchmark store reports its
 existing processed-count delta through the counted adapter. Run timing suites
 serially; results depend on the fixture and hardware.
@@ -165,7 +167,8 @@ remain those defined in each benchmark source.
 Feature variants were measured in separate sequential runs, not interleaved
 paired trials; changing background load can affect their differences.
 
-Feature sets: `all-features` is the workspace feature union, including optional
+Historical 0.1.0 feature sets (before monitoring enabled counting automatically):
+`all-features` is the workspace feature union, including optional
 worker counters; `default` disables optional counters; `status-no-counters`
 enables Monitor's `runtime` feature without counters. Each table states the
 actual sample count. Inline tests may contain multiple Criterion cases.

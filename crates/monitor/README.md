@@ -56,10 +56,12 @@ if let Some(reading) = monitor.poll(clock.elapsed())? {
 
 ## Optional application counters and rates
 
-Enable `counters` alongside `runtime` to instrument the managed native workers.
-At the root facade, use `features = ["monitor", "counters"]`. Cargo features are
-additive across a build; keep comparison builds separate. Counters are disabled
-by default and are optional independently of presentation.
+At the root facade, use `features = ["monitor"]` to collect worker status and
+enable application counting automatically. For the standalone development crate,
+`workers` enables collection and counting; `runtime` also adds attachment to the
+managed runtime. There is no separate counters feature. Cargo features are
+additive across a build; keep comparison builds separate. Without monitoring,
+application counting is compiled out. Presentation remains a caller responsibility.
 
 `WorkerStatus::counters` is `None` when instrumentation is disabled. Available
 `WorkerCounters` contain cumulative `inserted_applications`, optional
@@ -96,7 +98,7 @@ completion and exact counts, and excludes startup/state verification/shutdown:
 
 ```sh
 cargo bench -p contime-runtime --bench counters
-cargo bench -p contime-runtime --features counters --bench counters
+cargo bench -p contime-runtime --features monitor --bench counters
 cargo bench -p contime-monitor --features workers --bench activity
 ```
 
@@ -343,7 +345,8 @@ remain those defined in each benchmark source.
 Feature variants were measured in separate sequential runs, not interleaved
 paired trials; changing background load can affect their differences.
 
-Feature sets: `all-features` is the workspace feature union, including optional
+Historical 0.1.0 feature sets (before monitoring enabled counting automatically):
+`all-features` is the workspace feature union, including optional
 worker counters; `default` disables optional counters; `status-no-counters`
 enables Monitor's `runtime` feature without counters. Each table states the
 actual sample count. Inline tests may contain multiple Criterion cases.

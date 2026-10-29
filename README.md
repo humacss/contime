@@ -29,7 +29,7 @@ including Rust 1.95 for the isolated graphics example and the matching wasm-bind
 ConTime itself requires Rust 1.90. Then start the example launcher:
 
 ```sh
-cargo run --release --example launcher
+cargo run --release --features monitor --example launcher
 ```
 
 Choose **Browser → Manual → Client movement**. Click the map to control a client
@@ -136,9 +136,12 @@ application generally submits events as they arrive and queries when it needs
 state, rather than waiting after every event. The usage guide explains responses,
 rejections, configuration and retention.
 
-The default **Runtime** manages background threads. If your application owns the
-loop, the optional **Manual** API lets you call `process()` between other tasks,
-including in a browser. See [Manual processing and features](guides/usage/README.md#run-contime-manually).
+Runtime is enabled by default. Manual processing (`manual`), monitoring (`monitor`),
+and simulation (`simulator`) are opt-in. Monitoring automatically enables worker
+application counts; there is no separate counters feature.
+**Runtime** manages background threads when started. If your application owns the
+loop, **Manual** lets you call `process()` between other tasks, including in a browser.
+See [Manual processing and lean builds](guides/usage/README.md#run-contime-manually).
 
 ## How it Works
 

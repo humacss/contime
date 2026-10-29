@@ -23,7 +23,7 @@ where
 }
 
 /// Retains replay and reports the raw canonical events traversed by this call.
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 pub fn replay_counted<S, H, C>(store: &mut Store<S, H>, context: &C, time: S::Time) -> Result<u64, NoCheckpoint>
 where
     S: Snapshot,

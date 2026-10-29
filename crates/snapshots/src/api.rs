@@ -122,7 +122,7 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> SnapshotStore<S, H> {
     /// # Errors
     ///
     /// Returns [`NoCheckpoint`] under the same conditions as [`Self::process_until`].
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     pub fn process_until_counted<C>(&mut self, time: S::Time, context: &C) -> Result<u64, NoCheckpoint>
     where
         H::Event: Apply<Checkpoint<S>, C>,

@@ -617,7 +617,7 @@ fn status_distinguishes_metadata_stores_future_work_and_completed_replay() {
         admission_horizon: 0,
         pending_prune_passes: 0,
         awaiting_resolution: None,
-        counters: cfg!(feature = "counters").then(Default::default),
+        counters: cfg!(feature = "monitor").then(Default::default),
     };
     assert_eq!(worker.status(4), empty);
     worker.handle(Message::Listen(Listen));
@@ -626,7 +626,7 @@ fn status_distinguishes_metadata_stores_future_work_and_completed_replay() {
     worker.handle(messages.try_recv().unwrap());
     worker.handle(Message::Advance(Advance(20, unbounded().0)));
     let pending = WorkerStatus {
-        counters: cfg!(feature = "counters").then_some(contime_worker::WorkerCounters { inserted_applications: 3, ..Default::default() }),
+        counters: cfg!(feature = "monitor").then_some(contime_worker::WorkerCounters { inserted_applications: 3, ..Default::default() }),
         history_stores: 3,
         pending_histories: 3,
         due_histories: 2,
@@ -644,7 +644,7 @@ fn status_distinguishes_metadata_stores_future_work_and_completed_replay() {
     assert_eq!(
         worker.status(4),
         WorkerStatus {
-            counters: cfg!(feature = "counters").then_some(contime_worker::WorkerCounters {
+            counters: cfg!(feature = "monitor").then_some(contime_worker::WorkerCounters {
                 inserted_applications: 3,
                 replay_applications: None,
                 saturated: false
@@ -798,7 +798,7 @@ fn counters_default_and_disabled_status_have_stable_shape() {
     assert!(!copied.saturated);
     let (steps, _observed) = unbounded();
     let worker = contime_worker::MessageWorker::<Message, TestStore>::new_inline((), Context { steps, gate: None });
-    assert_eq!(worker.status(0).counters, cfg!(feature = "counters").then_some(counters));
+    assert_eq!(worker.status(0).counters, cfg!(feature = "monitor").then_some(counters));
 }
 
 fn batch(values: &[(u128, u128, u64)]) -> ApplyBatch<Event, Sender<Vec<u128>>> {
@@ -817,11 +817,11 @@ fn packet_insertion_counts_canonical_changes_and_excludes_duplicates_and_rejecti
     worker.handle(Message::Packet(vec![batch(&[(7, 1, 10), (7, 1, 10)]), batch(&[(9, 1, 10), (7, 2, 9)])]));
     assert_eq!(
         worker.status(0).counters,
-        cfg!(feature = "counters").then_some(contime_worker::WorkerCounters { inserted_applications: 2, ..Default::default() })
+        cfg!(feature = "monitor").then_some(contime_worker::WorkerCounters { inserted_applications: 2, ..Default::default() })
     );
 }
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 #[test]
 fn uncounted_custom_store_marks_replay_unknown_only_when_it_runs() {
     let (steps, observed) = unbounded();
@@ -834,10 +834,10 @@ fn uncounted_custom_store_marks_replay_unknown_only_when_it_runs() {
     assert_eq!(worker.status(0).counters.unwrap().replay_applications, None);
 }
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 struct CountedStore(TestStore);
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 impl SnapshotStore<Event> for CountedStore {
     type Config = ();
     type Context = Context;
@@ -879,7 +879,7 @@ impl SnapshotStore<Event> for CountedStore {
     }
 }
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 #[test]
 fn counted_replay_includes_late_reconstruction_and_excludes_queries_and_pruning() {
     let (steps, observed) = unbounded();

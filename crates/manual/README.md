@@ -36,8 +36,8 @@ block on the same driver. Panics propagate; discard the driver after a caught
 application/storage panic, matching the existing worker's failure model.
 
 For ordinary applications, the root crate provides a complete
-`contime::manual::ManualConTime` instance with
-`default-features = false, features = ["manual"]`. It combines this driver,
+`contime::manual::ManualConTime` instance with `features = ["manual"]`. For a Manual-only build,
+use `default-features = false, features = ["manual"]`. The instance combines this driver,
 Core's storage, and local request adapters so callers implement only the ordinary
 event and snapshot contracts. `apply`, `query_at`, `advance_to`, and explicit
 `prune_before` enqueue work; call `process()` from your host loop to drive it,
@@ -49,7 +49,7 @@ The [manual counter example](../../examples/cases/counter/manual.rs) demonstrate
 host loop using only the root crate. Run it with:
 
 ```sh
-cargo run --no-default-features --features manual --example manual_counter
+cargo run --features manual --example manual_counter
 ```
 
 Advanced callers can still use this crate directly, or the root API's

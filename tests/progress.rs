@@ -264,3 +264,26 @@ fn internal_feedback_before_a_previous_observation_remains_admissible() {
     assert!(core.errors().is_empty());
     Arc::try_unwrap(core).ok().unwrap().shutdown();
 }
+
+// Run with default features and with `--features monitor`: bookkeeping follows
+// monitoring without changing the queried state or status-report shape.
+#[test]
+fn monitoring_controls_runtime_application_bookkeeping() {
+    let core = ConTime::<Event, State, ()>::start(settings(), ()).unwrap();
+    core.apply([event(1), event(2)]).unwrap();
+    core.advance_to(Time(2)).unwrap();
+    core.wait_until_idle(WAIT).unwrap();
+    assert_eq!(core.query_at(Time(2), [0, 1]).unwrap().iter().map(|state| state.count).sum::<usize>(), 2);
+    let reports = core.request_worker_status().unwrap();
+    let statuses: Vec<_> = (0..core.worker_count()).map(|_| reports.recv_timeout(WAIT).unwrap()).collect();
+    #[cfg(feature = "monitor")]
+    {
+        let inserted: u64 = statuses.iter().map(|s| s.counters.unwrap().inserted_applications).sum();
+        assert_eq!(inserted, 2);
+        let replayed: u64 = statuses.iter().map(|s| s.counters.unwrap().replay_applications.unwrap()).sum();
+        assert_eq!(replayed, 2);
+    }
+    #[cfg(not(feature = "monitor"))]
+    assert!(statuses.iter().all(|s| s.counters.is_none()));
+    core.shutdown();
+}

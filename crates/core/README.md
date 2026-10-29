@@ -32,7 +32,7 @@ worker driver and may use this adapter or another implementation of the worker
 storage contract. The WebAssembly and browser examples use the public manual
 facade with this shared storage adapter.
 
-The optional `counters` feature enables worker counters and the native storage's
+The optional `monitor` feature enables worker counters and the native storage's
 exact counted replay method. It counts raw canonical events traversed during each
 live replay call, including rebuilt prefixes after late input and events skipped
 by an application wrapper. Silent queries and retention forwarding are excluded.
@@ -70,7 +70,8 @@ remain those defined in each benchmark source.
 Feature variants were measured in separate sequential runs, not interleaved
 paired trials; changing background load can affect their differences.
 
-Feature sets: `all-features` is the workspace feature union, including optional
+Historical 0.1.0 feature sets (before monitoring enabled counting automatically):
+`all-features` is the workspace feature union, including optional
 worker counters; `default` disables optional counters; `status-no-counters`
 enables Monitor's `runtime` feature without counters. Each table states the
 actual sample count. Inline tests may contain multiple Criterion cases.

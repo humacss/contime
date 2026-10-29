@@ -5,7 +5,7 @@ returned by ConTime. Native Runtime and Manual execution combine the simulator i
 with worker monitoring and adaptive Maximum production:
 
 ```sh
-cargo run --release --features monitor,counters --example chain_hash
+cargo run --release --features manual,monitor,simulator --example chain_hash
 ```
 
 The startup form retains the existing settings. `--no-setup` starts directly;
@@ -47,11 +47,11 @@ trait used by this adapter is specific to the diagnostic harness.
 
 ```sh
 # Slow enough to inspect; reversed pairs still exercise ordering.
-cargo run --release --features monitor,counters --example chain_hash -- \
+cargo run --release --features manual,monitor,simulator --example chain_hash -- \
   --snapshots 6 --workers 2 --events-per-second 100 --no-setup
 
 # Finite, variable-fanout run with no terminal rendering.
-cargo run --release --features monitor,counters --example chain_hash -- \
+cargo run --release --features manual,monitor,simulator --example chain_hash -- \
   --headless --duration 2 --snapshots 100 --workers 2 \
   --average-snapshots-per-event 1.5 --max-snapshots-per-event 3
 ```
@@ -130,7 +130,7 @@ production window and one query response. No global idle wait is used.
 Manual execution uses the same monitored host with caller-driven processing:
 
 ```sh
-cargo run --release --features manual,monitor,counters --example chain_hash -- \
+cargo run --release --features manual,monitor,simulator --example chain_hash -- \
   --execution manual
 ```
 
@@ -140,7 +140,7 @@ production. WASI uses the shared driver; browser frames use a nonblocking adapte
 ## Tests
 
 ```sh
-cargo test --features monitor,counters --example chain_hash
+cargo test --features manual,monitor,simulator --example chain_hash
 ```
 
 Regressions cover fixed/Maximum production, variable fanout, low-rate reversed

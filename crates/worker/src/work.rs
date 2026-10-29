@@ -11,7 +11,7 @@ use crate::contime_worker::types::{
     SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, StoreSlot, WorkInput, WorkInputKind, WorkerStatus,
 };
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 use crate::contime_worker::WorkerCounters;
 
 type ApplyRoute<M> = <<M as WorkInput>::Apply as ApplyInput>::Route;
@@ -91,7 +91,7 @@ where
     reported_round: Option<u64>,
     awaiting_resolution: Option<u64>,
     process_before_report: bool,
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     counters: WorkerCounters,
 }
 
@@ -158,7 +158,7 @@ where
             reported_round: None,
             awaiting_resolution: None,
             process_before_report: false,
-            #[cfg(feature = "counters")]
+            #[cfg(feature = "monitor")]
             counters: WorkerCounters::default(),
             store_config,
             store_context,
@@ -296,9 +296,9 @@ where
             admission_horizon: self.horizon.clone(),
             pending_prune_passes: self.pending_prunes.len(),
             awaiting_resolution: self.awaiting_resolution,
-            #[cfg(feature = "counters")]
+            #[cfg(feature = "monitor")]
             counters: Some(self.counters),
-            #[cfg(not(feature = "counters"))]
+            #[cfg(not(feature = "monitor"))]
             counters: None,
         }
     }
@@ -318,7 +318,7 @@ where
     fn apply_batch(&mut self, batch: M::Apply) {
         let (routes, completion) = batch.into_parts();
         let mut rejections = Vec::new();
-        #[cfg(feature = "counters")]
+        #[cfg(feature = "monitor")]
         let mut inserted = 0u64;
         for route in routes {
             let (snapshot_id, input) = route.into_parts();
@@ -328,7 +328,7 @@ where
             let result = store.insert(input, &self.horizon);
             rejections.extend(result.rejections);
             if result.changed {
-                #[cfg(feature = "counters")]
+                #[cfg(feature = "monitor")]
                 {
                     inserted += 1;
                 }
@@ -336,7 +336,7 @@ where
                 self.schedule_at(snapshot_id, pending);
             }
         }
-        #[cfg(feature = "counters")]
+        #[cfg(feature = "monitor")]
         self.counters.add_inserted(inserted);
         if !rejections.is_empty() {
             completion.reject(rejections);
@@ -391,9 +391,9 @@ where
         self.pending.remove(&snapshot_id);
         let slot = self.snapshots.get_mut(&snapshot_id).expect("scheduled history exists");
         let store = slot.store.as_mut().expect("scheduled store exists");
-        #[cfg(not(feature = "counters"))]
+        #[cfg(not(feature = "monitor"))]
         store.process_until(&end, &mut self.store_context);
-        #[cfg(feature = "counters")]
+        #[cfg(feature = "monitor")]
         self.counters.add_replay(store.process_until_counted(&end, &mut self.store_context));
         if let Some(next) = store.earliest_replay_time() {
             assert!(next > end, "storage must finish replay through the inclusive processing endpoint");

@@ -4,7 +4,7 @@ The minimal walkthrough stays self-contained in `manual.rs`. It submits two
 counters, requests queries, and calls `process()` once per host-loop turn:
 
 ```sh
-cargo run --no-default-features --features manual --example manual_counter
+cargo run --features manual --example manual_counter
 ```
 
 ## Live simulator and monitor
@@ -14,14 +14,14 @@ UI as native Runtime counters. The execution adapter is the only difference:
 Manual calls `process()` once per host-loop turn, on the calling thread.
 
 ```sh
-cargo run --release --no-default-features --features manual,monitor,counters --example manual_counter_live
-cargo run --release --no-default-features --features manual,monitor,counters --example manual_counter_live -- --headless --duration 2 --snapshots 8 --events-per-second 1000
+cargo run --release --features manual,monitor,simulator --example manual_counter_live
+cargo run --release --features manual,monitor,simulator --example manual_counter_live -- --headless --duration 2 --snapshots 8 --events-per-second 1000
 ```
 
 The launcher selects this same host when you choose Native / Manual / Counter:
 
 ```sh
-cargo run --release --example launcher
+cargo run --release --features monitor --example launcher
 ```
 
 Settings are fixed before processing starts. Manual uses one worker, so

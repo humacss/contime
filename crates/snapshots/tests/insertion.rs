@@ -276,7 +276,7 @@ fn boundary_inputs_survive_replay_before_each_prune(#[case] interval: u64) {
     }
 }
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 #[rstest::rstest]
 #[case::every_event(1, 3)]
 #[case::partial_intervals(3, 5)]
@@ -302,7 +302,7 @@ fn counted_replay_measures_each_operation_and_rebuilt_prefix(#[case] interval: u
     assert_eq!(store.query(Time(40), &calls).unwrap().sum, 15);
 }
 
-#[cfg(feature = "counters")]
+#[cfg(feature = "monitor")]
 #[rstest::rstest]
 #[case::deferred_pruning(false)]
 #[case::physical_pruning(true)]

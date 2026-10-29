@@ -13,8 +13,12 @@ keywords = ["events", "simulation", "benchmark", "snapshots"]
 categories = ["development-tools::testing"]
 readme = "../README.md"
 
+[features]
+default = []
+monitor = ["dep:contime-monitor"]
+
 [dependencies]
-contime-monitor = { path = "../../monitor/dev", version = "0.1.0" }
+contime-monitor = { path = "../../monitor/dev", version = "0.1.0", optional = true }
 
 [lib]
 path = "lib.rs"
@@ -22,6 +26,7 @@ path = "lib.rs"
 [[test]]
 name = "controller"
 path = "../tests/controller.rs"
+required-features = ["monitor"]
 
 [[test]]
 name = "event_stream"
@@ -30,14 +35,16 @@ path = "../tests/event_stream.rs"
 [[test]]
 name = "simulation"
 path = "../tests/simulation.rs"
+required-features = ["monitor"]
 
 [[test]]
 name = "slow_queries"
 path = "../tests/slow_queries.rs"
+required-features = ["monitor"]
 
 [[example]]
 name = "event_stream"
 path = "../examples/event_stream.rs"
 
 [dev-dependencies]
-contime = { path = "../../..", features = ["monitor", "simulator", "manual", "counters"] }
+contime = { path = "../../..", features = ["monitor", "simulator", "manual"] }

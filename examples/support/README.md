@@ -81,7 +81,7 @@ rejection, pruning and frame allowances.
 Run focused checks from the repository root:
 
 ```sh
-cargo test --features manual,monitor,counters --examples
-cargo clippy --features manual,monitor,counters --examples --bench monitor_ui -- -D warnings
-cargo bench --features monitor,counters --bench monitor_ui -- --test
+cargo test --examples
+cargo clippy --examples --bench monitor_ui -- -D warnings
+cargo bench --features monitor --bench monitor_ui -- --test
 ```

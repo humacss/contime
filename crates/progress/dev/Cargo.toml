@@ -28,4 +28,4 @@ name = "round"
 path = "../tests/round.rs"
 
 [dev-dependencies]
-contime = { path = "../../..", features = ["monitor", "simulator", "manual", "counters"] }
+contime = { path = "../../..", features = ["monitor", "simulator", "manual"] }

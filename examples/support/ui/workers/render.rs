@@ -98,7 +98,7 @@ impl<T: Display> WorkerView<T> {
                     if activity.saturated { " | SATURATED (lower bounds)" } else { "" }
                 )
             } else {
-                "Counters unavailable (enable the counters feature)".into()
+                "Counters unavailable (enable the monitor feature)".into()
             };
             lines.push(clipped_ascii(counts, usize::from(area.width)).into());
             if self.counted {

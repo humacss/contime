@@ -3,8 +3,14 @@
 From the repository root:
 
 ```sh
-cargo run --release --example launcher
+cargo run --release --features monitor --example launcher
 ```
+
+Runtime is enabled by default. Enable `monitor` for the launcher dashboard; the
+launcher selects simulation and Manual support for its native child commands
+automatically. Choosing an execution mode controls which backend is used; it
+does not start the other backend. Portable hosts select their constrained build
+features automatically. Monitoring includes worker application bookkeeping.
 
 Choose an environment, execution mode, example, and live settings. One grouped startup form combines the applicable definitions:
 
@@ -77,11 +83,11 @@ interactive setup. `--no-setup` uses supplied settings and defaults directly.
 Common example settings follow the final `--` for every environment:
 
 ```sh
-cargo run --example launcher -- --environment browser --example counter --dry-run
-cargo run --release --example launcher -- --environment native --execution manual --no-setup -- --headless --duration 2 --snapshots 8 --events-per-second 1000
-cargo run --release --example launcher -- --environment wasm --example counter --no-setup -- --snapshots 8 --events-per-second 1000
-cargo run --release --example launcher -- --environment wasm-threads --execution runtime --no-setup -- --workers 4 --snapshots 64 --duration 2
-cargo run --release --example launcher -- --environment browser --no-setup --budget-ms 1 --max-steps 1000 -- --snapshots 8 --events-per-second max --query-hz 20
+cargo run --features monitor --example launcher -- --environment browser --example counter --dry-run
+cargo run --release --features monitor --example launcher -- --environment native --execution manual --no-setup -- --headless --duration 2 --snapshots 8 --events-per-second 1000
+cargo run --release --features monitor --example launcher -- --environment wasm --example counter --no-setup -- --snapshots 8 --events-per-second 1000
+cargo run --release --features monitor --example launcher -- --environment wasm-threads --execution runtime --no-setup -- --workers 4 --snapshots 64 --duration 2
+cargo run --release --features monitor --example launcher -- --environment browser --no-setup --budget-ms 1 --max-steps 1000 -- --snapshots 8 --events-per-second max --query-hz 20
 ```
 
 `terminal` is an alias for `native`. The environment selects its build target
@@ -120,7 +126,7 @@ relative explicit paths are resolved before changing directories.
 
 ```sh
 rustup target add wasm32-wasip1-threads --toolchain 1.90.0
-WASMTIME=/path/to/wasmtime-36 cargo run --release --example launcher
+WASMTIME=/path/to/wasmtime-36 cargo run --release --features monitor --example launcher
 ```
 
 The standalone example's threaded target configuration sets a 1 GiB maximum
@@ -177,7 +183,7 @@ renderer compiled to WebAssembly and retains its per-frame processing allowance.
 arrows or Space. Relaunch to change settings.
 
 ```sh
-cargo run --release --example launcher -- --environment browser --example client-movement
-cargo run --release --example launcher -- --environment wasm --example client-movement
-cargo run --release --example launcher -- --environment wasm-threads --execution runtime --example client-movement
+cargo run --release --features monitor --example launcher -- --environment browser --example client-movement
+cargo run --release --features monitor --example launcher -- --environment wasm --example client-movement
+cargo run --release --features monitor --example launcher -- --environment wasm-threads --execution runtime --example client-movement
 ```

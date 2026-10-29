@@ -53,7 +53,7 @@ where
         }
     }
 
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     fn process_until_counted(&mut self, time: &I::Time, context: &mut W) -> Option<u64> {
         Some(self.store.as_mut().map_or(0, |store| {
             let application = Application { snapshot_id: self.snapshot_id, wrapper: std::cell::RefCell::new(context), live: true };
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(context.effects, expected_effects);
     }
 
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     #[test]
     fn counted_replay_reports_raw_events_despite_partial_wrapper_consumption() {
         let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 3 } };
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(store.query(Time(20), &mut context).unwrap().recent, 13);
     }
 
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     #[test]
     fn counted_replay_excludes_silent_query_forward_and_prune() {
         let config = CheckpointStorageConfig { checkpoints: CheckpointConfig { interval: 1 } };

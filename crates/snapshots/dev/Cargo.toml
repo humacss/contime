@@ -20,7 +20,7 @@ path = "../benches/api.rs"
 harness = false
 
 [features]
-counters = []
+monitor = []
 
 [dependencies]
 

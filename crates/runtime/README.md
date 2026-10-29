@@ -39,7 +39,7 @@ applications. Global idle helpers are only for controlled tests and benchmarks.
 and worker outcomes in `ShutdownReport`. ConTime does not restart failed threads
 or provide persistence.
 
-The optional `counters` feature enables cumulative worker counters and native
+The optional `monitor` feature enables cumulative worker counters and native
 counted replay through Core. Replay counts include repeated work after late input
 and raw events skipped by application logic; queries and retention forwarding
 are excluded. Enabling counters does not change worker scheduling.
@@ -202,9 +202,9 @@ capacity estimate or a guarantee of zero counter overhead.
 
 ```sh
 cargo bench -p contime-runtime --bench counters -- --test
-cargo bench -p contime-runtime --bench counters --features counters -- --test
+cargo bench -p contime-runtime --bench counters --features monitor -- --test
 cargo bench -p contime-runtime --bench counters -- --save-baseline counters_off
-cargo bench -p contime-runtime --bench counters --features counters -- --baseline counters_off
+cargo bench -p contime-runtime --bench counters --features monitor -- --baseline counters_off
 ```
 
 Two additional one-worker, single-event-submission cases exercise bounded late
@@ -241,7 +241,8 @@ remain those defined in each benchmark source.
 Feature variants were measured in separate sequential runs, not interleaved
 paired trials; changing background load can affect their differences.
 
-Feature sets: `all-features` is the workspace feature union, including optional
+Historical 0.1.0 feature sets (before monitoring enabled counting automatically):
+`all-features` is the workspace feature union, including optional
 worker counters; `default` disables optional counters; `status-no-counters`
 enables Monitor's `runtime` feature without counters. Each table states the
 actual sample count. Inline tests may contain multiple Criterion cases.

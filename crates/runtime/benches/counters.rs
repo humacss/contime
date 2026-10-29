@@ -1,5 +1,5 @@
 //! Compare identical native insertion + live replay workloads with and without
-//! `--features counters`. Startup, input preparation, verification, and shutdown
+//! `--features monitor`. Startup, input preparation, verification, and shutdown
 //! are outside each explicitly timed interval. Idle observation is included.
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -145,7 +145,7 @@ fn trial(worker_count: usize, batch_size: usize, workload: Workload) -> Duration
         statuses.push(reports.recv_timeout(TIMEOUT).unwrap());
     }
     assert!(statuses.iter().all(|status| status.pending_histories == 0 && status.due_histories == 0));
-    #[cfg(feature = "counters")]
+    #[cfg(feature = "monitor")]
     {
         let mut inserted = 0;
         let mut replayed = 0;
@@ -162,7 +162,7 @@ fn trial(worker_count: usize, batch_size: usize, workload: Workload) -> Duration
             Workload::Ordered | Workload::Duplicates => assert_eq!(replayed, inserted),
         }
     }
-    #[cfg(not(feature = "counters"))]
+    #[cfg(not(feature = "monitor"))]
     assert!(statuses.iter().all(|status| status.counters.is_none()));
     // Validate actual retained application state after status, outside timing.
     let snapshots = runtime.query_at(target, 0..HISTORY_COUNT as u128).unwrap();
