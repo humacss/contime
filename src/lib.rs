@@ -14,8 +14,26 @@
     doc = r###"
 # Declarative modules
 
-With `macros`, derive [`ContimeEvent`], [`ContimeSnapshot`] and [`ContimeModule`].
-A module selects the time type and combines its events, snapshots and dependencies.
+With `macros`, derive [`ContimeModule`] on an empty module struct with explicit
+`events`, `snapshots` and child `modules` lists. Events implement
+[`checkpoints::Event`] and [`EventId`]; snapshots implement
+[`checkpoints::Snapshot`], [`SnapshotId`] and [`SnapshotApply`] in ordinary Rust.
+Import common types with `use contime::prelude::*;`. Implement [`EventId`] and [`SnapshotId::snapshot_id`] to choose identity.
+[`SnapshotApply::define`] registers accepted event types and their destination-ID
+callbacks through [`EventSetBuilder`]. [`SnapshotApply::create`] initializes a
+selected history from its first [`EventRef`]. Its instance ID must match the
+selected route.
+
+[`SnapshotApply::apply_batch`] receives `impl ApplyContext<Self>` for one effective
+timestamp. Read repeatable borrowed views with `events::<EventType>()`, applying
+each type in an explicit phase order. Use ordinary `Clone` and, when useful, `Default` implementations for snapshots.
+Only module composition needs a ConTime-specific derive.
+
+A module selects the time type and combines its events, snapshots and dependencies
+into flat enums. Shared registrations use consistent names; aliases can use
+`events = [Added = Incoming]` or the equivalent `snapshots` syntax. Registering
+one concrete type under different names produces conflicting conversion
+implementations at compile time.
 Start managed processing with `ConTime::<App>::start(config)` or drive the same
 module through `manual::ManualConTime::<App>::new(config)` with `manual` enabled.
 All nested declarations must agree on the time type. Generated event and snapshot
@@ -41,7 +59,7 @@ distributed across workers; a history is reconstructed in canonical event order.
 # Getting started
 
 With `macros` enabled, the complete example defines counter events and snapshots
-with derive attributes, starts four workers, and queries two counters at 20 Hz
+with ordinary traits and a module derive, starts four workers, and queries two counters at 20 Hz
 while a producer submits changes.
 Some events affect both counters. It runs for five seconds; `fastrand` only
 varies its example traffic and is not required by ConTime.
@@ -79,17 +97,18 @@ Run this example with `cargo run -p contime --example readme --features macros`.
 /// Shared application contracts and storage adapters for either execution mode.
 pub use crate::contime_core as core;
 pub mod module;
-pub use crate::contime_core::module::Module;
+pub mod prelude;
+pub use crate::contime_core::module::{ApplyContext, EventId, EventRef, EventSetBuilder, Module, SnapshotApply, SnapshotId};
 pub use crate::contime_core::{checkpoints, lanes, AdvanceTime, Input, RejectionReason};
 #[cfg(feature = "runtime")]
 pub use crate::contime_runtime::ConTime as RawConTime;
 #[cfg(feature = "runtime")]
 pub use crate::contime_runtime::ModuleConTime as ConTime;
 #[cfg(feature = "macros")]
-pub use contime_macros::{ContimeEvent, ContimeModule, ContimeSnapshot};
+pub use contime_macros::ContimeModule;
 #[cfg(feature = "macros")]
 #[doc(hidden)]
-pub use contime_macros::{__contime_collect_module, __contime_register_module};
+pub use contime_macros::__contime_collect_module;
 /// Caller-driven processing; creating an instance starts no background threads.
 #[cfg(feature = "manual")]
 pub mod manual;

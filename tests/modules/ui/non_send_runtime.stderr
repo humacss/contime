@@ -1,0 +1,68 @@
+error[E0277]: `Rc<()>` cannot be sent between threads safely
+ --> tests/modules/ui/non_send_runtime.rs:9:13
+  |
+9 |     let _ = ConTime::<App>::start(ConTimeConfig {router_count:1,worker_count:1,placement:Placement::default(),pruning_interval:std::...
+  |             ^^^^^^^^^^^^^^ `Rc<()>` cannot be sent between threads safely
+  |
+  = help: within `AppEventLanes`, the trait `Send` is not implemented for `Rc<()>`
+note: required because it appears within the type `Local`
+ --> tests/modules/ui/non_send_runtime.rs:2:8
+  |
+2 | struct Local(std::rc::Rc<()>);
+  |        ^^^^^
+note: required because it appears within the type `AppEventLanes`
+ --> tests/modules/ui/non_send_runtime.rs:7:8
+  |
+7 | struct App;
+  |        ^^^
+  = note: required for `AppEventLanes` to implement `ThreadInput`
+note: required by a bound in `ModuleConTime`
+ --> src/_symlinks/runtime/src/module.rs
+  |
+  | pub struct ModuleConTime<M: Module, W = ()>
+  |            ------------- required by a bound in this struct
+  | where
+  |     M::EventLanes: ThreadInput,
+  |                    ^^^^^^^^^^^ required by this bound in `ConTime`
+
+error[E0277]: `Rc<()>` cannot be shared between threads safely
+ --> tests/modules/ui/non_send_runtime.rs:9:13
+  |
+9 |     let _ = ConTime::<App>::start(ConTimeConfig {router_count:1,worker_count:1,placement:Placement::default(),pruning_interval:std::...
+  |             ^^^^^^^^^^^^^^ `Rc<()>` cannot be shared between threads safely
+  |
+  = help: within `AppEventLanes`, the trait `Sync` is not implemented for `Rc<()>`
+note: required because it appears within the type `Local`
+ --> tests/modules/ui/non_send_runtime.rs:2:8
+  |
+2 | struct Local(std::rc::Rc<()>);
+  |        ^^^^^
+note: required because it appears within the type `AppEventLanes`
+ --> tests/modules/ui/non_send_runtime.rs:7:8
+  |
+7 | struct App;
+  |        ^^^
+  = note: required for `AppEventLanes` to implement `ThreadInput`
+note: required by a bound in `ModuleConTime`
+ --> src/_symlinks/runtime/src/module.rs
+  |
+  | pub struct ModuleConTime<M: Module, W = ()>
+  |            ------------- required by a bound in this struct
+  | where
+  |     M::EventLanes: ThreadInput,
+  |                    ^^^^^^^^^^^ required by this bound in `ConTime`
+
+error[E0599]: the function or associated item `start` exists for struct `ModuleConTime<App>`, but its trait bounds were not satisfied
+ --> tests/modules/ui/non_send_runtime.rs:9:29
+  |
+5 | #[derive(ContimeModule)]
+  |          ------------- doesn't satisfy `AppEventLanes: ThreadInput`
+...
+9 |     let _ = ConTime::<App>::start(ConTimeConfig {router_count:1,worker_count:1,placement:Placement::default(),pruning_interval:std::t...
+  |                             ^^^^^ function or associated item cannot be called on `ModuleConTime<App>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `Rc<()>: Send`
+          which is required by `AppEventLanes: ThreadInput`
+          `Rc<()>: Sync`
+          which is required by `AppEventLanes: ThreadInput`

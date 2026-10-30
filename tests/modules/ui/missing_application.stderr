@@ -1,0 +1,87 @@
+error[E0599]: the function or associated item `new` exists for struct `EventSet<State>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_application.rs:26:10
+   |
+15 | struct State {
+   | ------------ doesn't satisfy `State: contime::SnapshotApply`
+...
+26 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ function or associated item cannot be called on `EventSet<State>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `State: contime::SnapshotApply`
+note: the trait `contime::SnapshotApply` must be implemented
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   | pub trait SnapshotApply: checkpoints::Snapshot + SnapshotId + 'static {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `snapshot_ids` exists for reference `&'static EventSet<State>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_application.rs:26:10
+   |
+15 | struct State {
+   | ------------ doesn't satisfy `State: contime::SnapshotApply`
+...
+26 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ method cannot be called on `&'static EventSet<State>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `State: contime::SnapshotApply`
+note: the trait `contime::SnapshotApply` must be implemented
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   | pub trait SnapshotApply: checkpoints::Snapshot + SnapshotId + 'static {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `create` exists for reference `&'static EventSet<State>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_application.rs:26:10
+   |
+15 | struct State {
+   | ------------ doesn't satisfy `State: contime::SnapshotApply`
+...
+26 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ this is an associated function, not a method
+   |
+   = note: found the following associated functions; to be used as methods, functions must have a `self` parameter
+note: candidate #1 is defined in the trait `contime::SnapshotApply`
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   |     fn create(snapshot_id: u128, event: EventRef<'_>) -> Self;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: candidate #2 is defined in the trait `contime::checkpoints::ApplyEvents`
+  --> src/_symlinks/core/src/checkpoints.rs
+   |
+   |     fn create(snapshot_id: u128, first_event: &E) -> Self;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the following trait bounds were not satisfied:
+           `State: contime::SnapshotApply`
+note: the trait `contime::SnapshotApply` must be implemented
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   | pub trait SnapshotApply: checkpoints::Snapshot + SnapshotId + 'static {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: disambiguate the associated function for candidate #1
+   |
+26 - #[derive(ContimeModule)]
+26 + #[derive(<&'static EventSet<State> as contime::SnapshotApply>::create(ContimeModule, ContimeModule))]
+   |
+help: disambiguate the associated function for candidate #2
+   |
+26 - #[derive(ContimeModule)]
+26 + #[derive(<&'static EventSet<State> as contime::checkpoints::ApplyEvents>::create(ContimeModule, ContimeModule))]
+   |
+
+error[E0277]: the trait bound `State: contime::SnapshotApply` is not satisfied
+  --> tests/modules/ui/missing_application.rs:26:10
+   |
+26 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ the trait `contime::SnapshotApply` is not implemented for `State`
+   |
+note: required by a bound in `contime::module::apply_batch`
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   | pub fn apply_batch<S: SnapshotApply, I: EventSource>(snapshot: &mut S, raw: checkpoints::ApplyBatch<'_, '_, S::Time, I>) {
+   |                       ^^^^^^^^^^^^^ required by this bound in `apply_batch`
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)

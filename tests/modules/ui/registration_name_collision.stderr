@@ -1,0 +1,17 @@
+error[E0308]: mismatched types
+ --> tests/modules/ui/registration_name_collision.rs:8:10
+  |
+8 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^
+  |          |
+  |          expected `*mut First`, found `*mut Second`
+  |          arguments to this function are incorrect
+  |
+  = note: expected raw pointer `*mut First`
+             found raw pointer `*mut Second`
+note: function defined here
+ --> tests/modules/ui/registration_name_collision.rs:8:10
+  |
+8 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^
+  = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)

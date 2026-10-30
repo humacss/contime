@@ -3,13 +3,13 @@
 //! `CounterChanged -> Counter` uses the same routing/application contracts as the
 //! simple counter case. The additional hash makes event order observable even
 //! when the numeric total is unchanged.
-use contime::{ContimeEvent, ContimeSnapshot};
+use contime::prelude::*;
 
 pub use crate::definition::Time;
 
 /// Add an increment and extend the hash chain of every selected counter.
-#[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
-#[contime_event(id = |event| event.event_id)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+
 pub struct CounterChanged {
     /// Stable source-event identity; also breaks equal-timestamp ordering ties.
     pub event_id: u128,
@@ -19,6 +19,18 @@ pub struct CounterChanged {
     pub time: Time,
     /// Signed increment included in both the total and the hashed contents.
     pub delta: i64,
+}
+impl contime::checkpoints::Event for CounterChanged {
+    type Time = Time;
+    fn time(&self) -> Self::Time {
+        self.time
+    }
+}
+
+impl EventId for CounterChanged {
+    fn event_id(&self) -> u128 {
+        self.event_id
+    }
 }
 
 /// Extend the full previous digest with the complete event contents.
@@ -40,13 +52,8 @@ pub fn chain_hash(previous: &[u8; 32], event: &CounterChanged) -> [u8; 32] {
 }
 
 /// One snapshot's numeric total, application count and complete ordered digest.
-#[derive(Debug, PartialEq, Eq, ContimeSnapshot)]
-#[contime_snapshot(id = |counter_id| *counter_id, events = [CounterChanged => each(self.counter_ids, |id| [*id])], apply = {
-    for event in batch.events {
-        let CounterEvent::CounterChanged(change) = event;
-        self.apply_change(change);
-    }
-})]
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
+
 pub struct Counter {
     /// Stable identity of the counter receiving events.
     pub counter_id: u128,
@@ -58,6 +65,38 @@ pub struct Counter {
     pub event_count: u64,
     /// BLAKE3 chain digest; the initial state contains 32 zero bytes.
     pub hash: [u8; 32],
+}
+impl contime::checkpoints::Snapshot for Counter {
+    type Time = Time;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl SnapshotId for Counter {
+    fn snapshot_id(&self) -> u128 {
+        self.counter_id
+    }
+}
+impl SnapshotApply for Counter {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<CounterChanged>(|event, emit| {
+            for id in &event.counter_ids {
+                emit(*id);
+            }
+        });
+    }
+    fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
+        Self { counter_id: snapshot_id, ..Self::default() }
+    }
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for change in batch.events::<CounterChanged>() {
+            self.apply_change(change);
+        }
+    }
 }
 
 impl Counter {

@@ -1,6 +1,6 @@
 //! Minimal lane contracts for the worker renderer integration test.
 use contime::checkpoints::Timestamp;
-use contime::{AdvanceTime, ContimeEvent, ContimeSnapshot};
+use contime::AdvanceTime;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Time(pub u64);
 impl std::fmt::Display for Time {
@@ -24,20 +24,63 @@ impl AdvanceTime for Time {
         Self(self.0.saturating_sub(other.0))
     }
 }
-#[derive(ContimeEvent)]
-#[contime_event(id = |event| event.id)]
+
 pub struct Increment {
     pub id: u128,
     pub time: Time,
 }
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |id| *id, events = [Increment => [self.id % 4096]], apply = {
-    self.count += batch.events.count() as u64;
-})]
+impl contime::checkpoints::Event for Increment {
+    type Time = Time;
+    fn time(&self) -> Self::Time {
+        self.time
+    }
+}
+
+impl contime::EventId for Increment {
+    fn event_id(&self) -> u128 {
+        self.id
+    }
+}
+
+#[derive(Clone, Default)]
+
 pub struct Counter {
     id: u128,
     time: Time,
     count: u64,
+}
+impl contime::checkpoints::Snapshot for Counter {
+    type Time = Time;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl Counter {
+    pub fn id_for(id: &u128) -> u128 {
+        *id
+    }
+}
+impl contime::SnapshotId for Counter {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.id)
+    }
+}
+impl contime::SnapshotApply for Counter {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<Increment>(|event, emit| {
+            emit(<Counter>::id_for(&(event.id % 4096)));
+        });
+    }
+    fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
+        Self { id: snapshot_id, ..Self::default() }
+    }
+    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+        self.count += batch.events::<Increment>().count() as u64;
+    }
 }
 
 #[path = "../../../lanes.rs"]

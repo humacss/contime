@@ -1,23 +1,23 @@
 error[E0308]: mismatched types
-  --> tests/modules/ui/ambiguous_generic_arguments.rs:3:10
+  --> tests/modules/ui/ambiguous_generic_arguments.rs:20:14
    |
- 3 | #[derive(ContimeEvent)]
-   |          ^^^^^^^^^^^^
-   |          |
-   |          expected `*mut Added<u64>`, found `*mut Added<i64>`
-   |          arguments to this function are incorrect
+20 |     #[derive(ContimeModule)]
+   |              ^^^^^^^^^^^^^
+   |              |
+   |              expected `*mut Added<u64>`, found `*mut Added<i64>`
+   |              arguments to this function are incorrect
 ...
-24 | #[derive(ContimeModule)]
+31 | #[derive(ContimeModule)]
    |          ------------- in this macro invocation
    |
    = note: expected raw pointer `*mut Added<u64>`
               found raw pointer `*mut Added<i64>`
 note: function defined here
-  --> tests/modules/ui/ambiguous_generic_arguments.rs:3:10
+  --> tests/modules/ui/ambiguous_generic_arguments.rs:20:14
    |
- 3 | #[derive(ContimeEvent)]
-   |          ^^^^^^^^^^^^
+20 |     #[derive(ContimeModule)]
+   |              ^^^^^^^^^^^^^
 ...
-24 | #[derive(ContimeModule)]
+31 | #[derive(ContimeModule)]
    |          ------------- in this macro invocation
    = note: this error originates in the macro `::contime::__contime_collect_module` which comes from the expansion of the macro `__contime_module_App` (in Nightly builds, run with -Z macro-backtrace for more info)

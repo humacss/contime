@@ -1,0 +1,10 @@
+error[E0119]: conflicting implementations of trait `From<Added>` for type `AppEventLanes`
+ --> tests/modules/ui/alias_registration_names.rs:9:10
+  |
+9 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^
+  |          |
+  |          first implementation here
+  |          conflicting implementation for `AppEventLanes`
+  |
+  = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)

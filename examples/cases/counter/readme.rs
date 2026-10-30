@@ -1,8 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use contime::checkpoints::{CheckpointConfig, Timestamp};
-use contime::{AdvanceTime, ConTime, ConTimeConfig, ContimeEvent, ContimeModule, ContimeSnapshot, Placement};
+use contime::prelude::*;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 struct Time(u64);
@@ -25,26 +24,63 @@ impl AdvanceTime for Time {
     }
 }
 
-#[derive(ContimeEvent)]
-#[contime_event(id = |event| event.event_id)]
 struct CounterChanged {
     event_id: u128,
     counter_ids: Vec<u128>,
     time: Time,
     delta: i64,
 }
-
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |counter_id| *counter_id, events = [CounterChanged => each(self.counter_ids, |id| [*id])], apply = {
-    for event in batch.events {
-        let CounterEvent::CounterChanged(change) = event;
-        self.value += change.delta;
+impl contime::checkpoints::Event for CounterChanged {
+    type Time = Time;
+    fn time(&self) -> Self::Time {
+        self.time
     }
-})]
+}
+
+impl EventId for CounterChanged {
+    fn event_id(&self) -> u128 {
+        self.event_id
+    }
+}
+
+#[derive(Clone, Default)]
+
 struct Counter {
     counter_id: u128,
     time: Time,
     value: i64,
+}
+impl contime::checkpoints::Snapshot for Counter {
+    type Time = Time;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl SnapshotId for Counter {
+    fn snapshot_id(&self) -> u128 {
+        self.counter_id
+    }
+}
+impl SnapshotApply for Counter {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<CounterChanged>(|event, emit| {
+            for id in &event.counter_ids {
+                emit(*id);
+            }
+        });
+    }
+    fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
+        Self { counter_id: snapshot_id, ..Self::default() }
+    }
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for change in batch.events::<CounterChanged>() {
+            self.value += change.delta;
+        }
+    }
 }
 
 #[derive(ContimeModule)]
@@ -89,7 +125,7 @@ fn main() {
         while start.elapsed() < duration {
             let time = Time(start.elapsed().as_millis() as u64);
             history.advance_to(time).expect("advance processing target");
-            let snapshots = history.query_at(time, [Counter::snapshot_id(1), Counter::snapshot_id(2)]).expect("query current counters");
+            let snapshots = history.query_at(time, [1, 2]).expect("query current counters");
             let values = [1, 2].map(|id| {
                 snapshots
                     .iter()

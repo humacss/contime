@@ -12,43 +12,111 @@
 //! count from two to three. Request-scoped insertion responses precede queries.
 //! Application time uses logical milliseconds, including negative timestamps.
 
-use contime::{ConTime, ConTimeConfig, ContimeEvent, ContimeModule, ContimeSnapshot};
+use contime::prelude::*;
 use std::{error::Error, io, time::Duration};
 
-#[derive(ContimeEvent)]
-#[contime_event(id = |event| contentid::typed_content_id_u128(
-    "OrderedValue.v1", &(event.time, event.list_id, u32::from(event.value))
-))]
 struct OrderedValue {
     time: i64,
     list_id: u128,
     value: char,
 }
-
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |list_id| contentid::typed_content_id_u128("OrderedList.v1", list_id), events = [OrderedValue], apply = {
-    for event in batch.events {
-        let OrderedListEvent::OrderedValue(event) = event;
-        self.values.push((event.time, event.value));
+impl contime::checkpoints::Event for OrderedValue {
+    type Time = i64;
+    fn time(&self) -> Self::Time {
+        self.time
     }
-})]
+}
+
+impl EventId for OrderedValue {
+    fn event_id(&self) -> u128 {
+        contentid::typed_content_id_u128("OrderedValue.v1", &(self.time, self.list_id, u32::from(self.value)))
+    }
+}
+
+#[derive(Clone, Default)]
 struct OrderedList {
     time: i64,
     list_id: u128,
     values: Vec<(i64, char)>,
 }
-
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |list_id| contentid::typed_content_id_u128("ValueStatistics.v1", list_id), events = [OrderedValue], apply = {
-    for event in batch.events {
-        let ValueStatisticsEvent::OrderedValue(_) = event;
-        self.count += 1;
+impl contime::checkpoints::Snapshot for OrderedList {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
     }
-})]
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl OrderedList {
+    fn id_for(list_id: &u128) -> u128 {
+        contentid::typed_content_id_u128("OrderedList.v1", list_id)
+    }
+}
+impl SnapshotId for OrderedList {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.list_id)
+    }
+}
+impl SnapshotApply for OrderedList {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<OrderedValue>(|event, emit| {
+            emit(OrderedList::id_for(&event.list_id));
+        });
+    }
+    fn create(_snapshot_id: u128, event: EventRef<'_>) -> Self {
+        let Some(event) = event.get::<OrderedValue>() else { unreachable!("the builder registers OrderedValue") };
+        Self { list_id: event.list_id, ..Self::default() }
+    }
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for event in batch.events::<OrderedValue>() {
+            self.values.push((event.time, event.value));
+        }
+    }
+}
+
+#[derive(Clone, Default)]
 struct ValueStatistics {
     time: i64,
     list_id: u128,
     count: usize,
+}
+impl contime::checkpoints::Snapshot for ValueStatistics {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl ValueStatistics {
+    fn id_for(list_id: &u128) -> u128 {
+        contentid::typed_content_id_u128("ValueStatistics.v1", list_id)
+    }
+}
+impl SnapshotId for ValueStatistics {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.list_id)
+    }
+}
+impl SnapshotApply for ValueStatistics {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<OrderedValue>(|event, emit| {
+            emit(ValueStatistics::id_for(&event.list_id));
+        });
+    }
+    fn create(_snapshot_id: u128, event: EventRef<'_>) -> Self {
+        let Some(event) = event.get::<OrderedValue>() else { unreachable!("the builder registers OrderedValue") };
+        Self { list_id: event.list_id, ..Self::default() }
+    }
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for _ in batch.events::<OrderedValue>() {
+            self.count += 1;
+        }
+    }
 }
 
 #[derive(ContimeModule)]
@@ -95,7 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 return Err(io::Error::other(format!("input rejected: {rejection:?}")).into());
             }
             history.advance_to(30).map_err(api_error)?;
-            let snapshots = history.query_at(30, [OrderedList::snapshot_id(7), ValueStatistics::snapshot_id(7)]).map_err(api_error)?;
+            let snapshots = history.query_at(30, [OrderedList::id_for(&(7)), ValueStatistics::id_for(&(7))]).map_err(api_error)?;
             for snapshot in snapshots {
                 match *snapshot {
                     AppSnapshotLanes::OrderedList(state) => println!("list {} = {:?}", state.list_id, state.values),

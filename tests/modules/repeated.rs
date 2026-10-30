@@ -1,31 +1,86 @@
 //! Repeated declarative expansions must keep nominal definitions distinct.
-use contime::{ContimeEvent, ContimeModule, ContimeSnapshot};
+use contime::EventId;
+use contime::{ContimeModule, SnapshotId};
 
-// Keep nested derive attribute bodies intact across rustfmt runs.
-#[rustfmt::skip]
 macro_rules! domain {
     ($namespace:ident, $event:ident, $snapshot:ident) => {
         mod $namespace {
             use super::*;
-            #[derive(Hash, ContimeEvent)]
-#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
+            #[derive(Hash)]
+
             pub struct Added {
                 pub time: i64,
                 pub owner: u64,
                 pub amount: i64,
             }
-            #[derive(ContimeSnapshot)]
-            #[contime_snapshot(id = |owner| crate::test_id(std::any::type_name::<Self>(), &(owner,)), events = [Added], apply = {
-                for event in batch.events {
-                    let TotalEvent::Added(event) = event;
-                    self.value += event.amount;
+            impl contime::checkpoints::Event for Added {
+                type Time = i64;
+                fn time(&self) -> Self::Time {
+                    self.time
                 }
-            })]
+            }
+
+            impl contime::EventId for Added {
+                fn event_id(&self) -> u128 {
+                    let event = self;
+                    crate::test_id(std::any::type_name::<Self>(), event)
+                }
+            }
+
+            #[derive(Clone, Default)]
+
             pub struct Total {
                 pub time: i64,
                 pub owner: u64,
                 pub value: i64,
             }
+            impl contime::checkpoints::Snapshot for Total {
+                type Time = i64;
+                fn time(&self) -> &Self::Time {
+                    &self.time
+                }
+                fn set_time(&mut self, time: Self::Time) {
+                    self.time = time;
+                }
+            }
+
+            impl Total {
+                pub fn id_for(owner: &u64) -> u128 {
+                    crate::test_id(std::any::type_name::<Self>(), &(owner,))
+                }
+            }
+            impl contime::SnapshotId for Total {
+                fn snapshot_id(&self) -> u128 {
+                    Self::id_for(&self.owner)
+                }
+            }
+            impl contime::SnapshotApply for Total {
+                fn define(events: &mut contime::EventSetBuilder<Self>) {
+                    events.event::<Added>(|event, emit| {
+                        emit(<Total>::id_for(&(event.owner)));
+                    });
+                }
+                fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
+                    if let Some(event) = event.get::<Added>() {
+                        let mut snapshot = Self::default();
+                        {
+                            snapshot.owner = event.owner;
+                            if contime::SnapshotId::snapshot_id(&snapshot) == snapshot_id {
+                                return snapshot;
+                            }
+                        }
+                    }
+                    panic!("event does not initialize the requested snapshot")
+                }
+                fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+                    {
+                        for event in batch.events::<Added>() {
+                            self.value += event.amount;
+                        }
+                    }
+                }
+            }
+
             use Added as $event;
             use Total as $snapshot;
             #[derive(ContimeModule)]
@@ -49,7 +104,7 @@ fn repeated_macro_definitions_compose_without_collisions_or_lost_lanes() {
     let left = left::Added { time: -1, owner: 7, amount: 2 };
     let right = right::Added { time: -1, owner: 7, amount: 3 };
     assert_ne!(left.event_id(), right.event_id());
-    assert_ne!(left::Total::snapshot_id(7), right::Total::snapshot_id(7));
+    assert_ne!(left::Total::default().snapshot_id(), right::Total::default().snapshot_id());
     let mut contime = contime::manual::ManualConTime::<App>::new(contime::manual::ManualConfig {
         queue_capacity: std::num::NonZeroUsize::new(32).unwrap(),
         checkpoints: contime::checkpoints::CheckpointConfig { interval: 2 },
@@ -58,7 +113,7 @@ fn repeated_macro_definitions_compose_without_collisions_or_lost_lanes() {
     let values = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let output = values.clone();
     contime
-        .query_at(0, [left::Total::snapshot_id(7), right::Total::snapshot_id(7)], move |states| {
+        .query_at(0, [left::Total::id_for(&(7)), right::Total::id_for(&(7))], move |states| {
             *output.borrow_mut() = states
                 .into_iter()
                 .map(|state| match *state {

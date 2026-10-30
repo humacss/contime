@@ -1,81 +1,64 @@
-//! Attribute grammar and shared inspection of named struct fields.
-use proc_macro2::TokenStream;
+//! Explicit registration names are checked against actual Rust type equality.
 use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
-    Data, DeriveInput, Expr, Fields, Ident, Member, Path, Token, Type,
+    DeriveInput, Ident, Path, Token, Type,
 };
-
 #[derive(Default)]
 pub struct Options {
-    pub time: Option<Expr>,
-    pub id: Option<Expr>,
-    pub hash: Option<bool>,
-    pub clone: Option<bool>,
-    pub default: Option<bool>,
-    pub apply: Option<syn::Block>,
-    pub create: Option<Expr>,
-    pub events: Vec<Route>,
-    pub snapshots: Vec<Path>,
-    pub modules: Vec<Path>,
     pub time_type: Option<Type>,
+    pub events: Vec<Lane>,
+    pub snapshots: Vec<Lane>,
+    pub modules: Vec<Path>,
 }
-pub struct Route {
-    pub event: Path,
-    pub target: Option<Expr>,
+pub struct Lane {
+    pub name: Ident,
+    pub path: Path,
 }
-impl Parse for Route {
+impl Parse for Lane {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        Ok(Self {
-            event: input.parse()?,
-            target: if input.peek(Token![=>]) {
-                input.parse::<Token![=>]>()?;
-                Some(input.parse()?)
-            } else {
-                None
-            },
-        })
+        if input.peek(Ident) && input.peek2(Token![=]) {
+            let name = input.parse()?;
+            input.parse::<Token![=]>()?;
+            Ok(Self { name, path: input.parse()? })
+        } else {
+            let path: Path = input.parse()?;
+            Ok(Self { name: path.segments.last().unwrap().ident.clone(), path })
+        }
     }
 }
 impl Options {
-    pub fn read(input: &syn::DeriveInput, module: bool) -> syn::Result<Self> {
+    pub fn read(input: &DeriveInput) -> syn::Result<Self> {
         let mut out = Self::default();
+        let mut seen = std::collections::HashSet::new();
         for attr in &input.attrs {
-            if !(attr.path().is_ident("contime")
-                || attr.path().is_ident("contime_event")
-                || attr.path().is_ident("contime_snapshot")
-                || attr.path().is_ident("contime_module"))
-            {
+            if !attr.path().is_ident("contime_module") {
                 continue;
             }
             attr.parse_nested_meta(|meta| {
-                let key = meta.path.get_ident().ok_or_else(|| meta.error("expected option name"))?.to_string();
+                let name = meta.path.get_ident().ok_or_else(|| meta.error("expected an option name"))?.to_string();
+                if !seen.insert(name.clone()) {
+                    return Err(meta.error("duplicate module option"));
+                }
                 let value = meta.value()?;
-                match key.as_str() {
-                    "time" if module => out.time_type = Some(value.parse()?),
-                    "time" => out.time = Some(value.parse()?),
-                    "id" => out.id = Some(value.parse()?),
-                    "hash" => out.hash = Some(value.parse::<syn::LitBool>()?.value),
-                    "clone" => out.clone = Some(value.parse::<syn::LitBool>()?.value),
-                    "default" => out.default = Some(value.parse::<syn::LitBool>()?.value),
-                    "apply" => out.apply = Some(value.parse()?),
-                    "create" if !module => out.create = Some(value.parse()?),
-                    "events" => {
-                        let content;
-                        syn::bracketed!(content in value);
-                        out.events = Punctuated::<Route, Token![,]>::parse_terminated(&content)?.into_iter().collect();
-                    }
-                    "snapshots" | "modules" => {
-                        let content;
-                        syn::bracketed!(content in value);
-                        let paths = Punctuated::<Path, Token![,]>::parse_terminated(&content)?.into_iter().collect();
-                        if key == "snapshots" {
-                            out.snapshots = paths;
+                match name.as_str() {
+                    "time" => out.time_type = Some(value.parse()?),
+                    "events" | "snapshots" => {
+                        let list;
+                        syn::bracketed!(list in value);
+                        let lanes = Punctuated::<Lane, Token![,]>::parse_terminated(&list)?.into_iter().collect();
+                        if name == "events" {
+                            out.events = lanes;
                         } else {
-                            out.modules = paths;
+                            out.snapshots = lanes;
                         }
                     }
-                    _ => return Err(meta.error("unknown ConTime option")),
+                    "modules" => {
+                        let list;
+                        syn::bracketed!(list in value);
+                        out.modules = Punctuated::<Path, Token![,]>::parse_terminated(&list)?.into_iter().collect();
+                    }
+                    _ => return Err(meta.error("expected time, events, snapshots or modules")),
                 }
                 Ok(())
             })?;
@@ -83,113 +66,46 @@ impl Options {
         Ok(out)
     }
 }
-pub fn variant(path: &Path) -> Ident {
-    path.segments.last().unwrap().ident.clone()
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn parses_routing_and_apply() {
-        let input = syn::parse_quote! {
-            #[contime(id = |owner| u128::from(*owner), events = [Added, Other => [self.other], Multi => each(self.targets, |item| [item])], apply = { for event in batch.events {} })]
-            struct Counter { owner: u64, time: i64 }
-        };
-        let options = Options::read(&input, false).unwrap();
-        assert_eq!(options.events.len(), 3);
-        assert!(options.events[0].target.is_none());
-        assert!(options.events[2].target.is_some());
-        assert!(options.apply.is_some());
-    }
-    #[test]
-    fn rejects_unknown_options() {
+    fn explicit_names_and_bare_types_share_the_same_list_syntax() {
         let input = syn::parse_quote!(
-            #[contime(hahs = false)]
-            struct E {
-                time: i64,
-            }
+            #[contime_module(time=i64,events=[Added,Added=Incoming],snapshots=[State=domain::Total],modules=[child::Module])]
+            struct App;
         );
-        assert!(Options::read(&input, false).is_err());
-    }
-    #[test]
-    fn parses_module_time() {
-        let input = syn::parse_quote!(
-            #[contime_module(time = i64, modules = [left::Child], events = [Added], snapshots = [Counter])]
-            struct Root;
-        );
-        let options = Options::read(&input, true).unwrap();
+        let options = Options::read(&input).unwrap();
+        assert_eq!(options.events[0].name, options.events[1].name);
+        assert!(options.events[1].path.is_ident("Incoming"));
+        assert_eq!(options.snapshots[0].name, "State");
         assert_eq!(options.modules.len(), 1);
-        assert!(options.time_type.is_some());
     }
-
+    #[test]
+    fn repeated_options_and_nonmodule_options_are_rejected() {
+        for input in [
+            syn::parse_quote!(
+                #[contime_module(time=i64,time=u64)]
+                struct App;
+            ),
+            syn::parse_quote!(
+                #[contime_module(hash = true)]
+                struct App;
+            ),
+        ] {
+            assert!(Options::read(&input).is_err());
+        }
+    }
     #[test]
     #[ignore = "Criterion parser benchmark; run explicitly with --ignored --nocapture"]
-    fn benchmark_routing_options() {
-        let input: syn::DeriveInput = syn::parse_quote! {
-            #[contime_snapshot(id=|owner| u128::from(*owner),events=[Added,Other=>[self.other],Multi=>each(self.targets,|item|[item])],apply={for _ in batch.events{}})]
-            struct Counter {owner:u64,time:i64}
-        };
-        let mut criterion = criterion::Criterion::default();
-        criterion.bench_function("macros/parse_routing_options", |bench| {
-            bench.iter(|| criterion::black_box(Options::read(&input, false).unwrap()))
-        });
-        criterion.final_summary();
-    }
-}
-
-pub(crate) fn fields(input: &DeriveInput) -> syn::Result<Vec<(&syn::Ident, &Type)>> {
-    match &input.data {
-        Data::Struct(s) => match &s.fields {
-            Fields::Named(fields) => Ok(fields.named.iter().map(|f| (f.ident.as_ref().unwrap(), &f.ty)).collect()),
-            _ => Err(syn::Error::new_spanned(input, "ConTime requires named fields")),
-        },
-        _ => Err(syn::Error::new_spanned(input, "ConTime requires a struct")),
-    }
-}
-pub(crate) fn time(input: &DeriveInput, options: &Options) -> syn::Result<(Expr, Type)> {
-    let expr = options.time.clone().unwrap_or_else(|| syn::parse_quote!(self.time));
-    let member = match &expr {
-        Expr::Field(f) if literal_self(&f.base) => &f.member,
-        _ => return Err(syn::Error::new_spanned(expr, "time must name a timestamp field, for example self.time")),
-    };
-    let ty = fields(input)?
-        .into_iter()
-        .find(|(id, _)| member == &Member::Named((*id).clone()))
-        .map(|(_, ty)| ty.clone())
-        .ok_or_else(|| syn::Error::new_spanned(&expr, "timestamp field not found"))?;
-    Ok((expr, ty))
-}
-pub(crate) fn literal_self(expr: &Expr) -> bool {
-    matches!(expr, Expr::Path(path) if path.qself.is_none() && path.path.is_ident("self"))
-}
-pub(crate) fn bounds(mut generics: syn::Generics, fields: &[(&syn::Ident, &Type)], traits: TokenStream) -> syn::Generics {
-    for (_, ty) in fields {
-        generics.make_where_clause().predicates.push(syn::parse_quote!(#ty: #traits));
-    }
-    generics
-}
-
-#[cfg(test)]
-mod field_tests {
-    use super::*;
-    #[test]
-    fn timestamp_requires_a_literal_self_field() {
+    fn benchmark_module_options() {
         let input = syn::parse_quote!(
-            #[contime_event(time=other.time)]
-            struct Added {
-                time: i64,
-            }
+            #[contime_module(time=i64,events=[Added,Other],snapshots=[Counter],modules=[Shared])]
+            struct App;
         );
-        let options = Options::read(&input, false).unwrap();
-        assert!(time(&input, &options).unwrap_err().to_string().contains("time must name a timestamp field"));
-    }
-}
-
-/// ID algorithms are supplied by the application, rather than selected by a derive.
-pub(crate) fn id_closure<'a>(input: &DeriveInput, options: &'a Options) -> syn::Result<&'a syn::ExprClosure> {
-    match &options.id {
-        Some(Expr::Closure(closure)) => Ok(closure),
-        _ => Err(syn::Error::new_spanned(input, "id must be a closure returning u128")),
+        let mut criterion = criterion::Criterion::default();
+        criterion.bench_function("macros/parse_module_options", |b| b.iter(|| criterion::black_box(Options::read(&input).unwrap())));
+        criterion.final_summary();
     }
 }

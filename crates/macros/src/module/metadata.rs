@@ -1,5 +1,5 @@
 //! Definition-site aliases and the cross-crate metadata callback protocol.
-use crate::attributes::{variant, Options};
+use crate::attributes::Options;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
@@ -32,14 +32,12 @@ fn list<T: Parse>(input: ParseStream<'_>) -> syn::Result<Vec<T>> {
     Ok(content.parse_terminated(T::parse, Token![,])?.into_iter().collect())
 }
 pub(super) struct Lane {
-    pub(super) key: syn::LitStr,
     pub(super) name: Ident,
     pub(super) path: Path,
 }
 impl Parse for Lane {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         Ok(Self {
-            key: input.parse()?,
             name: input.parse()?,
             path: {
                 input.parse::<Token![=]>()?;
@@ -118,10 +116,9 @@ pub(super) fn lane_tokens(lanes: &[Lane]) -> Vec<TokenStream> {
     lanes
         .iter()
         .map(|l| {
-            let k = &l.key;
             let n = &l.name;
             let p = &l.path;
-            quote!(#k #n=#p)
+            quote!(#n=#p)
         })
         .collect()
 }
@@ -138,44 +135,13 @@ pub(super) fn pending_tokens(pending: &[Pending]) -> Vec<TokenStream> {
 }
 
 pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
-    register(Registration { input, keys: Vec::new(), key: None })
-}
-pub struct Registration {
-    input: DeriveInput,
-    keys: Vec<syn::LitStr>,
-    pub(super) key: Option<syn::LitStr>,
-}
-impl Parse for Registration {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let key = Some(input.parse()?);
-        let definition;
-        syn::braced!(definition in input);
-        Ok(Self { input: definition.parse()?, keys: list(input)?, key })
-    }
-}
-pub fn register(mut state: Registration) -> syn::Result<TokenStream> {
-    if let Some(key) = state.key.take() {
-        state.keys.push(key);
-    }
-    let options = Options::read(&state.input, true)?;
-    let paths = options.events.iter().map(|event| event.event.clone()).chain(options.snapshots.iter().cloned()).collect::<Vec<_>>();
-    if let Some(path) = paths.get(state.keys.len()) {
-        let mut metadata_path = path.clone();
-        for segment in &mut metadata_path.segments {
-            segment.arguments = syn::PathArguments::None;
-        }
-        let root = crate::expansion::root();
-        let input = &state.input;
-        let keys = &state.keys;
-        return Ok(quote!(#metadata_path!(@contime_definition #root::__contime_register_module; {#input} [#(#keys),*]);));
-    }
-    derive_registered(state.input, state.keys)
-}
-fn derive_registered(input: DeriveInput, keys: Vec<syn::LitStr>) -> syn::Result<TokenStream> {
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(&input.generics, "module markers currently require concrete types"));
     }
-    let options = Options::read(&input, true)?;
+    if !matches!(&input.data, syn::Data::Struct(data) if matches!(data.fields,syn::Fields::Unit)) {
+        return Err(syn::Error::new_spanned(&input, "module markers must be empty unit structs"));
+    }
+    let options = Options::read(&input)?;
     let root = crate::expansion::root();
     let name = &input.ident;
     let vis = &input.vis;
@@ -190,19 +156,18 @@ fn derive_registered(input: DeriveInput, keys: Vec<syn::LitStr>) -> syn::Result<
     let mut deps = Vec::new();
     for (index, event) in options.events.iter().enumerate() {
         let alias = format_ident!("Event{}", index);
-        let n = variant(&event.event);
-        let path = definition_path(&event.event);
+        let n = &event.name;
+        let path = definition_path(&event.path);
         aliases.push(quote!(pub type #alias=#path;));
-        let key = concrete_key(&keys[index], &event.event);
-        events.push(quote!(#key #n=$($prefix)*::#alias));
+        events.push(quote!(#n=$($prefix)*::#alias));
     }
-    for (index, path) in options.snapshots.iter().enumerate() {
+    for (index, lane) in options.snapshots.iter().enumerate() {
+        let path = &lane.path;
         let alias = format_ident!("Snapshot{}", index);
-        let n = variant(path);
+        let n = &lane.name;
         let path = definition_path(path);
         aliases.push(quote!(pub type #alias=#path;));
-        let key = concrete_key(&keys[options.events.len() + index], &path);
-        snapshots.push(quote!(#key #n=$($prefix)*::#alias));
+        snapshots.push(quote!(#n=$($prefix)*::#alias));
     }
     for (index, path) in options.modules.iter().enumerate() {
         let alias = format_ident!("Module{}", index);
@@ -224,18 +189,44 @@ fn derive_registered(input: DeriveInput, keys: Vec<syn::LitStr>) -> syn::Result<
          #callback!(#root::__contime_collect_module,[#types],[],[#vis #name;#time; [] [] [] []]);
     })
 }
-fn concrete_key(key: &syn::LitStr, path: &Path) -> syn::LitStr {
-    let arguments = &path.segments.last().unwrap().arguments;
-    syn::LitStr::new(&format!("{}{}", key.value(), quote!(#arguments)), key.span())
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn metadata_time_alias_does_not_shadow_a_custom_time_type() {
-        let input = syn::parse_quote! {#[contime_module(time=Time)] struct App;};
-        let generated = derive(input).unwrap().to_string();
-        assert!(generated.contains("pub type __ContimeTime"));
+    fn leaf_paths_require_no_definition_metadata_macro() {
+        let input = syn::parse_quote!(
+            #[contime_module(time=i64,events=[Added],snapshots=[State])]
+            struct App;
+        );
+        let code = derive(input).unwrap().to_string();
+        assert!(code.contains("pub type Event0"));
+        assert!(!code.contains("@ contime_definition"));
+        assert!(!code.contains("Added !"));
+    }
+    #[test]
+    fn lane_metadata_round_trips_with_one_registration_name() {
+        let state: State = syn::parse_quote!(App;i64;[Added=first::Added] [State=second::State] [] []);
+        let events = lane_tokens(&state.events);
+        let snapshots = lane_tokens(&state.snapshots);
+        let parsed: State = syn::parse2(quote!(App;i64;[#(#events),*] [#(#snapshots),*] [] [])).unwrap();
+        assert_eq!(parsed.events[0].name, "Added");
+        assert_eq!(parsed.snapshots[0].name, "State");
+        assert!(!quote!(#(#events)* #(#snapshots)*).into_iter().any(|t| matches!(t, proc_macro2::TokenTree::Literal(_))));
+    }
+    #[test]
+    fn only_concrete_empty_structs_are_module_markers() {
+        for input in [
+            syn::parse_quote!(
+                #[contime_module(time=i64)]
+                struct App<T>(T);
+            ),
+            syn::parse_quote!(
+                #[contime_module(time=i64)]
+                enum App {}
+            ),
+        ] {
+            assert!(derive(input).is_err());
+        }
     }
 }

@@ -1,17 +1,65 @@
-error[E0308]: mismatched types
-  --> tests/modules/ui/event_time.rs:10:10
+error[E0271]: type mismatch resolving `<Added as Event>::Time == i64`
+  --> tests/modules/ui/event_time.rs:37:24
    |
-10 | #[derive(ContimeSnapshot)]
-   |          ^^^^^^^^^^^^^^^
+37 |         events.event::<Added>(|event, emit| {
+   |                        ^^^^^ type mismatch resolving `<Added as Event>::Time == i64`
+   |
+note: expected this to be `i64`
+  --> tests/modules/ui/event_time.rs:8:65
+   |
+ 8 | impl :: contime :: checkpoints :: Event for Added { type Time = u64 ; fn time (& self) -> Self :: Time { self . time } }
+   |                                                                 ^^^
+note: required by a bound in `EventSetBuilder::<S>::event`
+  --> src/_symlinks/core/src/module/event_set.rs
+   |
+   |     pub fn event<E: EventId<Time = S::Time> + 'static>(
+   |                             ^^^^^^^^^^^^^^ required by this bound in `EventSetBuilder::<S>::event`
+
+error[E0271]: type mismatch resolving `<Added as Event>::Time == i64`
+  --> tests/modules/ui/event_time.rs:54:33
+   |
+54 |         for _ in batch.events::<Added>() {}
+   |                                 ^^^^^ type mismatch resolving `<Added as Event>::Time == i64`
+   |
+note: expected this to be `i64`
+  --> tests/modules/ui/event_time.rs:8:65
+   |
+ 8 | impl :: contime :: checkpoints :: Event for Added { type Time = u64 ; fn time (& self) -> Self :: Time { self . time } }
+   |                                                                 ^^^
+note: required by a bound in `events`
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   |     fn events<E: EventId<Time = S::Time> + 'static>(&self) -> impl Iterator<Item = &E>;
+   |                          ^^^^^^^^^^^^^^ required by this bound in `ApplyContext::events`
+
+error[E0271]: type mismatch resolving `<Added as Event>::Time == i64`
+  --> tests/modules/ui/event_time.rs:54:18
+   |
+54 |         for _ in batch.events::<Added>() {}
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^ type mismatch resolving `<Added as Event>::Time == i64`
+   |
+note: expected this to be `i64`
+  --> tests/modules/ui/event_time.rs:8:65
+   |
+ 8 | impl :: contime :: checkpoints :: Event for Added { type Time = u64 ; fn time (& self) -> Self :: Time { self . time } }
+   |                                                                 ^^^
+note: required by a bound in `contime::ApplyContext::events::{anon_assoc#0}`
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   |     fn events<E: EventId<Time = S::Time> + 'static>(&self) -> impl Iterator<Item = &E>;
+   |                          ^^^^^^^^^^^^^^ required by this bound in `ApplyContext::events::{anon_assoc#0}`
+
+error[E0308]: mismatched types
+  --> tests/modules/ui/event_time.rs:58:10
+   |
+58 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^
    |          |
    |          expected `i64`, found `u64`
    |          expected `i64` because of return type
-...
-19 | #[derive(ContimeModule)]
-   |          ------------- in this derive macro expansion
    |
-   = note: this error originates in the macro `::contime::__contime_collect_module` which comes from the expansion of the derive macro `ContimeModule` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
 help: you can convert a `u64` to an `i64` and panic if the converted value doesn't fit
    |
-10 | #[derive(ContimeSnapshot.try_into().unwrap())]
-   |                         ++++++++++++++++++++
+58 | #[derive(ContimeModule.try_into().unwrap())]
+   |                       ++++++++++++++++++++

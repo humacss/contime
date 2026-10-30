@@ -1,0 +1,25 @@
+error[E0308]: mismatched types
+  --> tests/modules/ui/identity_return_type.rs:12:9
+   |
+11 |     fn event_id(&self) -> u128 {
+   |                           ---- expected `u128` because of return type
+12 |         self.raw_id
+   |         ^^^^^^^^^^^ expected `u128`, found `u64`
+   |
+help: you can convert a `u64` to a `u128`
+   |
+12 |         self.raw_id.into()
+   |                    +++++++
+
+error[E0308]: mismatched types
+  --> tests/modules/ui/identity_return_type.rs:26:9
+   |
+25 |     fn id_for(owner: &u64) -> u128 {
+   |                               ---- expected `u128` because of return type
+26 |         *owner
+   |         ^^^^^^ expected `u128`, found `u64`
+   |
+help: you can convert a `u64` to a `u128`
+   |
+26 |         (*owner).into()
+   |         +      ++++++++

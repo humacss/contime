@@ -1,0 +1,33 @@
+error[E0271]: type mismatch resolving `<OtherTime as Event>::Time == i64`
+  --> tests/modules/ui/application_event_set.rs:48:33
+   |
+48 |         for _ in batch.events::<OtherTime>() {}
+   |                                 ^^^^^^^^^ type mismatch resolving `<OtherTime as Event>::Time == i64`
+   |
+note: expected this to be `i64`
+  --> tests/modules/ui/application_event_set.rs:33:69
+   |
+33 | impl :: contime :: checkpoints :: Event for OtherTime { type Time = u64 ; fn time (& self) -> Self :: Time { self . time } }
+   |                                                                     ^^^
+note: required by a bound in `events`
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   |     fn events<E: EventId<Time = S::Time> + 'static>(&self) -> impl Iterator<Item = &E>;
+   |                          ^^^^^^^^^^^^^^ required by this bound in `ApplyContext::events`
+
+error[E0271]: type mismatch resolving `<OtherTime as Event>::Time == i64`
+  --> tests/modules/ui/application_event_set.rs:48:18
+   |
+48 |         for _ in batch.events::<OtherTime>() {}
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ type mismatch resolving `<OtherTime as Event>::Time == i64`
+   |
+note: expected this to be `i64`
+  --> tests/modules/ui/application_event_set.rs:33:69
+   |
+33 | impl :: contime :: checkpoints :: Event for OtherTime { type Time = u64 ; fn time (& self) -> Self :: Time { self . time } }
+   |                                                                     ^^^
+note: required by a bound in `contime::ApplyContext::events::{anon_assoc#0}`
+  --> src/_symlinks/core/src/module/context.rs
+   |
+   |     fn events<E: EventId<Time = S::Time> + 'static>(&self) -> impl Iterator<Item = &E>;
+   |                          ^^^^^^^^^^^^^^ required by this bound in `ApplyContext::events::{anon_assoc#0}`

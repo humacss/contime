@@ -2,7 +2,7 @@
 pub use crate::definition::Time;
 #[cfg(test)]
 use contime::checkpoints::{ApplyEvents, Snapshot};
-use contime::{ContimeEvent, ContimeSnapshot};
+use contime::prelude::*;
 pub const SECOND: i128 = 1_000_000_000;
 /// Fixed arena half-size in the same fixed-point coordinates as positions.
 pub const ARENA_HALF_EXTENT: [i128; 2] = [48 * SECOND, 28 * SECOND];
@@ -49,8 +49,8 @@ impl Direction {
     }
 }
 /// One client changes direction at its original input timestamp.
-#[derive(Clone, Debug, ContimeEvent)]
-#[contime_event(id = |event| event.id)]
+#[derive(Clone, Debug)]
+
 pub struct MovementInput {
     /// Stable event identity; retained retransmissions reuse it.
     pub id: u128,
@@ -63,19 +63,22 @@ pub struct MovementInput {
     /// Identical for all inputs in this run; used when creating or replaying a snapshot.
     pub motion: Motion,
 }
-/// Position is stored in billionths of a terminal world unit, without float drift.
-#[derive(Debug, ContimeSnapshot)]
-#[contime_snapshot(
-    id = |client_id| *client_id,
-    events = [MovementInput],
-    create = |_id, event| Self::spawn(event.client_id, event.motion),
-    apply = {
-        for event in batch.events {
-            let CharacterEvent::MovementInput(input) = event;
-            self.apply_input(input);
-        }
+impl contime::checkpoints::Event for MovementInput {
+    type Time = Time;
+    fn time(&self) -> Self::Time {
+        self.time
     }
-)]
+}
+
+impl EventId for MovementInput {
+    fn event_id(&self) -> u128 {
+        self.id
+    }
+}
+
+/// Position is stored in billionths of a terminal world unit, without float drift.
+#[derive(Debug, Clone, Default)]
+
 pub struct Character {
     /// Destination snapshot ID, one per client. Client 1 belongs to the keyboard.
     pub client_id: u128,
@@ -91,6 +94,38 @@ pub struct Character {
     /// Input applications represented by this snapshot, used for validation.
     pub events: u64,
 }
+impl contime::checkpoints::Snapshot for Character {
+    type Time = Time;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl SnapshotId for Character {
+    fn snapshot_id(&self) -> u128 {
+        self.client_id
+    }
+}
+impl SnapshotApply for Character {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<MovementInput>(|event, emit| {
+            emit(event.client_id);
+        });
+    }
+    fn create(snapshot_id: u128, event: EventRef<'_>) -> Self {
+        let Some(input) = event.get::<MovementInput>() else { unreachable!("the builder registers MovementInput") };
+        Self::spawn(snapshot_id, input.motion)
+    }
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for input in batch.events::<MovementInput>() {
+            self.apply_input(input);
+        }
+    }
+}
+
 impl Character {
     pub fn spawn(client_id: u128, motion: Motion) -> Self {
         let index = client_id.saturating_sub(1);
@@ -151,7 +186,7 @@ mod tests {
         let motion = Motion { client_spacing: 9, movement_speed: 10 };
         let input = |id, t, direction| MovementInput { id, client_id: 2, time: Time(t), direction, motion };
         let east = input(1, 0, Direction::East);
-        let mut state = Character::create(2, &east);
+        let mut state = <Character as ApplyEvents<MovementInput>>::create(2, &east);
         state.apply_input(&east);
         state.apply_input(&input(2, 1_000_000_000, Direction::North));
         state.apply_input(&input(3, 2_000_000_000, Direction::Stop));

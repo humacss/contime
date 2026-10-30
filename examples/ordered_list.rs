@@ -6,35 +6,74 @@
 //! a running application with continuous input should use operation-specific
 //! responses or progress instead.
 
-use contime::{ConTime, ConTimeConfig, ContimeEvent, ContimeModule, ContimeSnapshot};
+use contime::prelude::*;
 use std::{error::Error, io, time::Duration};
 
 // Choose the ID function explicitly. Content ID hashes these event values;
 // repeating the same values produces the same ID and is treated as a retry.
-#[derive(ContimeEvent)]
-#[contime_event(id = |event| contentid::typed_content_id_u128(
-    "OrderedValue.v1", &(event.time, event.list_id, u32::from(event.value))
-))]
+
 struct OrderedValue {
     time: i64,
     list_id: u128,
     value: char,
 }
+impl contime::checkpoints::Event for OrderedValue {
+    type Time = i64;
+    fn time(&self) -> Self::Time {
+        self.time
+    }
+}
 
-// The ID closure selects list_id as the key. Matching event fields route to it.
+impl EventId for OrderedValue {
+    fn event_id(&self) -> u128 {
+        contentid::typed_content_id_u128("OrderedValue.v1", &(self.time, self.list_id, u32::from(self.value)))
+    }
+}
+
+// The builder routes each event to its list; create initializes the list identity.
 // Its explicit namespace keeps this snapshot identity separate from other types.
 // The update rule only appends: ConTime handles ordering and late-event replay.
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |list_id| contentid::typed_content_id_u128("OrderedList.v1", list_id), events = [OrderedValue], apply = {
-    for event in batch.events {
-        let OrderedListEvent::OrderedValue(event) = event;
-        self.values.push((event.time, event.value));
-    }
-})]
+#[derive(Clone, Default)]
 struct OrderedList {
     time: i64,
     list_id: u128,
     values: Vec<(i64, char)>,
+}
+impl contime::checkpoints::Snapshot for OrderedList {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl OrderedList {
+    fn id_for(list_id: &u128) -> u128 {
+        contentid::typed_content_id_u128("OrderedList.v1", list_id)
+    }
+}
+impl SnapshotId for OrderedList {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.list_id)
+    }
+}
+impl SnapshotApply for OrderedList {
+    fn define(events: &mut EventSetBuilder<Self>) {
+        events.event::<OrderedValue>(|event, emit| emit(Self::id_for(&event.list_id)));
+    }
+
+    fn create(_snapshot_id: u128, event: EventRef<'_>) -> Self {
+        let Some(event) = event.get::<OrderedValue>() else { unreachable!("the builder registers OrderedValue") };
+        Self { list_id: event.list_id, ..Self::default() }
+    }
+
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for event in batch.events::<OrderedValue>() {
+            self.values.push((event.time, event.value));
+        }
+    }
 }
 
 // Register both types with one shared timestamp type. Here i64 represents
@@ -81,7 +120,7 @@ fn wait_and_query_list(contime: &ConTime<Values>) -> Result<Vec<(i64, char)>, Bo
     contime.wait_until_idle(Duration::from_secs(5))?;
     assert!(contime.errors().try_iter().next().is_none(), "every insertion must be accepted");
 
-    let snapshots = contime.query_at(30, [OrderedList::snapshot_id(7)]).map_err(api_error)?;
+    let snapshots = contime.query_at(30, [OrderedList::id_for(&(7))]).map_err(api_error)?;
     assert_eq!(snapshots.len(), 1, "the registered list must exist");
     let ValuesSnapshotLanes::OrderedList(list) = &*snapshots[0];
     assert_eq!(list.list_id, 7);

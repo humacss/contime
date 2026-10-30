@@ -1,46 +1,142 @@
+use contime::EventId;
+mod bounds;
+mod builder;
+mod context_api;
 mod external;
 mod generic;
 mod identity;
+mod module_only;
 mod repeated;
 mod routing;
+mod trait_api;
 mod traits;
 
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
-use contime::{ConTime, ConTimeConfig, ContimeEvent, ContimeModule, ContimeSnapshot};
+use contime::{ConTime, ConTimeConfig, ContimeModule};
 
-#[derive(Hash, ContimeEvent)]
-#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
+#[derive(Hash)]
+
 struct Added {
     time: i64,
     counter_id: u128,
     amount: i64,
 }
-
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |counter_id| crate::test_id(std::any::type_name::<Self>(), &(counter_id,)), events = [Added], apply = {
-    for event in batch.events {
-        let CounterEvent::Added(event) = event;
-        self.value += event.amount;
+impl contime::checkpoints::Event for Added {
+    type Time = i64;
+    fn time(&self) -> Self::Time {
+        self.time
     }
-})]
+}
+
+impl contime::EventId for Added {
+    fn event_id(&self) -> u128 {
+        crate::test_id(std::any::type_name::<Self>(), self)
+    }
+}
+
+#[derive(Clone, Default)]
+
 struct Counter {
     time: i64,
     counter_id: u128,
     value: i64,
 }
-
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |counter_id| crate::test_id(std::any::type_name::<Self>(), &(counter_id,)), events = [Added], apply = {
-    for event in batch.events {
-        let CounterStatisticsEvent::Added(_) = event;
-        self.count += 1;
+impl contime::checkpoints::Snapshot for Counter {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
     }
-})]
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl Counter {
+    fn id_for(counter_id: &u128) -> u128 {
+        crate::test_id(std::any::type_name::<Self>(), &(counter_id,))
+    }
+}
+impl contime::SnapshotId for Counter {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.counter_id)
+    }
+}
+impl contime::SnapshotApply for Counter {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<Added>(|event, emit| {
+            emit(Counter::id_for(&event.counter_id));
+        });
+    }
+    fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
+        if let Some(event) = event.get::<Added>() {
+            let mut snapshot = Self::default();
+            {
+                snapshot.counter_id = event.counter_id;
+                if contime::SnapshotId::snapshot_id(&snapshot) == snapshot_id {
+                    return snapshot;
+                }
+            }
+        }
+        panic!("event does not initialize the requested snapshot")
+    }
+    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+        for event in batch.events::<Added>() {
+            self.value += event.amount;
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+
 struct CounterStatistics {
     time: i64,
     counter_id: u128,
     count: usize,
+}
+impl contime::checkpoints::Snapshot for CounterStatistics {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl CounterStatistics {
+    fn id_for(counter_id: &u128) -> u128 {
+        crate::test_id(std::any::type_name::<Self>(), &(counter_id,))
+    }
+}
+impl contime::SnapshotId for CounterStatistics {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.counter_id)
+    }
+}
+impl contime::SnapshotApply for CounterStatistics {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<Added>(|event, emit| {
+            emit(CounterStatistics::id_for(&event.counter_id));
+        });
+    }
+    fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
+        if let Some(event) = event.get::<Added>() {
+            let mut snapshot = Self::default();
+            {
+                snapshot.counter_id = event.counter_id;
+                if contime::SnapshotId::snapshot_id(&snapshot) == snapshot_id {
+                    return snapshot;
+                }
+            }
+        }
+        panic!("event does not initialize the requested snapshot")
+    }
+    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+        for _ in batch.events::<Added>() {
+            self.count += 1;
+        }
+    }
 }
 
 #[derive(ContimeModule)]
@@ -92,11 +188,11 @@ fn values(states: &[Box<AppSnapshotLanes>]) -> (i64, usize) {
 }
 
 fn ids() -> [u128; 2] {
-    [Counter::snapshot_id(7), CounterStatistics::snapshot_id(7)]
+    [Counter::id_for(&(7)), CounterStatistics::id_for(&(7))]
 }
 
 #[test]
-fn derives_supply_stable_ids_and_namespaced_snapshot_ids() {
+fn ordinary_traits_supply_stable_ids_and_namespaced_snapshot_ids() {
     let first = Added { time: -10, counter_id: 7, amount: 3 };
     let duplicate = Added { time: -10, counter_id: 7, amount: 3 };
     let different = Added { time: -10, counter_id: 7, amount: 4 };

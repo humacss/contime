@@ -31,6 +31,7 @@ where
 {
     /// Starts the module with ordinary deterministic application.
     pub fn start(config: ConTimeConfig<M::Time>) -> Result<Self, StartError> {
+        M::validate();
         Ok(Self { inner: RawConTime::start(config, ())? })
     }
     /// Starts the module with hooks around canonical timestamp batches.
@@ -38,6 +39,7 @@ where
     where
         W: ApplyWrapper<M::SnapshotLanes, M::EventLanes> + Clone + Send + 'static,
     {
+        M::validate();
         Ok(ModuleConTime { inner: RawConTime::start(config, wrapper)? })
     }
     /// Starts with local processing observations independent from retention.
@@ -45,6 +47,7 @@ where
         config: ConTimeConfig<M::Time>,
         policy: P,
     ) -> Result<Self, StartError> {
+        M::validate();
         Ok(Self { inner: RawConTime::start_with_progress(config, (), policy)? })
     }
 }

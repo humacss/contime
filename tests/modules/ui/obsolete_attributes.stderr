@@ -1,0 +1,8 @@
+error[E0432]: unresolved imports `contime::ContimeEvent`, `contime::ContimeSnapshot`
+ --> tests/modules/ui/obsolete_attributes.rs:2:15
+  |
+2 | use contime::{ContimeEvent, ContimeSnapshot};
+  |               ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^ no `ContimeSnapshot` in the root
+  |               |
+  |               no `ContimeEvent` in the root
+  |               help: a similar name exists in the module: `contime_events`

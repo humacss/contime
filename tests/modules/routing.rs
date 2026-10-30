@@ -1,9 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
-use contime::{ContimeEvent, ContimeModule, ContimeSnapshot};
+use contime::ContimeModule;
 
-#[derive(ContimeEvent)]
-#[contime_event(id = |event| event.event_id)]
 struct Named {
     event_id: u128,
     time: i64,
@@ -11,33 +9,109 @@ struct Named {
     slot: u32,
     amount: i64,
 }
+impl contime::checkpoints::Event for Named {
+    type Time = i64;
+    fn time(&self) -> Self::Time {
+        self.time
+    }
+}
 
-#[derive(Hash, ContimeEvent)]
-#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
+impl contime::EventId for Named {
+    fn event_id(&self) -> u128 {
+        self.event_id
+    }
+}
+
+#[derive(Hash)]
+
 struct Many {
     time: i64,
     targets: Vec<(u64, u32)>,
     amount: i64,
 }
-
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(
-    id = |owner, slot| crate::test_id(std::any::type_name::<Self>(), &(owner, slot,)),
-    events = [Named => [self.owner, self.slot], Many => each(self.targets, |target| [target.0, target.1])],
-    apply = {
-        for event in batch.events {
-            self.total += match event {
-                TotalEvent::Named(event) => event.amount,
-                TotalEvent::Many(event) => event.amount,
-            };
-        }
+impl contime::checkpoints::Event for Many {
+    type Time = i64;
+    fn time(&self) -> Self::Time {
+        self.time
     }
-)]
+}
+
+impl contime::EventId for Many {
+    fn event_id(&self) -> u128 {
+        crate::test_id(std::any::type_name::<Self>(), self)
+    }
+}
+
+#[derive(Clone, Default)]
+
 struct Total {
     time: i64,
     owner: u64,
     slot: u32,
     total: i64,
+}
+impl contime::checkpoints::Snapshot for Total {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl Total {
+    fn id_for(owner: &u64, slot: &u32) -> u128 {
+        crate::test_id(std::any::type_name::<Self>(), &(owner, slot))
+    }
+}
+impl contime::SnapshotId for Total {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.owner, &self.slot)
+    }
+}
+impl contime::SnapshotApply for Total {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<Named>(|event, emit| {
+            emit(Total::id_for(&event.owner, &event.slot));
+        });
+        events.event::<Many>(|event, emit| {
+            for target in &event.targets {
+                emit(Total::id_for(&target.0, &target.1));
+            }
+        });
+    }
+    fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
+        if let Some(event) = event.get::<Named>() {
+            let mut snapshot = Self::default();
+            {
+                snapshot.owner = event.owner;
+                snapshot.slot = event.slot;
+                if contime::SnapshotId::snapshot_id(&snapshot) == snapshot_id {
+                    return snapshot;
+                }
+            }
+        }
+        if let Some(event) = event.get::<Many>() {
+            let mut snapshot = Self::default();
+            for target in &(event.targets) {
+                snapshot.owner = target.0;
+                snapshot.slot = target.1;
+                if contime::SnapshotId::snapshot_id(&snapshot) == snapshot_id {
+                    return snapshot;
+                }
+            }
+        }
+        panic!("event does not initialize the requested snapshot")
+    }
+    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+        for event in batch.events::<Named>() {
+            self.total += event.amount;
+        }
+        for event in batch.events::<Many>() {
+            self.total += event.amount;
+        }
+    }
 }
 
 #[derive(ContimeModule)]
@@ -61,7 +135,7 @@ fn compound_identities_and_multi_target_routes_preserve_explicit_event_identity(
     let observed = Rc::new(RefCell::new(Vec::new()));
     let output = Rc::clone(&observed);
     history
-        .query_at(0, [Total::snapshot_id(7, 2), Total::snapshot_id(7, 3)], move |states| {
+        .query_at(0, [Total::id_for(&(7), &(2)), Total::id_for(&(7), &(3))], move |states| {
             let mut values = states
                 .into_iter()
                 .map(|state| {
@@ -82,56 +156,151 @@ fn compound_identities_and_multi_target_routes_preserve_explicit_event_identity(
     assert!(history.take_rejections().is_empty());
 }
 
-#[derive(Hash, ContimeEvent)]
-#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
+#[derive(Hash)]
+
 struct Slots {
     time: i64,
     owner: u64,
     slots: Vec<u64>,
 }
+impl contime::checkpoints::Event for Slots {
+    type Time = i64;
+    fn time(&self) -> Self::Time {
+        self.time
+    }
+}
 
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |slot| crate::test_id(std::any::type_name::<Self>(), &(slot,)), events = [Slots => each(self.slots, |slot| [*slot])], apply = {
-    for _event in batch.events {}
-})]
+impl contime::EventId for Slots {
+    fn event_id(&self) -> u128 {
+        crate::test_id(std::any::type_name::<Self>(), self)
+    }
+}
+
+#[derive(Clone, Default)]
+
 struct ScalarSlot {
     time: i64,
     slot: u64,
 }
+impl contime::checkpoints::Snapshot for ScalarSlot {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
 
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |owner, slot| crate::test_id(std::any::type_name::<Self>(), &(owner, slot,)), events = [Slots => each(self.slots, |slot| [self.owner, *slot])], apply = {
-    for _event in batch.events {}
-})]
+impl ScalarSlot {
+    fn id_for(slot: &u64) -> u128 {
+        crate::test_id(std::any::type_name::<Self>(), &(slot,))
+    }
+}
+impl contime::SnapshotId for ScalarSlot {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.slot)
+    }
+}
+impl contime::SnapshotApply for ScalarSlot {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<Slots>(|event, emit| {
+            for slot in &event.slots {
+                emit(ScalarSlot::id_for(slot));
+            }
+        });
+    }
+    fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
+        if let Some(event) = event.get::<Slots>() {
+            let mut snapshot = Self::default();
+            for slot in &(event.slots) {
+                snapshot.slot = *slot;
+                if contime::SnapshotId::snapshot_id(&snapshot) == snapshot_id {
+                    return snapshot;
+                }
+            }
+        }
+        panic!("event does not initialize the requested snapshot")
+    }
+    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+        for _event in batch.events::<Slots>() {}
+    }
+}
+
+#[derive(Clone, Default)]
+
 struct OwnedSlot {
     time: i64,
     owner: u64,
     slot: u64,
 }
+impl contime::checkpoints::Snapshot for OwnedSlot {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl OwnedSlot {
+    fn id_for(owner: &u64, slot: &u64) -> u128 {
+        crate::test_id(std::any::type_name::<Self>(), &(owner, slot))
+    }
+}
+impl contime::SnapshotId for OwnedSlot {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.owner, &self.slot)
+    }
+}
+impl contime::SnapshotApply for OwnedSlot {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<Slots>(|event, emit| {
+            for slot in &event.slots {
+                emit(OwnedSlot::id_for(&event.owner, slot));
+            }
+        });
+    }
+    fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
+        if let Some(event) = event.get::<Slots>() {
+            let mut snapshot = Self::default();
+            for slot in &(event.slots) {
+                snapshot.owner = event.owner;
+                snapshot.slot = *slot;
+                if contime::SnapshotId::snapshot_id(&snapshot) == snapshot_id {
+                    return snapshot;
+                }
+            }
+        }
+        panic!("event does not initialize the requested snapshot")
+    }
+    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+        for _event in batch.events::<Slots>() {}
+    }
+}
 
 #[test]
 fn scalar_each_routes_clone_the_complete_identity_expression() {
-    use contime::module::Route;
     let event = Slots { time: -5, owner: 7, slots: vec![2, 3] };
     let mut ids = Vec::new();
-    ScalarSlot::snapshot_ids(&event, &mut |id| ids.push(id));
-    assert_eq!(ids, [ScalarSlot::snapshot_id(2), ScalarSlot::snapshot_id(3)]);
+    contime::module::EventSet::<ScalarSlot>::new().snapshot_ids(contime::EventRef::new(&event), &mut |id| ids.push(id));
+    assert_eq!(ids, [ScalarSlot::id_for(&2), ScalarSlot::id_for(&3)]);
     for (id, expected) in ids.into_iter().zip([2, 3]) {
-        assert_eq!(ScalarSlot::create(id, &event).unwrap().slot, expected);
+        assert_eq!(contime::module::EventSet::<ScalarSlot>::new().create(id, contime::EventRef::new(&event)).unwrap().slot, expected);
     }
-    assert!(ScalarSlot::create(ScalarSlot::snapshot_id(99), &event).is_none());
+    assert!(contime::module::EventSet::<ScalarSlot>::new().create(ScalarSlot::id_for(&99), contime::EventRef::new(&event)).is_none());
 }
 
 #[test]
 fn compound_each_routes_can_read_event_fields_and_item_values() {
-    use contime::module::Route;
     let event = Slots { time: -5, owner: 7, slots: vec![2, 3] };
     let mut ids = Vec::new();
-    OwnedSlot::snapshot_ids(&event, &mut |id| ids.push(id));
-    assert_eq!(ids, [OwnedSlot::snapshot_id(7, 2), OwnedSlot::snapshot_id(7, 3)]);
+    contime::module::EventSet::<OwnedSlot>::new().snapshot_ids(contime::EventRef::new(&event), &mut |id| ids.push(id));
+    assert_eq!(ids, [OwnedSlot::id_for(&7, &2), OwnedSlot::id_for(&7, &3)]);
     for (id, expected) in ids.into_iter().zip([2, 3]) {
-        let state = OwnedSlot::create(id, &event).unwrap();
+        let state = contime::module::EventSet::<OwnedSlot>::new().create(id, contime::EventRef::new(&event)).unwrap();
         assert_eq!((state.owner, state.slot), (7, expected));
     }
-    assert!(OwnedSlot::create(OwnedSlot::snapshot_id(8, 2), &event).is_none());
+    assert!(contime::module::EventSet::<OwnedSlot>::new().create(OwnedSlot::id_for(&8, &2), contime::EventRef::new(&event)).is_none());
 }

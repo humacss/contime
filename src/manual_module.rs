@@ -31,6 +31,7 @@ where
 impl<M: Module> ManualConTime<M> {
     /// Creates one caller-driven worker using ordinary application.
     pub fn new(config: ManualConfig) -> Self {
+        M::validate();
         Self { inner: RawManualConTime::new(config, ()) }
     }
     /// Creates the worker with custom application hooks.
@@ -38,6 +39,7 @@ impl<M: Module> ManualConTime<M> {
     where
         W: ApplyWrapper<M::SnapshotLanes, M::EventLanes> + 'static,
     {
+        M::validate();
         ManualConTime { inner: RawManualConTime::new(config, wrapper) }
     }
 }
