@@ -1,9 +1,9 @@
 //! Two counters driven by a host loop, without ConTime background threads.
 //!
 //! Included as a complete code sample in the Manual Rust documentation.
-use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
-use contime::manual::{RawManualConTime, ManualConfig};
-use contime::{AdvanceTime, Input};
+use contime::checkpoints::{CheckpointConfig, Timestamp};
+use contime::manual::{ManualConTime, ManualConfig};
+use contime::{AdvanceTime, ContimeEvent, ContimeModule, ContimeSnapshot};
 use std::{
     cell::Cell,
     num::NonZeroUsize,
@@ -25,54 +25,29 @@ impl AdvanceTime for Time {
         Self(self.0.saturating_sub(other.0))
     }
 }
+#[derive(ContimeEvent)]
+#[contime_event(id = |event| event.id)]
 struct Count {
     id: u128,
     time: Time,
     counters: Vec<u128>,
 }
-impl Event for Count {
-    type Time = Time;
-    fn time(&self) -> Time {
-        self.time
-    }
-}
-impl Input for Count {
-    fn event_id(&self) -> u128 {
-        self.id
-    }
-    fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
-        for id in &self.counters {
-            emit(*id)
-        }
-    }
-}
-#[derive(Clone, Default)]
+#[derive(ContimeSnapshot)]
+#[contime_snapshot(id = |id| *id, events = [Count => each(self.counters, |id| [*id])], apply = {
+    self.value += batch.events.count() as u64;
+})]
 struct Counter {
     id: u128,
     time: Time,
     value: u64,
 }
-impl Snapshot for Counter {
-    type Time = Time;
-    fn time(&self) -> &Time {
-        &self.time
-    }
-    fn set_time(&mut self, time: Time) {
-        self.time = time;
-    }
-}
-impl ApplyEvents<Count> for Counter {
-    fn create(id: u128, _: &Count) -> Self {
-        Self { id, ..Self::default() }
-    }
-    fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Time, Count>) {
-        self.value += batch.events.count() as u64;
-    }
-}
+#[derive(ContimeModule)]
+#[contime_module(time = Time, events = [Count], snapshots = [Counter])]
+struct Counters;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut contime = RawManualConTime::<Count, Counter>::new(
+    let mut contime = ManualConTime::<Counters>::new(
         ManualConfig { queue_capacity: NonZeroUsize::new(128).unwrap(), checkpoints: CheckpointConfig { interval: 100 } },
-        (),
     );
     let start = Instant::now();
     let mut next_frame = start;
@@ -84,12 +59,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             submitted += 1;
             let frame = submitted;
             let time = Time(start.elapsed().as_millis() as u64);
-            contime.apply([Count { id: frame, time, counters: if frame % 2 == 0 { vec![1, 2] } else { vec![1] } }])?;
+            contime.apply([Count { id: frame, time, counters: if frame % 2 == 0 { vec![1, 2] } else { vec![1] } }.into()])?;
             contime.advance_to(time)?;
             let rendered = rendered.clone();
-            contime.query_at(time, [1, 2], move |mut states| {
-                states.sort_by_key(|state| state.id);
-                let values = states.iter().map(|state| (state.id, state.value)).collect::<Vec<_>>();
+            contime.query_at(time, [Counter::snapshot_id(1), Counter::snapshot_id(2)], move |states| {
+                let mut values = states.into_iter().map(|state| {
+                    let CountersSnapshotLanes::Counter(state) = *state;
+                    (state.id,state.value)
+                }).collect::<Vec<_>>();
+                values.sort_unstable_by_key(|(id,_)| *id);
                 println!("Frame {frame:2}: {values:?}");
                 rendered.set(frame);
             })?;

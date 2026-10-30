@@ -1,8 +1,8 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
-use contime::{AdvanceTime, ConTimeConfig, Input, Placement, RawConTime};
+use contime::checkpoints::{CheckpointConfig, Timestamp};
+use contime::{AdvanceTime, ConTime, ConTimeConfig, ContimeEvent, ContimeModule, ContimeSnapshot, Placement};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 struct Time(u64);
@@ -25,6 +25,8 @@ impl AdvanceTime for Time {
     }
 }
 
+#[derive(ContimeEvent)]
+#[contime_event(id = |event| event.event_id)]
 struct CounterChanged {
     event_id: u128,
     counter_ids: Vec<u128>,
@@ -32,56 +34,22 @@ struct CounterChanged {
     delta: i64,
 }
 
-impl Event for CounterChanged {
-    type Time = Time;
-
-    fn time(&self) -> Time {
-        self.time
+#[derive(ContimeSnapshot)]
+#[contime_snapshot(id = |counter_id| *counter_id, events = [CounterChanged => each(self.counter_ids, |id| [*id])], apply = {
+    for event in batch.events {
+        let CounterEvent::CounterChanged(change) = event;
+        self.value += change.delta;
     }
-}
-
-impl Input for CounterChanged {
-    fn event_id(&self) -> u128 {
-        self.event_id
-    }
-
-    fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
-        for &counter_id in &self.counter_ids {
-            emit(counter_id);
-        }
-    }
-}
-
-#[derive(Clone, Default)]
+})]
 struct Counter {
     counter_id: u128,
     time: Time,
     value: i64,
 }
 
-impl Snapshot for Counter {
-    type Time = Time;
-
-    fn time(&self) -> &Time {
-        &self.time
-    }
-
-    fn set_time(&mut self, time: Time) {
-        self.time = time;
-    }
-}
-
-impl ApplyEvents<CounterChanged> for Counter {
-    fn create(snapshot_id: u128, _first_event: &CounterChanged) -> Self {
-        Self { counter_id: snapshot_id, ..Self::default() }
-    }
-
-    fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Time, CounterChanged>) {
-        for event in batch.events {
-            self.value += event.delta;
-        }
-    }
-}
+#[derive(ContimeModule)]
+#[contime_module(time = Time, events = [CounterChanged], snapshots = [Counter])]
+struct Counters;
 
 fn main() {
     let config = ConTimeConfig {
@@ -92,7 +60,7 @@ fn main() {
         history_retention: Time(1_000),
         checkpoints: CheckpointConfig { interval: 32 },
     };
-    let history = RawConTime::<CounterChanged, Counter, ()>::start(config, ()).expect("start ConTime");
+    let history = ConTime::<Counters>::start(config).expect("start ConTime");
 
     let start = Instant::now();
     let duration = Duration::from_secs(5);
@@ -112,7 +80,7 @@ fn main() {
                 };
                 let event =
                     CounterChanged { event_id, counter_ids, time: Time(start.elapsed().as_millis() as u64), delta: fastrand::i64(1..=5) };
-                history.apply([event]).expect("enqueue counter change");
+                history.apply([event.into()]).expect("enqueue counter change");
             }
         });
 
@@ -121,8 +89,16 @@ fn main() {
         while start.elapsed() < duration {
             let time = Time(start.elapsed().as_millis() as u64);
             history.advance_to(time).expect("advance processing target");
-            let snapshots = history.query_at(time, [1, 2]).expect("query current counters");
-            let values = [1, 2].map(|id| snapshots.iter().find(|snapshot| snapshot.counter_id == id).map_or(0, |snapshot| snapshot.value));
+            let snapshots = history.query_at(time, [Counter::snapshot_id(1), Counter::snapshot_id(2)]).expect("query current counters");
+            let values = [1, 2].map(|id| {
+                snapshots
+                    .iter()
+                    .find_map(|snapshot| {
+                        let CountersSnapshotLanes::Counter(counter) = &**snapshot;
+                        (counter.counter_id == id).then_some(counter.value)
+                    })
+                    .unwrap_or(0)
+            });
             println!("t={}ms counter 1={} counter 2={}", time.0, values[0], values[1]);
             for rejection in history.errors().try_iter() {
                 eprintln!("rejected input: {rejection:?}");

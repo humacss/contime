@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 use contime::{ContimeEvent, ContimeModule, ContimeSnapshot};
 
 #[derive(ContimeEvent)]
-#[contime_event(id = self.event_id)]
+#[contime_event(id = |event| event.event_id)]
 struct Named {
     event_id: u128,
     time: i64,
@@ -12,7 +12,8 @@ struct Named {
     amount: i64,
 }
 
-#[derive(ContimeEvent)]
+#[derive(Hash, ContimeEvent)]
+#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
 struct Many {
     time: i64,
     targets: Vec<(u64, u32)>,
@@ -21,7 +22,7 @@ struct Many {
 
 #[derive(ContimeSnapshot)]
 #[contime_snapshot(
-    id = [self.owner, self.slot],
+    id = |owner, slot| crate::test_id(std::any::type_name::<Self>(), &(owner, slot,)),
     events = [Named => [self.owner, self.slot], Many => each(self.targets, |target| [target.0, target.1])],
     apply = {
         for event in batch.events {
@@ -81,7 +82,8 @@ fn compound_identities_and_multi_target_routes_preserve_explicit_event_identity(
     assert!(history.take_rejections().is_empty());
 }
 
-#[derive(ContimeEvent)]
+#[derive(Hash, ContimeEvent)]
+#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
 struct Slots {
     time: i64,
     owner: u64,
@@ -89,7 +91,7 @@ struct Slots {
 }
 
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.slot], events = [Slots => each(self.slots, |slot| [*slot])], apply = {
+#[contime_snapshot(id = |slot| crate::test_id(std::any::type_name::<Self>(), &(slot,)), events = [Slots => each(self.slots, |slot| [*slot])], apply = {
     for _event in batch.events {}
 })]
 struct ScalarSlot {
@@ -98,7 +100,7 @@ struct ScalarSlot {
 }
 
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.owner, self.slot], events = [Slots => each(self.slots, |slot| [self.owner, *slot])], apply = {
+#[contime_snapshot(id = |owner, slot| crate::test_id(std::any::type_name::<Self>(), &(owner, slot,)), events = [Slots => each(self.slots, |slot| [self.owner, *slot])], apply = {
     for _event in batch.events {}
 })]
 struct OwnedSlot {

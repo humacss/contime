@@ -214,10 +214,10 @@ fn derive_registered(input: DeriveInput, keys: Vec<syn::LitStr>) -> syn::Result<
     }
     // Public aliases retain definition-site resolution when metadata is expanded elsewhere.
     Ok(quote! {
-        #[doc(hidden)] #[allow(non_snake_case,non_camel_case_types)] pub mod #types {use super::*;pub type Time=#time;#(#aliases)*}
+        #[doc(hidden)] #[allow(non_snake_case,non_camel_case_types)] pub mod #types {use super::*;pub type __ContimeTime=#time;#(#aliases)*}
         #[doc(hidden)] #[macro_export] macro_rules! #exported {
             ($collector:path,[$($prefix:tt)*],[$($ancestors:ident),*],[$($state:tt)*])=>{
-                $collector!{$($state)* #key [$($ancestors),*] $($prefix)*::Time [#(#events),*] [#(#snapshots),*] [#(#deps),*]}
+                $collector!{$($state)* #key [$($ancestors),*] $($prefix)*::__ContimeTime [#(#events),*] [#(#snapshots),*] [#(#deps),*]}
             }
         }
         #[doc(hidden)] pub use #exported as #callback;
@@ -227,4 +227,15 @@ fn derive_registered(input: DeriveInput, keys: Vec<syn::LitStr>) -> syn::Result<
 fn concrete_key(key: &syn::LitStr, path: &Path) -> syn::LitStr {
     let arguments = &path.segments.last().unwrap().arguments;
     syn::LitStr::new(&format!("{}{}", key.value(), quote!(#arguments)), key.span())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn metadata_time_alias_does_not_shadow_a_custom_time_type() {
+        let input = syn::parse_quote! {#[contime_module(time=Time)] struct App;};
+        let generated = derive(input).unwrap().to_string();
+        assert!(generated.contains("pub type __ContimeTime"));
+    }
 }

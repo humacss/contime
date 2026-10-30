@@ -9,7 +9,7 @@ mod model {
     pub struct Payload(pub String);
 
     #[derive(ContimeEvent)]
-    #[contime_event(id = self.id)]
+    #[contime_event(id = |event| event.id)]
     pub struct MessageAdded {
         pub id: u128,
         pub time: i64,
@@ -18,7 +18,7 @@ mod model {
     }
 
     #[derive(ContimeEvent)]
-    #[contime_event(hash = false)]
+    #[contime_event(hash = false, id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
     pub struct Hashed {
         pub time: i64,
         pub owner: u64,
@@ -31,7 +31,7 @@ mod model {
     }
 
     #[derive(ContimeSnapshot)]
-    #[contime_snapshot(clone = false, default = false, id = [self.owner], events = [MessageAdded, Hashed], apply = {
+    #[contime_snapshot(clone = false, default = false, id = |owner| crate::test_id(std::any::type_name::<Self>(), &(owner,)), events = [MessageAdded, Hashed], apply = {
         for event in batch.events {
             self.value += match event {
                 TotalEvent::MessageAdded(event) => event.payload.0.len(),

@@ -26,10 +26,16 @@ pub(super) fn expand(
     routes: &[Route],
     id_fields: &[syn::Ident],
     generics: &syn::Generics,
+    create: Option<&Expr>,
 ) -> syn::Result<TokenStream> {
     let root = crate::expansion::root();
     let name = &input.ident;
     let (ig, tg, wc) = generics.split_for_impl();
+    if let Some(expression) = create {
+        if !matches!(expression, Expr::Closure(closure) if closure.inputs.len()==2) {
+            return Err(syn::Error::new_spanned(expression, "create must be a closure accepting a snapshot ID and a borrowed event"));
+        }
+    }
     let mut implementations = quote!();
     for route in routes {
         let event = &route.event;
@@ -57,10 +63,15 @@ pub(super) fn expand(
         if values.len() != id_fields.len() {
             return Err(syn::Error::new_spanned(event, "route identity must have the same number of components as snapshot identity"));
         }
-        let route_id = quote!(#root::module::identity::<Self,_>(&(#(&(#values),)*)));
+        let route_id = quote!(Self::__contime_snapshot_id(#(&(#values)),*));
         let emit = quote!(emit(#route_id););
         let emit = if let Some(setup) = &setup { quote!(#setup {#emit}) } else { emit };
-        let create = quote!(if snapshot_id==#route_id { let mut snapshot=Self::default(); #(snapshot.#id_fields=(#values).clone();)* return Some(snapshot); });
+        let initialize = if let Some(create) = create {
+            quote! {let __contime_create: fn(u128, &#event)->Self = #create; __contime_create(snapshot_id,__event)}
+        } else {
+            quote!(Self::default())
+        };
+        let create = quote!(if snapshot_id==#route_id { let mut snapshot={#initialize}; #(snapshot.#id_fields=(#values).clone();)* return Some(snapshot); });
         let create = if let Some(setup) = &setup { quote!(#setup {#create}) } else { create };
         implementations.extend(quote! {impl #ig #root::module::Route<#event> for #name #tg #wc {
             fn snapshot_ids(__event:&#event,emit:&mut impl FnMut(u128)) {#emit}

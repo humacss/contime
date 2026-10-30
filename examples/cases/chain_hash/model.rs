@@ -3,13 +3,13 @@
 //! `CounterChanged -> Counter` uses the same routing/application contracts as the
 //! simple counter case. The additional hash makes event order observable even
 //! when the numeric total is unchanged.
-use contime::checkpoints::{ApplyBatch, ApplyEvents, Event, Snapshot};
-use contime::Input;
+use contime::{ContimeEvent, ContimeSnapshot};
 
 pub use crate::definition::Time;
 
 /// Add an increment and extend the hash chain of every selected counter.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
+#[contime_event(id = |event| event.event_id)]
 pub struct CounterChanged {
     /// Stable source-event identity; also breaks equal-timestamp ordering ties.
     pub event_id: u128,
@@ -39,28 +39,14 @@ pub fn chain_hash(previous: &[u8; 32], event: &CounterChanged) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-impl Event for CounterChanged {
-    type Time = Time;
-
-    fn time(&self) -> Time {
-        self.time
-    }
-}
-
-impl Input for CounterChanged {
-    fn event_id(&self) -> u128 {
-        self.event_id
-    }
-
-    fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
-        for &counter_id in &self.counter_ids {
-            emit(counter_id);
-        }
-    }
-}
-
 /// One snapshot's numeric total, application count and complete ordered digest.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, ContimeSnapshot)]
+#[contime_snapshot(id = |counter_id| *counter_id, events = [CounterChanged => each(self.counter_ids, |id| [*id])], apply = {
+    for event in batch.events {
+        let CounterEvent::CounterChanged(change) = event;
+        self.apply_change(change);
+    }
+})]
 pub struct Counter {
     /// Stable identity of the counter receiving events.
     pub counter_id: u128,
@@ -83,30 +69,7 @@ impl Counter {
     }
 }
 
-impl Snapshot for Counter {
-    type Time = Time;
-
-    fn time(&self) -> &Time {
-        &self.time
-    }
-
-    fn set_time(&mut self, time: Time) {
-        self.time = time;
-    }
-}
-
-impl ApplyEvents<CounterChanged> for Counter {
-    fn create(snapshot_id: u128, _first_event: &CounterChanged) -> Self {
-        // Initialize the prefix; the first event is applied through the batch.
-        Self { counter_id: snapshot_id, ..Self::default() }
-    }
-
-    fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Time, CounterChanged>) {
-        for event in batch.events {
-            self.apply_change(event);
-        }
-    }
-}
+crate::definition::single_lane!(CounterChanged => Counter);
 
 #[cfg(test)]
 #[path = "model_tests.rs"]

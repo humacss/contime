@@ -9,14 +9,15 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     let root = crate::expansion::root();
     let name = &input.ident;
     let vis = &input.vis;
-    let definition::Definition { time, time_ty, id_fields, id_types, auto, generics: snapshot_generics } =
+    let definition::Definition { id, time, time_ty, id_fields, id_types, auto, generics: snapshot_generics } =
         definition::read(&input, &options)?;
     let (ig, tg, wc) = snapshot_generics.split_for_impl();
+    let parameters = (0..id_fields.len()).map(|index| format_ident!("__contime_key_{}", index)).collect::<Vec<_>>();
     let event_name = format_ident!("{}Event", name);
     let routes = &options.events;
     let apply = options.apply.as_ref().ok_or_else(|| syn::Error::new_spanned(name, "snapshot requires apply = { ... }"))?;
     let apply_statements = &apply.stmts;
-    let implementations = routing::expand(&input, routes, &id_fields, &snapshot_generics)?;
+    let implementations = routing::expand(&input, routes, &id_fields, &snapshot_generics, options.create.as_ref())?;
     let borrowed_events::BorrowedEvents { declaration: borrowed_events, view_arms, event_bounds } =
         borrowed_events::expand(&input, routes, &event_name)?;
     let mut apply_generics = snapshot_generics.clone();
@@ -32,7 +33,14 @@ pub(crate) fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     Ok(quote! {
         #metadata
         #auto
-        impl #ig #name #tg #wc { #[doc = "Constructs this snapshot type's namespaced logical identity."] #vis fn snapshot_id(#(#id_fields:#id_types),*)->u128 { #root::module::identity::<Self,_>(&(#(#id_fields,)*)) } }
+        impl #ig #name #tg #wc {
+            #[doc = "Calculates this snapshot's identity using its explicit key closure."]
+            #vis fn snapshot_id(#(#id_fields:#id_types),*)->u128 { Self::__contime_snapshot_id(#(&#id_fields),*) }
+            fn __contime_snapshot_id(#(#parameters: &#id_types),*)->u128 {
+                let __contime_id: fn(#(&#id_types),*) -> u128 = #id;
+                __contime_id(#(#parameters),*)
+            }
+        }
         impl #ig #root::checkpoints::Snapshot for #name #tg #wc {type Time=#time_ty;fn time(&self)->&Self::Time {&#time} fn set_time(&mut self,time:Self::Time){#time=time;}}
         #borrowed_events
         #implementations
@@ -55,9 +63,18 @@ mod tests {
     use super::*;
     fn generic_snapshot() -> DeriveInput {
         syn::parse_quote! {
-            #[contime_snapshot(id=[self.owner],events=[Added<T>],apply={for _ in batch.events {}})]
+            #[contime_snapshot(id=|owner| u128::from(*owner),events=[Added<T>],apply={for _ in batch.events {}})]
             struct Counter<T:Clone+Default> {time:i64,owner:u64,value:T}
         }
+    }
+    #[test]
+    fn custom_creation_uses_the_first_event_before_applying_inputs() {
+        let input = syn::parse_quote! {
+            #[contime_snapshot(id=|owner| *owner,events=[Moved],create=|_id,event| Self{owner:event.owner,time:0,position:event.origin},apply={})]
+            struct Position {time:i64,owner:u128,position:i64}
+        };
+        let generated = expand(input).unwrap().to_string();
+        assert!(generated.contains("__contime_create (snapshot_id , __event)"));
     }
     #[test]
     #[ignore = "Criterion expansion benchmark; run explicitly with --ignored --nocapture"]

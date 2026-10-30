@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
-  --> tests/modules/ui/config_time.rs:10:70
+  --> tests/modules/ui/config_time.rs:11:70
    |
-10 | fn start(config: ConTimeConfig<u64>) { let _ = ConTime::<App>::start(config); }
+11 | fn start(config: ConTimeConfig<u64>) { let _ = ConTime::<App>::start(config); }
    |                                                --------------------- ^^^^^^ expected `ConTimeConfig<i64>`, found `ConTimeConfig<u64>`
    |                                                |
    |                                                arguments to this function are incorrect

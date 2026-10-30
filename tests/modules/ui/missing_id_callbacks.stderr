@@ -1,0 +1,12 @@
+error: id must be a closure returning u128
+ --> tests/modules/ui/missing_id_callbacks.rs:4:1
+  |
+4 | struct MissingEvent {time:i64,id:u128}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: id must be a closure returning u128
+ --> tests/modules/ui/missing_id_callbacks.rs:7:1
+  |
+7 | / #[contime_snapshot(events=[MissingEvent],apply={})]
+8 | | struct MissingSnapshot {time:i64,id:u128}
+  | |_________________________________________^

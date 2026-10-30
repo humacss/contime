@@ -46,3 +46,8 @@ pub trait Example: 'static {
         None
     }
 }
+
+#[path = "lanes.rs"]
+mod lanes;
+#[allow(unused_imports)] // Some hosts use the schema without selecting a case.
+pub(crate) use lanes::single_lane;

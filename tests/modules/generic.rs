@@ -2,7 +2,8 @@ use std::{cell::RefCell, hash::Hash, ops::AddAssign, rc::Rc};
 
 use contime::{ContimeEvent, ContimeModule, ContimeSnapshot};
 
-#[derive(ContimeEvent)]
+#[derive(Hash, ContimeEvent)]
+#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
 struct GenericEvent<T: Hash + 'static> {
     time: i64,
     counter_id: u128,
@@ -10,7 +11,7 @@ struct GenericEvent<T: Hash + 'static> {
 }
 
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.counter_id], events = [GenericEvent<T>], apply = {
+#[contime_snapshot(id = |counter_id| crate::test_id(std::any::type_name::<Self>(), &(counter_id,)), events = [GenericEvent<T>], apply = {
     for event in batch.events {
         let GenericSnapshotEvent::GenericEvent(event) = event;
         self.value += event.amount.clone();

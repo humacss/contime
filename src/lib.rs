@@ -40,12 +40,14 @@ distributed across workers; a history is reconstructed in canonical event order.
 
 # Getting started
 
-The complete example below defines counter events and snapshots, starts four
-workers, and queries two counters at 20 Hz while a producer submits changes.
+With `macros` enabled, the complete example defines counter events and snapshots
+with derive attributes, starts four workers, and queries two counters at 20 Hz
+while a producer submits changes.
 Some events affect both counters. It runs for five seconds; `fastrand` only
 varies its example traffic and is not required by ConTime.
-Pass `()` as the application wrapper unless you need the hooks in
-[`checkpoints::ApplyWrapper`]. No application framework or transport is required.
+The module facade supplies the ordinary application wrapper. Use
+`start_with_wrapper` for custom [`checkpoints::ApplyWrapper`] hooks.
+No application framework or transport is required.
 
 # Completion and retention
 
@@ -70,9 +72,9 @@ submissions; inspect its [`ShutdownReport`] for router and worker outcomes.
 
 # Example
 
-Run this example with `cargo run -p contime --example readme`."###
+Run this example with `cargo run -p contime --example readme --features macros`."###
 )]
-#![cfg_attr(feature = "runtime", doc = concat!("```rust\n", include_str!("../examples/cases/counter/readme.rs"), "\n```\n"))]
+#![cfg_attr(all(feature = "runtime", feature = "macros"), doc = concat!("```rust\n", include_str!("../examples/cases/counter/readme.rs"), "\n```\n"))]
 
 /// Shared application contracts and storage adapters for either execution mode.
 pub use crate::contime_core as core;

@@ -1,5 +1,6 @@
 mod external;
 mod generic;
+mod identity;
 mod repeated;
 mod routing;
 mod traits;
@@ -8,7 +9,8 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use contime::{ConTime, ConTimeConfig, ContimeEvent, ContimeModule, ContimeSnapshot};
 
-#[derive(ContimeEvent)]
+#[derive(Hash, ContimeEvent)]
+#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
 struct Added {
     time: i64,
     counter_id: u128,
@@ -16,7 +18,7 @@ struct Added {
 }
 
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.counter_id], events = [Added], apply = {
+#[contime_snapshot(id = |counter_id| crate::test_id(std::any::type_name::<Self>(), &(counter_id,)), events = [Added], apply = {
     for event in batch.events {
         let CounterEvent::Added(event) = event;
         self.value += event.amount;
@@ -29,7 +31,7 @@ struct Counter {
 }
 
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.counter_id], events = [Added], apply = {
+#[contime_snapshot(id = |counter_id| crate::test_id(std::any::type_name::<Self>(), &(counter_id,)), events = [Added], apply = {
     for event in batch.events {
         let CounterStatisticsEvent::Added(_) = event;
         self.count += 1;
@@ -169,4 +171,12 @@ fn a_module_instance_can_be_monitored_without_unwrapping_its_runtime() {
     monitor.begin(Duration::ZERO).unwrap();
     monitor.cancel();
     history.shutdown();
+}
+
+fn test_id<T: std::hash::Hash + ?Sized>(namespace: &str, value: &T) -> u128 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::hash::DefaultHasher::new();
+    namespace.hash(&mut hash);
+    value.hash(&mut hash);
+    u128::from(hash.finish())
 }

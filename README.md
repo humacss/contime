@@ -101,19 +101,24 @@ snapshots and composable modules with derive macros:
 ```toml
 [dependencies]
 contime = { version = "0.1.2", features = ["macros"] }
+contentid = "1.0.0"
 ```
 
 An **event** describes a timestamped change. A **snapshot** defines the state,
 its stable identity fields, and how it applies those changes. A **module**
 registers the types together and selects their shared time type.
 
-This example builds a list in application order. The snapshot only appends;
-ConTime supplies the events in timestamp order, even when they arrive out of order:
+The [ordered-list walkthrough](examples/ordered_list.rs) defines all
+three. Its snapshot only appends values; ConTime supplies timestamp order even
+when events arrive late. The core application rule is:
 
 ```rust
 use contime::{ConTime, ContimeEvent, ContimeModule, ContimeSnapshot};
 
 #[derive(ContimeEvent)]
+#[contime_event(id = |event| contentid::typed_content_id_u128(
+    "OrderedValue.v1", &(event.time, event.list_id, u32::from(event.value))
+))]
 struct OrderedValue {
     time: i64,
     list_id: u128,
@@ -121,7 +126,7 @@ struct OrderedValue {
 }
 
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.list_id], events = [OrderedValue], apply = {
+#[contime_snapshot(id = |list_id| contentid::typed_content_id_u128("OrderedList.v1", list_id), events = [OrderedValue], apply = {
     for event in batch.events {
         let OrderedListEvent::OrderedValue(event) = event;
         self.values.push((event.time, event.value));
@@ -132,56 +137,46 @@ struct OrderedList {
     list_id: u128,
     values: Vec<(i64, char)>,
 }
+```
 
+Both derives require an ID closure returning `u128`. ConTime uses the result
+unchanged, without adding hashing or a namespace. This example explicitly chooses
+Content ID. You can instead call your own function or return a supplied event ID
+with `id = |event| event.id`. Snapshot closure parameters name the logical key
+fields used for routing and queries. See the [identity guide](guides/modules/README.md#define-data-and-application-rules).
+
+Register the event and snapshot together with their common time type:
+
+```rust
 #[derive(ContimeModule)]
 #[contime_module(time = i64, events = [OrderedValue], snapshots = [OrderedList])]
 struct Values;
 ```
 
-The derives supply the required trait implementations, including event hashing
-and snapshot cloning and defaults. Routing reads `list_id` from each event;
-`OrderedList::snapshot_id` calculates the same identity for queries.
-
-With a `ConTimeConfig<i64>` named `config`, start one instance using that module:
+With configuration supplied by your application, the basic flow is to start,
+submit an event, advance the processing target, and query state:
 
 ```rust
 let contime = ConTime::<Values>::start(config)?;
-
-// Arrival order: c, a, b.
-contime.apply([
-    OrderedValue { time: 30, list_id: 7, value: 'c' }.into(),
-    OrderedValue { time: -10, list_id: 7, value: 'a' }.into(),
-    OrderedValue { time: 10, list_id: 7, value: 'b' }.into(),
-])?;
+contime.apply([OrderedValue { time: 30, list_id: 7, value: 'c' }.into()])?;
 contime.advance_to(30)?;
 let snapshots = contime.query_at(30, [OrderedList::snapshot_id(7)])?;
-for snapshot in snapshots {
-    let ValuesSnapshotLanes::OrderedList(state) = *snapshot;
-    println!("{:?}", state.values);
-}
-
-let report = contime.shutdown();
 ```
 
-Once all three inputs have been admitted, the query returns
-`[(-10, 'a'), (10, 'b'), (30, 'c')]`. Appending in arrival order would produce
-`[(30, 'c'), (-10, 'a'), (10, 'b')]` instead. Events at the same timestamp are
-ordered by event ID.
-
-Use this flow inside a function returning `Result<_, AppError>`, where your
-application error converts `contime::StartError` and `contime::ApiError` through
-`From`. The `?` operator propagates failures instead of panicking. The
-[complete runnable example](examples/cases/modules/main.rs) supplies configuration,
-error handling and dependent modules, and inserts a late value after an initial query:
+`apply` queues work; queries observe available admitted history. The complete
+example is a controlled demonstration: it inserts `c`, `a`, then `b` individually,
+waits for replay between insertions, and asserts each queried result before printing
+`[(-10, 'a'), (10, 'b'), (30, 'c')]`. Idle waits are test/benchmark helpers;
+live applications should observe operation-specific responses or progress.
 
 ```sh
-cargo run --example modules --features macros
+cargo run --example ordered_list --features macros
 ```
 
-`apply` queues work. Queries read available admitted history, so a running
-application generally submits events as they arrive and queries when it needs
-state, rather than waiting after every event. The usage guide explains responses,
-rejections, configuration and retention.
+The [complete source](examples/ordered_list.rs) explains event identity,
+snapshot routing, configuration, every intermediate assertion, and shutdown.
+See also [dependent modules](examples/modules.rs) and the
+[live counter, hash-chain and movement examples](examples/README.md).
 
 Runtime and built-in integer time support are enabled by default. The
 [module walkthrough](guides/modules/README.md) explains module dependencies,

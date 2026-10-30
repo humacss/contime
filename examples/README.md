@@ -6,7 +6,9 @@ repository root. Use `--release` when comparing performance.
 
 | Example | Command | Read first |
 | --- | --- | --- |
-| README walkthrough | `cargo run --example readme` | [`cases/counter/readme.rs`](cases/counter/readme.rs), the complete README program |
+| Ordered list with derives | `cargo run --example ordered_list --features macros` | [`ordered_list.rs`](ordered_list.rs), step-by-step late insertion assertions |
+| Dependent modules | `cargo run --example modules --features macros` | [`modules.rs`](modules.rs), shared dependencies and multiple snapshot types |
+| Finite counter walkthrough | `cargo run --example readme --features macros` | [`cases/counter/readme.rs`](cases/counter/readme.rs), a complete counter program |
 | Live counters | `cargo run --release --all-features --example counter` | [`cases/counter/model.rs`](cases/counter/model.rs), then [`cases/counter/setup.rs`](cases/counter/setup.rs) |
 | Order-sensitive hash chains | `cargo run --release --all-features --example chain_hash` | [`cases/chain_hash/model.rs`](cases/chain_hash/model.rs), then [`cases/chain_hash/setup.rs`](cases/chain_hash/setup.rs) |
 | Client movement | `cargo run --release --all-features --example client_movement` | [`cases/client_movement/model.rs`](cases/client_movement/model.rs), then [`cases/client_movement/setup.rs`](cases/client_movement/setup.rs) |
@@ -14,18 +16,23 @@ repository root. Use `--release` when comparing performance.
 | WebAssembly in a browser | See [`environments/browser/README.md`](environments/browser/README.md) | Shared WebAssembly Rust code, then [`environments/browser/src/clock.rs`](environments/browser/src/clock.rs) |
 
 Start the launcher with `cargo run --example launcher`; it handles build features
-for you. Native workload targets compile Runtime, Manual, monitoring, and simulation
+for you. Native workload targets compile the derives, Runtime, Manual, monitoring, and simulation
 together. If running one directly, use `--all-features`, then choose
 `--execution runtime|manual` for live cases. Ordinary library consumers still get
 only Runtime by default.
 
 The `readme` walkthrough stays intentionally small and uses Runtime. It is run
-directly with `cargo run --example readme` and is not offered by the launcher. The separate
+directly with `cargo run --example readme --features macros` and is not offered by the launcher. The separate
 [Manual code sample](cases/counter/manual.rs) is included in the Rust documentation;
 it is not another Cargo example target. Use `counter --execution manual`
 to run the live counter with Manual processing.
 
 ## Folder layout
+
+Small, self-contained walkthroughs live directly under `examples/`:
+[`ordered_list.rs`](ordered_list.rs) introduces event application and queries;
+[`modules.rs`](modules.rs) builds on that with dependent modules. Run them directly;
+they do not use the launcher. The folders below organize the live diagnostic examples.
 
 - [`cases/`](cases/README.md): application models, lane setup, simulator callbacks,
   correctness checks and self-contained walkthroughs.

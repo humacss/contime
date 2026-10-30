@@ -85,3 +85,10 @@ cargo test --examples
 cargo clippy --examples --bench monitor_ui -- -D warnings
 cargo bench --features monitor --bench monitor_ui -- --test
 ```
+
+## Concrete lane adapters
+
+`lanes.rs` connects one derived event/snapshot pair to the live hosts' concrete
+model types. The `single_lane!` adapter forwards event IDs, routes, initialization
+and application to the derives; it supplies no identity or simulation policy.
+The case files retain their explicit `id`, `events`, `create` and `apply` rules.

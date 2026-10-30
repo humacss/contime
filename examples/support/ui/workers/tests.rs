@@ -224,10 +224,10 @@ fn wide_counts_never_silently_lose_their_magnitude() {
     assert!(text.contains("1,000,0…"), "Prune must be visibly marked when clipped: {text}");
 }
 
-#[cfg(feature = "runtime")]
+#[cfg(all(feature = "runtime", feature = "macros"))]
 #[path = "tests/model.rs"]
 mod native;
-#[cfg(feature = "runtime")]
+#[cfg(all(feature = "runtime", feature = "macros"))]
 #[test]
 fn native_worker_reports_render_without_advancing_or_querying() {
     for workers in [1, 4] {

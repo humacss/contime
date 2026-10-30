@@ -14,6 +14,7 @@ pub struct Options {
     pub clone: Option<bool>,
     pub default: Option<bool>,
     pub apply: Option<syn::Block>,
+    pub create: Option<Expr>,
     pub events: Vec<Route>,
     pub snapshots: Vec<Path>,
     pub modules: Vec<Path>,
@@ -58,6 +59,7 @@ impl Options {
                     "clone" => out.clone = Some(value.parse::<syn::LitBool>()?.value),
                     "default" => out.default = Some(value.parse::<syn::LitBool>()?.value),
                     "apply" => out.apply = Some(value.parse()?),
+                    "create" if !module => out.create = Some(value.parse()?),
                     "events" => {
                         let content;
                         syn::bracketed!(content in value);
@@ -91,7 +93,7 @@ mod tests {
     #[test]
     fn parses_routing_and_apply() {
         let input = syn::parse_quote! {
-            #[contime(id = [self.owner], events = [Added, Other => [self.other], Multi => each(self.targets, |item| [item])], apply = { for event in batch.events {} })]
+            #[contime(id = |owner| u128::from(*owner), events = [Added, Other => [self.other], Multi => each(self.targets, |item| [item])], apply = { for event in batch.events {} })]
             struct Counter { owner: u64, time: i64 }
         };
         let options = Options::read(&input, false).unwrap();
@@ -125,7 +127,7 @@ mod tests {
     #[ignore = "Criterion parser benchmark; run explicitly with --ignored --nocapture"]
     fn benchmark_routing_options() {
         let input: syn::DeriveInput = syn::parse_quote! {
-            #[contime_snapshot(id=[self.owner],events=[Added,Other=>[self.other],Multi=>each(self.targets,|item|[item])],apply={for _ in batch.events{}})]
+            #[contime_snapshot(id=|owner| u128::from(*owner),events=[Added,Other=>[self.other],Multi=>each(self.targets,|item|[item])],apply={for _ in batch.events{}})]
             struct Counter {owner:u64,time:i64}
         };
         let mut criterion = criterion::Criterion::default();
@@ -181,5 +183,13 @@ mod field_tests {
         );
         let options = Options::read(&input, false).unwrap();
         assert!(time(&input, &options).unwrap_err().to_string().contains("time must name a timestamp field"));
+    }
+}
+
+/// ID algorithms are supplied by the application, rather than selected by a derive.
+pub(crate) fn id_closure<'a>(input: &DeriveInput, options: &'a Options) -> syn::Result<&'a syn::ExprClosure> {
+    match &options.id {
+        Some(Expr::Closure(closure)) => Ok(closure),
+        _ => Err(syn::Error::new_spanned(input, "id must be a closure returning u128")),
     }
 }

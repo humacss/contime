@@ -65,8 +65,10 @@ jobs:
         run: cargo +${{ matrix.toolchain }} run -p contime --example launcher -- --environment native --example counter --no-setup -- --headless --duration 1 --workers 2 --snapshots 8 --events-per-second 1000
       - name: Run Manual counter through the launcher
         run: cargo +${{ matrix.toolchain }} run -p contime --example launcher -- --environment native --execution manual --example counter --no-setup -- --headless --duration 1 --snapshots 8 --events-per-second 1000
-      - name: Run README walkthrough
-        run: cargo +${{ matrix.toolchain }} run -p contime --example readme
+      - name: Run counter walkthrough with derives
+        run: cargo +${{ matrix.toolchain }} run -p contime --example readme --features macros
+      - name: Run ordered-list walkthrough
+        run: cargo +${{ matrix.toolchain }} run -p contime --example ordered_list --features macros
       - name: Run client-movement example
         run: cargo +${{ matrix.toolchain }} run -p contime --all-features --example client_movement -- --headless --duration 1 --clients 8
 
@@ -86,8 +88,10 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo +1.90.0 doc --workspace --all-features --no-deps
-      - name: Run README walkthrough
-        run: cargo +1.90.0 run -p contime --example readme
+      - name: Run counter walkthrough with derives
+        run: cargo +1.90.0 run -p contime --example readme --features macros
+      - name: Run ordered-list walkthrough
+        run: cargo +1.90.0 run -p contime --example ordered_list --features macros
       - name: Check standalone component benchmark targets
         run: cargo +1.90.0 bench --workspace --all-features --no-run
       - name: Check packaged component sources

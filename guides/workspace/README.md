@@ -107,7 +107,7 @@ configurable browser host.
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p contime --example readme
+cargo run -p contime --example readme --features macros
 cargo run -p contime --all-features --example client_movement -- --headless --duration 2
 cargo test --doc --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps

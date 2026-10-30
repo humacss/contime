@@ -34,7 +34,7 @@ include = [
 [features]
 default = ["runtime", "time"]
 time = []
-macros = ["dep:contime-macros", "dep:contentid", "dep:blake3"]
+macros = ["dep:contime-macros"]
 runtime = ["dep:traitstub"]
 monitor = []
 simulator = []
@@ -42,13 +42,12 @@ manual = ["dep:traitstub"]
 
 [dependencies]
 contime-macros = { path = "crates/macros", version = "0.1.2", optional = true }
-contentid = { version = "1.0.0", default-features = false, features = ["local"], optional = true }
-blake3 = { version = "1.8", optional = true }
 ahash = "0.8"
 crossbeam-channel = "0.5"
 traitstub = { version = "0.1.0", optional = true }
 
 [dev-dependencies]
+contentid = { version = "1.0.0", default-features = false }
 trybuild = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -141,22 +140,22 @@ path = "examples/support/launcher/main.rs"
 [[example]]
 name = "readme"
 path = "examples/cases/counter/readme.rs"
-required-features = ["runtime"]
+required-features = ["runtime", "macros"]
 
 [[example]]
 name = "counter"
 path = "examples/support/entrypoints/counter.rs"
-required-features = ["runtime", "manual", "monitor", "simulator"]
+required-features = ["runtime", "manual", "monitor", "simulator", "macros"]
 
 [[example]]
 name = "chain_hash"
 path = "examples/support/entrypoints/chain_hash.rs"
-required-features = ["runtime", "manual", "monitor", "simulator"]
+required-features = ["runtime", "manual", "monitor", "simulator", "macros"]
 
 [[example]]
 name = "client_movement"
 path = "examples/support/entrypoints/client_movement.rs"
-required-features = ["runtime", "manual", "monitor", "simulator"]
+required-features = ["runtime", "manual", "monitor", "simulator", "macros"]
 
 [[test]]
 name = "modules"
@@ -165,5 +164,10 @@ required-features = ["macros", "runtime", "manual", "time"]
 
 [[example]]
 name = "modules"
-path = "examples/cases/modules/main.rs"
+path = "examples/modules.rs"
+required-features = ["macros", "runtime", "time"]
+
+[[example]]
+name = "ordered_list"
+path = "examples/ordered_list.rs"
 required-features = ["macros", "runtime", "time"]

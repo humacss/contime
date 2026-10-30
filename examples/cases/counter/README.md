@@ -64,11 +64,11 @@ establish correct event ordering; the chain-hash case checks that separately.
 ## Run
 
 For a small public-API walkthrough, start with [`readme.rs`](readme.rs), the program
-shown in the root README. It runs two counters for five seconds and queries them
+included in the Rust API documentation. It runs two counters for five seconds and queries them
 at 20 Hz. Its small random changes and printing are self-contained.
 
 ```sh
-cargo run --example readme
+cargo run --example readme --features macros
 ```
 
 For the configurable live dashboard:

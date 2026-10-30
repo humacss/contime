@@ -7,14 +7,15 @@ macro_rules! domain {
     ($namespace:ident, $event:ident, $snapshot:ident) => {
         mod $namespace {
             use super::*;
-            #[derive(ContimeEvent)]
+            #[derive(Hash, ContimeEvent)]
+#[contime_event(id = |event| crate::test_id(std::any::type_name::<Self>(), event))]
             pub struct Added {
                 pub time: i64,
                 pub owner: u64,
                 pub amount: i64,
             }
             #[derive(ContimeSnapshot)]
-            #[contime_snapshot(id = [self.owner], events = [Added], apply = {
+            #[contime_snapshot(id = |owner| crate::test_id(std::any::type_name::<Self>(), &(owner,)), events = [Added], apply = {
                 for event in batch.events {
                     let TotalEvent::Added(event) = event;
                     self.value += event.amount;

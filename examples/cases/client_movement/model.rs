@@ -1,9 +1,8 @@
 //! Timestamped direction changes and one independently reconstructed character.
 pub use crate::definition::Time;
-use contime::{
-    checkpoints::{ApplyBatch, ApplyEvents, Event, Snapshot},
-    Input,
-};
+#[cfg(test)]
+use contime::checkpoints::{ApplyEvents, Snapshot};
+use contime::{ContimeEvent, ContimeSnapshot};
 pub const SECOND: i128 = 1_000_000_000;
 /// Fixed arena half-size in the same fixed-point coordinates as positions.
 pub const ARENA_HALF_EXTENT: [i128; 2] = [48 * SECOND, 28 * SECOND];
@@ -50,7 +49,8 @@ impl Direction {
     }
 }
 /// One client changes direction at its original input timestamp.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, ContimeEvent)]
+#[contime_event(id = |event| event.id)]
 pub struct MovementInput {
     /// Stable event identity; retained retransmissions reuse it.
     pub id: u128,
@@ -63,22 +63,19 @@ pub struct MovementInput {
     /// Identical for all inputs in this run; used when creating or replaying a snapshot.
     pub motion: Motion,
 }
-impl Event for MovementInput {
-    type Time = Time;
-    fn time(&self) -> Time {
-        self.time
-    }
-}
-impl Input for MovementInput {
-    fn event_id(&self) -> u128 {
-        self.id
-    }
-    fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
-        emit(self.client_id);
-    }
-}
 /// Position is stored in billionths of a terminal world unit, without float drift.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, ContimeSnapshot)]
+#[contime_snapshot(
+    id = |client_id| *client_id,
+    events = [MovementInput],
+    create = |_id, event| Self::spawn(event.client_id, event.motion),
+    apply = {
+        for event in batch.events {
+            let CharacterEvent::MovementInput(input) = event;
+            self.apply_input(input);
+        }
+    }
+)]
 pub struct Character {
     /// Destination snapshot ID, one per client. Client 1 belongs to the keyboard.
     pub client_id: u128,
@@ -132,25 +129,8 @@ impl Character {
         self.events += 1;
     }
 }
-impl Snapshot for Character {
-    type Time = Time;
-    fn time(&self) -> &Time {
-        &self.time
-    }
-    fn set_time(&mut self, time: Time) {
-        self.time = time;
-    }
-}
-impl ApplyEvents<MovementInput> for Character {
-    fn create(id: u128, event: &MovementInput) -> Self {
-        Self::spawn(id, event.motion)
-    }
-    fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Time, MovementInput>) {
-        for event in batch.events {
-            self.apply_input(event);
-        }
-    }
-}
+crate::definition::single_lane!(MovementInput => Character);
+
 #[cfg(test)]
 mod tests {
     use super::*;

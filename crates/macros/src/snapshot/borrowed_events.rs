@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn borrowed_snapshot_enum_retains_generic_payload_parameter() {
         let input: DeriveInput = syn::parse_quote! {
-            #[contime_snapshot(id=[self.owner],events=[Added<T>],apply={for _ in batch.events {}})]
+            #[contime_snapshot(id=|owner| u128::from(*owner),events=[Added<T>],apply={for _ in batch.events {}})]
             struct Counter<T:Clone+Default> {time:i64,owner:u64,value:T}
         };
         let options = crate::attributes::Options::read(&input, false).unwrap();

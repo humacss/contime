@@ -6,7 +6,9 @@ The `macros` feature re-exports `ContimeEvent`, `ContimeSnapshot`, and
 `ContimeModule` from `contime-macros` in ConTime 0.1.2. Enable them with
 `contime = { version = "0.1.2", features = ["macros"] }`.
 
-Run the complete [dependent-module ordered-list example](../../examples/cases/modules/main.rs):
+Start with the [step-by-step ordered-list walkthrough](../../examples/ordered_list.rs)
+for individual late insertions and intermediate assertions. Then run the complete
+[dependent-module example](../../examples/modules.rs):
 
 ```sh
 cargo run --example modules --features macros
@@ -14,14 +16,34 @@ cargo run --example modules --features macros
 
 ## Define data and application rules
 
-An event supplies time and stable identity. The event derive implements `Hash`
-automatically for default whole-event identity. Use `#[contime_event(id = self.key)]`
-to hash selected identity data instead, or `hash = false` with a handwritten `Hash`.
-IDs use typed local content hashing, with no serialization requirement. They are
-not stable wire identities across compiler/type changes; choose explicit protocol
-identity rules for data exchanged between different programs.
+Both events and snapshots require an explicit ID closure returning `u128`.
+ConTime uses its result unchanged; it chooses no hash algorithm or namespace.
+The closure can call your own function, read a supplied ID, or use a library.
+For example, an event with a stored ID can use:
 
-A snapshot declares stable identity fields, its accepted events, and `apply = { ... }`.
+```rust,ignore
+#[derive(ContimeEvent)]
+#[contime_event(id = |event| event.id)]
+struct Added {
+    time: i64,
+    id: u128,
+    counter_id: u64,
+    amount: i64,
+}
+```
+
+The event closure receives `&Self`. It need not hash the other fields; they do not
+need to implement `Hash`. If your chosen function uses Rust hashing, derive
+`Hash` explicitly or set `hash = true`. ConTime does not add a type namespace,
+so you own ID uniqueness and stability across registered types.
+
+The [ordered-list example](../../examples/ordered_list.rs) explicitly uses
+Content ID 1.0. It hashes a named tuple of primitive event values and uses a
+separate namespace for the snapshot key. Neither type needs a serialization
+implementation. A different ID function can be substituted without changing
+ConTime's execution code.
+
+A snapshot declares an ID closure over its logical key fields, its accepted events, and `apply = { ... }`.
 The macro supplies the signature, a generated borrowed event enum, `batch`, and
 `Clone`/`Default`. Use `clone = false` or `default = false` to keep handwritten
 implementations. Its default constructor is initialization only; ConTime sets the
@@ -29,7 +51,7 @@ initial timestamp from the actual time domain minimum.
 
 ```rust,ignore
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.counter_id], events = [Added], apply = {
+#[contime_snapshot(id = |counter_id| contentid::typed_content_id_u128("Counter.v1", counter_id), events = [Added], apply = {
     for event in batch.events {
         let CounterEvent::Added(event) = event;
         self.value += event.amount;
@@ -38,11 +60,17 @@ initial timestamp from the actual time domain minimum.
 struct Counter { counter_id: u64, time: i64, value: i64 }
 ```
 
-The identity fields are read from each event by default. An explicit relationship
+For initial state beyond `Default`, use `create = |snapshot_id, event| ...`.
+The initializer receives the requested ID and borrowed first event; route key
+fields are filled afterward. The movement example uses this to preserve the
+configured starting position before any inputs are applied.
+
+The snapshot closure parameter names identify fields on the snapshot; each
+parameter borrows its field. Those same field names are read from each event by default. An explicit relationship
 can map different fields, such as `Added => [self.owner]`, or visit several IDs
-with `Added => each(self.targets, |target| [target])`. Generated
-`Counter::snapshot_id(counter_id)` uses the exact same typed identity calculation.
-Two snapshot types have distinct identity namespaces. Events remain shared between
+with `Added => each(self.targets, |target| [*target])`. Generated
+`Counter::snapshot_id(counter_id)` calls the same ID closure used by routing.
+Choose distinct namespaces or nonoverlapping IDs for different snapshot types. Events remain shared between
 histories; multi-target application is not a cross-worker transaction.
 
 ## Compose once and start one instance

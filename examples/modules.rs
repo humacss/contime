@@ -1,7 +1,24 @@
+//! Compose dependent modules into one ConTime instance.
+//!
+//! Run with `cargo run --example modules --features macros`.
+//! Start with `ordered_list.rs` for the smaller step-by-step walkthrough.
+//!
+//! Values registers the ordered list. Statistics depends on Values and adds a
+//! count snapshot; App includes both modules. Their shared Values dependency is
+//! registered once. Each input updates the list and its statistics, whose snapshot
+//! IDs remain distinct even though they share the same logical list_id.
+//!
+//! The first query observes a, c. A late b changes the list to a, b, c and the
+//! count from two to three. Request-scoped insertion responses precede queries.
+//! Application time uses logical milliseconds, including negative timestamps.
+
 use contime::{ConTime, ConTimeConfig, ContimeEvent, ContimeModule, ContimeSnapshot};
 use std::{error::Error, io, time::Duration};
 
 #[derive(ContimeEvent)]
+#[contime_event(id = |event| contentid::typed_content_id_u128(
+    "OrderedValue.v1", &(event.time, event.list_id, u32::from(event.value))
+))]
 struct OrderedValue {
     time: i64,
     list_id: u128,
@@ -9,7 +26,7 @@ struct OrderedValue {
 }
 
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.list_id], events = [OrderedValue], apply = {
+#[contime_snapshot(id = |list_id| contentid::typed_content_id_u128("OrderedList.v1", list_id), events = [OrderedValue], apply = {
     for event in batch.events {
         let OrderedListEvent::OrderedValue(event) = event;
         self.values.push((event.time, event.value));
@@ -22,7 +39,7 @@ struct OrderedList {
 }
 
 #[derive(ContimeSnapshot)]
-#[contime_snapshot(id = [self.list_id], events = [OrderedValue], apply = {
+#[contime_snapshot(id = |list_id| contentid::typed_content_id_u128("ValueStatistics.v1", list_id), events = [OrderedValue], apply = {
     for event in batch.events {
         let ValueStatisticsEvent::OrderedValue(_) = event;
         self.count += 1;

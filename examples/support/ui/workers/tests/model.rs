@@ -1,8 +1,6 @@
 //! Minimal lane contracts for the worker renderer integration test.
-use contime::contime_runtime::{
-    checkpoints::{ApplyBatch, ApplyEvents, Event, Snapshot, Timestamp},
-    AdvanceTime, Input,
-};
+use contime::checkpoints::Timestamp;
+use contime::{AdvanceTime, ContimeEvent, ContimeSnapshot};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Time(pub u64);
 impl std::fmt::Display for Time {
@@ -26,43 +24,22 @@ impl AdvanceTime for Time {
         Self(self.0.saturating_sub(other.0))
     }
 }
+#[derive(ContimeEvent)]
+#[contime_event(id = |event| event.id)]
 pub struct Increment {
     pub id: u128,
     pub time: Time,
 }
-impl Event for Increment {
-    type Time = Time;
-    fn time(&self) -> Time {
-        self.time
-    }
-}
-impl Input for Increment {
-    fn event_id(&self) -> u128 {
-        self.id
-    }
-    fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
-        emit(self.id % 4096);
-    }
-}
-#[derive(Clone, Default)]
+#[derive(ContimeSnapshot)]
+#[contime_snapshot(id = |id| *id, events = [Increment => [self.id % 4096]], apply = {
+    self.count += batch.events.count() as u64;
+})]
 pub struct Counter {
+    id: u128,
     time: Time,
     count: u64,
 }
-impl Snapshot for Counter {
-    type Time = Time;
-    fn time(&self) -> &Time {
-        &self.time
-    }
-    fn set_time(&mut self, time: Time) {
-        self.time = time;
-    }
-}
-impl ApplyEvents<Increment> for Counter {
-    fn create(_: u128, _: &Increment) -> Self {
-        Self::default()
-    }
-    fn apply_events(&mut self, batch: ApplyBatch<'_, '_, Time, Increment>) {
-        self.count += batch.events.count() as u64;
-    }
-}
+
+#[path = "../../../lanes.rs"]
+mod lane_adapter;
+lane_adapter::single_lane!(Increment => Counter);

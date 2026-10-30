@@ -1,6 +1,6 @@
 //! Connect `CounterChanged -> Counter` to the shared diagnostic harness.
 //!
-//! `model.rs` defines routing and `ApplyEvents<CounterChanged>`; this adapter
+//! `model.rs` declares routing and application through the derives; this adapter
 //! selects those types and exposes their total, count and digest to validation
 //! and presentation. It does not start ConTime or register a second lane.
 use super::model::{Counter, CounterChanged};

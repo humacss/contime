@@ -10,10 +10,10 @@ A running application usually submits events as they arrive and queries state wh
 
 This walkthrough starts an in-memory ConTime instance with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
 
-The Rust blocks form one complete program, in order. The same program is available as [`examples/cases/counter/readme.rs`](https://github.com/humacss/contime/blob/main/examples/cases/counter/readme.rs). Run it from a ConTime checkout with:
+The Rust blocks show the underlying trait contracts as one complete program. A derive-based version with the same behavior is available as [`examples/cases/counter/readme.rs`](https://github.com/humacss/contime/blob/main/examples/cases/counter/readme.rs). Run it from a ConTime checkout with:
 
 ```bash
-cargo run -p contime --example readme
+cargo run -p contime --example readme --features macros
 ```
 
 ## Dependencies and Features
@@ -31,7 +31,7 @@ applications need no feature list. Enable `manual` for caller-driven processing,
 `monitor` for monitoring, or `simulator` for traffic generation and feedback tools.
 The [module API](../modules/README.md) starts managed processing with
 `ConTime::<App>::start(config)`, or caller-driven processing with
-`contime::manual::ManualConTime::<App>::new(config)`. This explicit-trait walkthrough
+`contime::manual::ManualConTime::<App>::new(config)`. The explicit-trait walkthrough below
 uses `RawConTime` and `manual::RawManualConTime` instead. Call `process()` from
 your own loop when using Manual.
 Creating a Manual instance starts no threads. `process_with_clock` is an optional

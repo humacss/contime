@@ -1,6 +1,7 @@
 use contime::{ContimeEvent, ContimeModule};
 
 #[derive(ContimeEvent)]
+#[contime_event(id = |_event| 1)]
 struct Added<T: std::hash::Hash> {
     time: i64,
     value: T,
