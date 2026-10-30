@@ -34,6 +34,9 @@ where
         wrapper: W,
         policy: P,
     ) -> Result<Self, crate::contime_runtime::StartError> {
+        if !crate::contime_worker::AdvanceTime::is_valid_retention(&config.history_retention) {
+            return Err(crate::contime_runtime::StartError::InvalidRetention);
+        }
         let (input, incoming) = crossbeam_channel::unbounded();
         let incoming = std::sync::Arc::new(incoming);
         let (error_sender, errors) = crossbeam_channel::unbounded();

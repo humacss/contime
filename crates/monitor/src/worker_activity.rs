@@ -22,7 +22,7 @@ pub struct WorkerActivity {
 /// One source event targeting three histories counts as three applications.
 /// Rates are observations over host completion-clock intervals, with collection
 /// delay as sampling uncertainty. They do not measure unique source events or
-/// outstanding work. No engine queries, clocks, or shared counters are used.
+/// outstanding work. No snapshot queries, clocks, or shared counters are used.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ApplicationActivity {
     /// Sum across all workers, unavailable if any worker lacks instrumentation.

@@ -23,6 +23,7 @@ harness = false
 monitor = []
 
 [dependencies]
+contime-time = { path = "../time", version = "0.1.0" }
 
 [dev-dependencies]
 rstest = { version = "0.26", default-features = false }

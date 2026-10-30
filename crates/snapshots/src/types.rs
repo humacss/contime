@@ -31,13 +31,7 @@ where
     pub history_event_count: u64,
 }
 
-/// A discrete timestamp with a checked immediate predecessor.
-pub trait Timestamp: Clone + Default + Ord {
-    /// Returns the immediately preceding representable timestamp, or `None` at
-    /// the minimum. Forwarding retains state at this predecessor so events
-    /// exactly at the new horizon remain eligible for application.
-    fn previous(&self) -> Option<Self>;
-}
+pub use crate::contime_time::Timestamp;
 
 /// Borrowed access to canonically ordered events and physical history cleanup.
 ///
@@ -192,15 +186,9 @@ pub trait Apply<S, C = ()>: Event + Sized {
 /// Shared fixtures for unit tests and application benchmarks only.
 #[cfg(test)]
 pub(crate) mod testing {
-    use super::{Apply, BatchLookahead, Checkpoint, Event, EventStore, Snapshot, Timestamp};
+    use super::{Apply, BatchLookahead, Checkpoint, Event, EventStore, Snapshot};
 
     pub type Time = u64;
-
-    impl Timestamp for Time {
-        fn previous(&self) -> Option<Self> {
-            self.checked_sub(1)
-        }
-    }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct TestSnapshot {

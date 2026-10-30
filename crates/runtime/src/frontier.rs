@@ -1,3 +1,4 @@
+use crate::contime_time::Timestamp;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
@@ -22,17 +23,17 @@ pub(crate) struct Frontier<T> {
     round_prune_limit: T,
 }
 
-impl<T: Clone + Default + Ord> Frontier<T> {
+impl<T: Timestamp> Frontier<T> {
     pub(crate) fn new(workers: usize) -> Self {
         let workers = NonZeroUsize::new(workers).expect("at least one worker");
         Self {
-            safe: T::default(),
-            requested: T::default(),
+            safe: T::minimum(),
+            requested: T::minimum(),
             workers,
             sequence: 0,
             round: None,
             observation: None,
-            round_prune_limit: T::default(),
+            round_prune_limit: T::minimum(),
         }
     }
 

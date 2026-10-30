@@ -1,7 +1,7 @@
 # contime-manual
 
 Create a caller-driven ConTime instance by driving one existing `contime-worker::MessageWorker` on the calling thread. No
-router, coordinator thread, alternate replay engine, or snapshot task is used.
+router, coordinator thread, alternate replay implementation, or snapshot task is used.
 The worker owns all histories, replay scheduling, queries, and pruning.
 
 `ManualConTime<M, S>` accepts the existing worker message and storage contracts.
@@ -37,9 +37,11 @@ application/storage panic, matching the existing worker's failure model.
 
 For ordinary applications, the root crate provides a complete
 `contime::manual::ManualConTime` instance with `features = ["manual"]`. For a Manual-only build,
-use `default-features = false, features = ["manual"]`. The instance combines this driver,
-Core's storage, and local request adapters so callers implement only the ordinary
-event and snapshot contracts. `apply`, `query_at`, `advance_to`, and explicit
+use `default-features = false, features = ["manual", "time"]` for integer time,
+or omit `time` when implementing the time traits for an application-owned type. The instance combines this driver,
+Core's storage, and local request adapters. A module supplies the event and
+snapshot contracts; `manual::RawManualConTime<I, S, W>` accepts existing lane
+implementations directly. `apply`, `query_at`, `advance_to`, and explicit
 `prune_before` enqueue work; call `process()` from your host loop to drive it,
 or use `process_with_clock` when allocating a time/work allowance. Query callbacks run
 during processing and may capture thread-local state. `take_rejections` drains

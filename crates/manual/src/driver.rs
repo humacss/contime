@@ -1,3 +1,5 @@
+//! Caller-driven worker progress and processing budgets.
+use crate::contime_time::Timestamp;
 use crate::contime_worker::{
     AdvanceInput, ApplyInput, Completion, EventQueryInput, EventQueryResponse, MessageWorker, RouteInput, SnapshotListenInput,
     SnapshotQueryInput, SnapshotQueryResponse, SnapshotStore, WorkInput, WorkInputKind,
@@ -109,7 +111,7 @@ where
             worker: MessageWorker::new_inline(config, context),
             queue: VecDeque::new(),
             capacity: capacity.get(),
-            target: S::Time::default(),
+            target: S::Time::minimum(),
             held_prune: None,
             pruning: false,
             receive_left: Some(0),

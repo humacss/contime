@@ -7,3 +7,6 @@ mod progress;
 mod query;
 mod replay_boundary;
 mod replay_frontier;
+
+#[path = "../support/negative.rs"]
+mod negative;

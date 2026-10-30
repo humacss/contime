@@ -11,8 +11,8 @@ use ahash::AHashSet;
 pub trait Event {
     /// The event's ordered time representation.
     ///
-    /// `Default` must produce the zero timestamp used by an empty history.
-    type Time: Clone + Default + Ord;
+    /// The minimum supplies the initial retained-history boundary.
+    type Time: crate::contime_time::Timestamp;
 
     /// Returns the stable identity used for retained-history deduplication.
     fn event_id(&self) -> u128;

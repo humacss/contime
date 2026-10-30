@@ -1,3 +1,4 @@
+//! Bounded packetization and nonblocking queue draining.
 /// Default maximum number of items in a transport packet.
 pub const MAX_EVENTS: usize = 1_024;
 /// Maximum original requests gathered during one drain, including empty requests.

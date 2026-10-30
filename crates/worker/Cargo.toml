@@ -19,6 +19,7 @@ default = []
 monitor = []
 
 [dependencies]
+contime-time = { path = "../time", version = "0.1.0" }
 ahash = "0.8"
 crossbeam-channel = "0.5"
 

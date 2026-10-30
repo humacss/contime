@@ -1,3 +1,4 @@
+use crate::contime_time::Timestamp;
 use std::collections::{BTreeSet, VecDeque};
 use std::ops::Bound::{Excluded, Unbounded};
 
@@ -147,8 +148,8 @@ where
             snapshots: AHashMap::new(),
             listeners: NotificationCollections::new(),
             activity_listeners: Vec::new(),
-            current_time: S::Time::default(),
-            horizon: S::Time::default(),
+            current_time: S::Time::minimum(),
+            horizon: S::Time::minimum(),
             pending_prunes: VecDeque::new(),
             schedule: BTreeSet::new(),
             pending: AHashMap::new(),

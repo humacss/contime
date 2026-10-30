@@ -4,11 +4,17 @@ use std::{cell::RefCell, num::NonZeroUsize, rc::Rc, time::Duration};
 #[derive(Clone, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);
 impl Timestamp for Time {
+    fn minimum() -> Self {
+        Self(0)
+    }
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
 }
 impl contime::core::AdvanceTime for Time {
+    fn is_valid_retention(&self) -> bool {
+        true
+    }
     fn saturating_sub(&self, rhs: &Self) -> Self {
         Self(self.0.saturating_sub(rhs.0))
     }

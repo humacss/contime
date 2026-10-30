@@ -54,6 +54,7 @@ cargo publish -p contime --all-features --dry-run
 | [`contime-simulator`](../../crates/simulator/README.md) | Caller-driven generation, independent validation, and paced Maximum admission |
 | [`contime-batcher`](../../crates/batcher/README.md) | Bounded packetization and ready-queue draining for the native pipeline |
 | [`contime-manual`](../../crates/manual/README.md) | Caller-driven processing of one worker between complete operations |
+| [`contime-time`](../../crates/time/README.md) | Ordered time contracts and optional integer implementations |
 | `contime` (root) | Public facade and selection of manual or managed runtime processing |
 | [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Shared application contracts and synchronous history/storage adapters |
 | [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input requests, responses, and optional local callback adapters |

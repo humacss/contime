@@ -9,11 +9,17 @@ const WAIT: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct Time(u64);
 impl Timestamp for Time {
+    fn minimum() -> Self {
+        Self(0)
+    }
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
 }
 impl contime::contime_worker::AdvanceTime for Time {
+    fn is_valid_retention(&self) -> bool {
+        true
+    }
     fn saturating_sub(&self, other: &Self) -> Self {
         Self(self.0.saturating_sub(other.0))
     }

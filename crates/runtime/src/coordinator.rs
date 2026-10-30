@@ -1,4 +1,5 @@
 //! Serializes admission, pruning and observation through shared fenced rounds.
+use crate::contime_time::Timestamp;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -46,15 +47,15 @@ pub fn run<I: crate::contime_runtime::ThreadInput, S, P: ProgressPolicy<I::Time>
 ) {
     let Settings { retention, workers, interval: pruning_interval } = settings;
     let mut frontier = Frontier::new(workers);
-    let mut target = I::Time::default();
+    let mut target = I::Time::minimum();
     let (observed, observations) = crossbeam_channel::unbounded();
     let mut listeners: Vec<Sender<bool>> = Vec::new();
     let mut working = false;
     let mut next_round = Instant::now();
     let mut awaiting_marker = None;
     let mut resolving = None;
-    let mut pruned = vec![I::Time::default(); workers];
-    let mut completed_horizon = I::Time::default();
+    let mut pruned = vec![I::Time::minimum(); workers];
+    let mut completed_horizon = I::Time::minimum();
     let mut horizon_listeners: Vec<Sender<I::Time>> = Vec::new();
     let mut observation_pending = true;
     let mut observing = None;

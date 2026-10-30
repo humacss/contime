@@ -16,6 +16,9 @@ struct TestEvent {
 #[derive(Default)]
 struct TestEventStore(Vec<TestEvent>);
 impl Timestamp for Time {
+    fn minimum() -> Self {
+        Self(0)
+    }
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }

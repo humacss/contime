@@ -6,12 +6,18 @@ use contime::{checkpoints, ConTime, ConTimeConfig, Input};
 struct Time(u64);
 
 impl checkpoints::Timestamp for Time {
+    fn minimum() -> Self {
+        Self(0)
+    }
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
 }
 
 impl contime::contime_worker::AdvanceTime for Time {
+    fn is_valid_retention(&self) -> bool {
+        true
+    }
     fn saturating_sub(&self, retention: &Self) -> Self {
         Self(self.0.saturating_sub(retention.0))
     }

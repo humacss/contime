@@ -22,6 +22,8 @@ pub extern crate contime_progress;
 #[doc(hidden)]
 pub extern crate contime_router;
 #[doc(hidden)]
+pub extern crate contime_time;
+#[doc(hidden)]
 pub extern crate contime_worker;
 #[doc(hidden)]
 pub extern crate self as contime_runtime;

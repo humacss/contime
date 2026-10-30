@@ -1,3 +1,4 @@
+use crate::contime_time::Timestamp;
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::contime_events::EventHistory;
@@ -17,7 +18,7 @@ where
     E: Event,
 {
     /// Creates an empty event history whose horizon and dirty boundary are
-    /// [`Default::default()`] for the event's time type.
+    /// the minimum of the event's time domain.
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
@@ -25,7 +26,7 @@ where
     /// Creates an empty history with capacity for the expected ordered events
     /// and retained IDs.
     pub fn with_capacity(capacity: usize) -> Self {
-        Self::with_capacity_and_horizon(capacity, E::Time::default())
+        Self::with_capacity_and_horizon(capacity, E::Time::minimum())
     }
 
     /// Reserves append and retained-ID capacity for an incoming event batch.
@@ -97,9 +98,9 @@ where
     ///
     /// A clean non-empty history keeps its latest timestamp as a conservative
     /// boundary so another event at that timestamp replays the complete bucket.
-    /// An empty history returns to its zero timestamp.
+    /// An empty history returns to its current admission horizon.
     pub fn mark_replayed(&mut self) {
-        self.dirty_time = self.latest_key().map(|key| key.time.clone()).unwrap_or_default();
+        self.dirty_time = self.latest_key().map(|key| key.time.clone()).unwrap_or_else(|| self.horizon.clone());
         self.dirty = false;
     }
 
@@ -148,6 +149,16 @@ mod tests {
     }
 
     #[test]
+    fn acknowledging_an_empty_history_preserves_its_time_boundary() {
+        let mut history = EventHistory::<TestEvent>::new();
+        history.mark_replayed();
+        assert_eq!(history.dirty_time(), &i64::MIN);
+        let mut history = EventHistory::<TestEvent>::with_horizon(-50);
+        history.mark_replayed();
+        assert_eq!(history.dirty_time(), &-50);
+    }
+
+    #[test]
     fn a_new_history_is_empty() {
         let history = EventHistory::<TestEvent>::new();
 
@@ -155,7 +166,7 @@ mod tests {
         assert_eq!(history.len(), 0);
         assert_eq!(history.storage_counts(), (0, 0));
         assert_eq!(history.latest_key(), None);
-        assert_eq!(history.dirty_time(), &0);
+        assert_eq!(history.dirty_time(), &i64::MIN);
     }
 
     #[test]

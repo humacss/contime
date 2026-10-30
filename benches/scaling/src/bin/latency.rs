@@ -7,13 +7,15 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 struct Time(i64);
 impl Timestamp for Time {
+    fn minimum() -> Self { Self(0) }
     fn previous(&self) -> Option<Self> {
-        self.0.checked_sub(1).map(Self)
+        self.0.checked_sub(1).filter(|time| *time >= 0).map(Self)
     }
 }
 impl contime::AdvanceTime for Time {
+    fn is_valid_retention(&self) -> bool { self.0 >= 0 }
     fn saturating_sub(&self, t: &Self) -> Self {
-        Self(self.0.saturating_sub(t.0))
+        Self(self.0.saturating_sub(t.0).max(0))
     }
 }
 struct Record {

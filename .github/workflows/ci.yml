@@ -36,6 +36,8 @@ jobs:
           cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features monitor --lib
           cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features workers --lib
           cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --features runtime --lib
+      - name: Check custom-time Manual without built-in time
+        run: cargo +${{ matrix.toolchain }} check -p contime --no-default-features --features manual --lib
       - name: Test independent simulation
         run: |
           cargo +${{ matrix.toolchain }} test -p contime --no-default-features --features simulator --lib --test simulator

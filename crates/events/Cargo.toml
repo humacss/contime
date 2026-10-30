@@ -15,6 +15,7 @@ keywords = ["events", "history", "replay", "snapshots"]
 categories = ["data-structures", "concurrency"]
 
 [dependencies]
+contime-time = { path = "../time", version = "0.1.0" }
 ahash = "0.8"
 
 [dev-dependencies]

@@ -18,6 +18,7 @@ categories = ["data-structures", "concurrency"]
 monitor = ["contime-worker/monitor", "contime-core/monitor"]
 
 [dependencies]
+contime-time = { path = "../time", version = "0.1.0" }
 traitstub = "0.1.0"
 contime-batcher = { path = "../batcher", version = "0.1.0" }
 contime-core = { path = "../core", version = "0.1.0" }

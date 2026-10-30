@@ -30,7 +30,8 @@ include = [
 ]
 
 [features]
-default = ["runtime"]
+default = ["runtime", "time"]
+time = []
 runtime = ["dep:traitstub"]
 monitor = []
 simulator = []
@@ -76,6 +77,7 @@ required-features = ["runtime"]
 resolver = "2"
 exclude = ["examples/environments/wasi", "examples/environments/browser", "benches/scaling"]
 members = [
+    "crates/time",
     "crates/api",
     "crates/batcher",
     "crates/core",

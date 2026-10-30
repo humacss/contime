@@ -92,25 +92,7 @@ pub struct ReplayUpdate<T> {
     pub affected_from: T,
 }
 
-/// Timestamp ordering and retention arithmetic shared with admission coordination.
-pub trait AdvanceTime: Clone + Default + Ord {
-    /// Computes a retention horizon without underflowing the time domain.
-    fn saturating_sub(&self, retention: &Self) -> Self;
-}
-
-macro_rules! impl_advance_time {
-    ($($time:ty),+ $(,)?) => {
-        $(
-            impl AdvanceTime for $time {
-                fn saturating_sub(&self, retention: &Self) -> Self {
-                    <$time>::saturating_sub(*self, *retention)
-                }
-            }
-        )+
-    };
-}
-
-impl_advance_time!(u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize);
+pub use crate::contime_time::AdvanceTime;
 
 /// Transfers a processing target or explicitly authorized pruning horizon.
 ///

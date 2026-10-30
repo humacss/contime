@@ -13,11 +13,17 @@ use crossbeam_channel::{never, unbounded, Sender};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);
 impl Timestamp for Time {
+    fn minimum() -> Self {
+        Self(0)
+    }
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
 }
 impl crate::contime_worker::AdvanceTime for Time {
+    fn is_valid_retention(&self) -> bool {
+        true
+    }
     fn saturating_sub(&self, retention: &Self) -> Self {
         Self(self.0.saturating_sub(retention.0))
     }

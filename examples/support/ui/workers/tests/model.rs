@@ -11,11 +11,17 @@ impl std::fmt::Display for Time {
     }
 }
 impl Timestamp for Time {
+    fn minimum() -> Self {
+        Self(0)
+    }
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
 }
 impl AdvanceTime for Time {
+    fn is_valid_retention(&self) -> bool {
+        true
+    }
     fn saturating_sub(&self, other: &Self) -> Self {
         Self(self.0.saturating_sub(other.0))
     }

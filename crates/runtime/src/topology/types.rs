@@ -60,6 +60,8 @@ pub enum RuntimeStage {
 /// Failure to construct a complete runtime topology.
 #[derive(Debug)]
 pub enum StartError {
+    /// The configured retention interval is negative or invalid for the time domain.
+    InvalidRetention,
     /// No router instances were supplied; no threads were started.
     NoRouters,
     /// No worker instances were supplied; no threads were started.
@@ -76,6 +78,7 @@ pub enum StartError {
 impl fmt::Display for StartError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidRetention => formatter.write_str("history retention must be nonnegative"),
             Self::NoRouters => formatter.write_str("the runtime requires at least one router"),
             Self::NoWorkers => formatter.write_str("the runtime requires at least one worker"),
             Self::ThreadSpawn { stage, source } => {
@@ -89,7 +92,7 @@ impl std::error::Error for StartError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::ThreadSpawn { source, .. } => Some(source),
-            Self::NoRouters | Self::NoWorkers => None,
+            Self::InvalidRetention | Self::NoRouters | Self::NoWorkers => None,
         }
     }
 }

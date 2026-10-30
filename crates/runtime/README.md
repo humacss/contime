@@ -1,8 +1,9 @@
 # contime-runtime
 
 The managed ConTime runtime. `ConTime::start` (also available as `Runtime::start`)
-starts admission, router, and worker threads. The root `contime` crate re-exports
-`ConTime`, its configuration, and operations for existing callers.
+starts admission, router, and worker threads. The root `contime` crate exposes the module-selected
+`ConTime::<App>::start(config)` facade. Direct lane-level callers use its
+`RawConTime<I, S, W>` re-export; configuration and processing operations are shared.
 
 Implement Core's `Input` and snapshot/application contracts, configure worker
 counts, checkpoint spacing, and history retention, then retain the returned

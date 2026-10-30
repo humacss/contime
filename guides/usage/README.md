@@ -26,7 +26,7 @@ contime = "0.1.1"
 fastrand = "2"
 ```
 
-ConTime supports Rust 1.90 or newer. Runtime is enabled by default, so ordinary
+ConTime supports Rust 1.90 or newer. Runtime and built-in integer time support are enabled by default, so ordinary
 applications need no feature list. Enable `manual` for caller-driven processing,
 `monitor` for monitoring, or `simulator` for traffic generation and feedback tools.
 Call `ConTime::start` for managed background processing, or create a
@@ -69,19 +69,23 @@ use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Sna
 use contime::{AdvanceTime, ConTime, ConTimeConfig, Input, Placement};
 ```
 
-ConTime uses your application's time type. Here, `Time` counts logical milliseconds. The application will calculate it from elapsed time; ConTime does not own a clock. The type provides ordering, a default starting time, a checked predecessor, and retention subtraction.
+ConTime uses your application's time type. Here, `Time` counts logical milliseconds. The application will calculate it from elapsed time; ConTime does not own a clock. The type provides ordering, an explicit minimum, a checked predecessor, and retention subtraction.
 
 ```rust
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 struct Time(u64);
 
 impl Timestamp for Time {
+    fn minimum() -> Self { Self(u64::MIN) }
+
     fn previous(&self) -> Option<Self> {
         self.0.checked_sub(1).map(Self)
     }
 }
 
 impl AdvanceTime for Time {
+    fn is_valid_retention(&self) -> bool { true }
+
     fn saturating_sub(&self, retention: &Self) -> Self {
         Self(self.0.saturating_sub(retention.0))
     }
@@ -276,7 +280,7 @@ when it processes work. No ConTime background threads are started. Use the same
 to define worker messages or storage adapters.
 
 ```toml
-contime = { version = "0.1", features = ["manual"] }
+contime = { version = "0.1", features = ["manual", "time"] }
 ```
 
 The self-contained [Manual code sample](../../examples/cases/counter/manual.rs),
@@ -291,10 +295,10 @@ For a constrained build that omits the managed runtime, monitoring, counters, an
 simulator, explicitly select only Manual:
 
 ```toml
-contime = { version = "0.1", default-features = false, features = ["manual"] }
+contime = { version = "0.1", default-features = false, features = ["manual", "time"] }
 ```
 
-Likewise, `default-features = false, features = ["runtime"]` selects a lean
+Likewise, `default-features = false, features = ["runtime", "time"]` selects a lean
 Runtime without worker counters or the monitoring and simulation tools. Feature
 selection controls available code; enabling a tool never starts collection,
 event generation, or background threads by itself.

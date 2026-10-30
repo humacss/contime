@@ -12,7 +12,7 @@ where
     /// hooks. Samples strictly before each reported horizon may be considered
     /// pruned by ConTime. This is not the requested or safe-to-prune target.
     ///
-    /// Registration sends the current completed horizon (initially Time::default()),
+    /// Registration sends the current completed horizon (initially Timestamp::minimum()),
     /// followed by strictly increasing updates. Each caller has its own unbounded
     /// channel; consumers should drain it regularly. Shutdown closes the channel.
     /// A stopped worker cannot advance the completed horizon by dropping a sender.

@@ -33,6 +33,8 @@
 #![deny(missing_docs)]
 
 #[doc(hidden)]
+pub extern crate contime_time;
+#[doc(hidden)]
 pub extern crate self as contime_checkpoints;
 mod api;
 mod apply;

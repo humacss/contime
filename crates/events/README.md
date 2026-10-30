@@ -51,7 +51,7 @@ Checkpoint materialization belongs to the snapshot store.
 ## Public boundary
 
 Consumers implement the local `Event` trait by providing an ordered time and a
-`u128` event ID. The time type's `Default` value is its zero timestamp.
+`u128` event ID. The time type implements `Timestamp`; its explicit `minimum()` supplies the initial horizon. `Default` does not define an origin.
 `EventHistory<E>` stores `E` directly as its consumer-selected ownership type
 and is the per-snapshot state object. It does not store a snapshot
 ID; the worker owns the mapping from snapshot IDs to histories.
@@ -153,7 +153,7 @@ and dropping the returned vector. Event payloads are not cloned.
 Run the integration suite with:
 
 ```bash
-cargo bench --manifest-path crates/events/dev/Cargo.toml --bench events
+cargo bench --manifest-path crates/events/Cargo.toml --bench events
 ```
 
 ## Full benchmark run — 2026-10-28

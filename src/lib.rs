@@ -3,7 +3,8 @@
 //! Runtime is enabled by default. Start managed processing with `ConTime::start`.
 //! Enable `manual` to drive a worker yourself through `contime::manual`; creating
 //! a Manual instance starts no threads. For Manual alone, disable default features
-//! and select `features = ["manual"]`. The optional `monitor` feature also enables
+//! and select `features = ["manual", "time"]` for integer time, or just `manual`
+//! for an application-owned time type. The optional `monitor` feature also enables
 //! worker application counts. The independent `simulator` feature provides event
 //! generation; enable both tools for adaptive monitoring-based load control.
 #![deny(missing_docs)]
@@ -138,3 +139,9 @@ pub mod contime_simulator;
 #[doc(hidden)]
 #[path = "_symlinks/worker/src/mod.rs"]
 pub mod contime_worker;
+
+/// Time domain contracts and optional built-in integer implementations.
+pub use crate::contime_time as time;
+#[doc(hidden)]
+#[path = "_symlinks/time/src/mod.rs"]
+pub mod contime_time;

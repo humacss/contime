@@ -8,7 +8,7 @@
 //! times; query response traits carry reconstructed snapshots or retained events.
 //!
 //! Insertion completion does not imply replay completion. Processing starts at
-//! the time type's default and [`WorkInputKind::Advance`] raises its target
+//! the time type's minimum and [`WorkInputKind::Advance`] raises its target
 //! monotonically. Replay processes complete timestamp batches through that target,
 //! while queries can reconstruct retained future state without publishing effects.
 //! Late changed inputs rewind pending work; duplicates must not do so.

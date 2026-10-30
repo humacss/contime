@@ -1,3 +1,4 @@
+//! Simulator failures shared by streams and traffic control.
 /// Invalid simulator configuration, clock, or admission operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

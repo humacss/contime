@@ -15,7 +15,7 @@ struct Cohort {
 }
 
 /// Caller-driven monitor with bounded samples and submission cohorts.
-/// No execution engine, clock reads, background work, or per-event instrumentation.
+/// No execution loop, clock reads, background work, or per-event instrumentation.
 #[derive(Debug)]
 pub struct Monitor {
     capacity: usize,
