@@ -146,7 +146,7 @@ cargo test --all-features --example chain_hash
 Regressions cover fixed/Maximum production, variable fanout, low-rate reversed
 pairs, full-digest mismatch detection, and genuinely materialized newer events
 followed by late older events. The repaired chain is checked again after pruning.
-These are live diagnostics including host overhead, not isolated engine capacity
+These are live diagnostics including host overhead, not isolated ConTime capacity
 benchmarks.
 
 ## Regression coverage

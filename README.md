@@ -1,9 +1,9 @@
+![ConTime — continuous-time state from unreliable event streams](assets/contime-header.svg)
+
 [![Crates.io](https://img.shields.io/crates/v/contime.svg)](https://crates.io/crates/contime)
 [![Docs](https://docs.rs/contime/badge.svg)](https://docs.rs/contime)
 [![Qlty | Maintainability](https://qlty.sh/gh/humacss/projects/contime/maintainability.svg)](https://qlty.sh/gh/humacss/projects/contime)
 [![Qlty | Code Coverage](https://qlty.sh/gh/humacss/projects/contime/coverage.svg)](https://qlty.sh/gh/humacss/projects/contime)
-
-# contime
 
 > **Work in progress:** ConTime is still being developed for my own use. There is more cleanup to do, and the API needs further refinement before it is ready for general adoption. You are welcome to try it, but expect changes and rough edges.
 

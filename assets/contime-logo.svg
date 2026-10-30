@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 1280 1280" role="img" aria-label="ConTime logo">
+  <title>ConTime</title>
+  <g fill="#4263EB">
+    <path d="M 1086.1254 856.7674 A 496 496 0 1 1 810.3365 174.1658 A 24 24 0 0 1 824.1865 206.0837 L 802.2734 257.7078 A 24 24 0 0 1 772.0939 270.9266 A 392 392 0 1 0 991.4004 813.7291 A 24 24 0 0 1 1022.2922 802.2734 L 1073.9163 824.1865 A 24 24 0 0 1 1086.1254 856.7674 Z"></path>
+    <g transform="translate(640 640) rotate(-22)">
+      <rect x="-282" y="-52" width="196" height="104" rx="24"></rect>
+      <rect x="-52" y="-118" width="104" height="236" rx="24"></rect>
+      <rect x="86" y="-52" width="404" height="104" rx="24"></rect>
+    </g>
+  </g>
+</svg>

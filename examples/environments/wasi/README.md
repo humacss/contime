@@ -92,7 +92,7 @@ cargo +1.90.0 clippy --all-targets --features runtime -- -D warnings
 ```
 
 These runs include example generation and correctness checks; their totals are
-live diagnostics rather than isolated engine throughput measurements.
+live diagnostics rather than isolated ConTime throughput measurements.
 
 ## Hash snapshot preview
 

@@ -42,7 +42,7 @@ A query asks for one or more snapshots at a particular time. For example: what w
 
 ConTime reconstructs the requested state by applying the relevant events through `T`, including events exactly at that timestamp. Events after `T` do not contribute to the result.
 
-The result describes state at the requested time. Querying an earlier time does not rewind the running engine or replace its current state.
+The result describes state at the requested time. Querying an earlier time does not rewind the running ConTime instance or replace its current state.
 
 Queries use admitted, retained history. Submitting an event is asynchronous, so a query does not guarantee that earlier submissions have finished processing. Use the completion response or progress notification corresponding to the operation you need to observe. Insertion acknowledgements establish insertion, not completed live replay.
 

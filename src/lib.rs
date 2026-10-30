@@ -1,3 +1,4 @@
+#![doc = concat!(include_str!("../assets/contime-logo.svg"), "\n\n")]
 //! Continuous-time state with managed background or caller-driven processing.
 //!
 //! Runtime is enabled by default. Start managed processing with `ConTime::start`.

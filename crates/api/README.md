@@ -14,7 +14,7 @@ channel. They run only after a worker begins processing their request. Empty
 queries complete with an empty vector; dropping unprocessed requests does not
 invoke callbacks. Callbacks must not block waiting for the same worker.
 
-The synchronous helpers here are independent functions. The root engine's
+The synchronous helpers here are independent functions. The root ConTime instance's
 `apply` and `advance_to` methods enqueue work asynchronously. In the composed
 pipeline, closing an apply rejection stream acknowledges insertion; it does
 not establish replay completion.

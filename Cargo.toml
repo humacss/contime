@@ -19,6 +19,8 @@ include = [
     "/Cargo.toml",
     "/LICENSE",
     "/README.md",
+    "/assets/contime-logo.svg",
+    "/assets/contime-header.svg",
     "/src/**",
     "/examples/**",
     "/tests/**",
