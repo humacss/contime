@@ -230,3 +230,128 @@ actual sample count. Inline tests may contain multiple Criterion cases.
 | `core/query_end_to_end/1_snapshots/1_routers_1_workers` | 12.239 µs | 12.207 µs–12.299 µs | 20 | 81.703 k elements/s |
 | `core/query_end_to_end/1_snapshots/1_routers_4_workers` | 12.199 µs | 12.131 µs–12.228 µs | 20 | 81.975 k elements/s |
 | `core/query_end_to_end/1_snapshots/2_routers_10_workers` | 12.394 µs | 12.343 µs–12.455 µs | 20 | 80.685 k elements/s |
+
+## Typed application views — 2026-10-30
+
+Historical measurements before the inlining follow-up below.
+
+`module_application` measures the builder-based application API against the prior
+in-progress borrowed-enum API. Both use the same two small event types, numeric
+IDs, additive snapshot logic, Rust 1.90.0, all features (including monitoring), and
+optimized bench profile on the Apple M3 Pro (11 logical CPUs). Builds were kept
+separate between the two source trees. These are normal desktop measurements,
+without CPU affinity or exclusive machine access.
+
+```sh
+cargo +1.90.0 bench -p contime --all-features --bench module_application
+```
+
+The direct tests time only application of an already-borrowed timestamp bucket.
+They exclude routing, storage, scheduling and event generation. The tiny arithmetic
+allows aggressive compiler optimization, so these are adapter costs, not complete
+ConTime throughput numbers. The current implementation keeps a single-event bucket
+as one reference, stores up to eight references inline, and allocates reference
+storage for larger buckets. Typed views are repeatable and borrow payloads.
+
+| Events in one timestamp bucket | Prior borrowed enums | Builder / typed views |
+| --- | ---: | ---: |
+| 1 | 0.895 ns | 3.561 ns |
+| 8 | 1.949 ns | 24.701 ns |
+| 64 | 10.223 ns | 286.490 ns |
+
+The managed-pipeline tests submit 65,536 prebuilt events in batches of 1,024,
+targeting 256 snapshots. Each history receives one event per timestamp; there
+are two registered event types and explicit type phases. Timing includes submission,
+advancement and waiting for processing to finish. Runtime startup, event generation,
+final query/assertions and shutdown are outside the timing. Checkpoint spacing is
+128; pruning does not run during these short samples. Final totals are validated.
+
+| Workers | Prior borrowed enums | Builder / typed views |
+| --- | ---: | ---: |
+| 1 | 8.19 M events/s | 7.36 M events/s |
+| 4 | 21.05 M events/s | 22.17 M events/s |
+
+The single-worker result is about 10% lower in this minimal workload; the four-worker
+variation does not establish a speedup. In particular, this comparison does not
+show that the new API is free. Runtime routing dispatch and repeatable views have
+costs, especially when a timestamp contains many events and several type passes.
+The builder itself is cached once per concrete module/snapshot definition, not
+rebuilt during insertion, querying or replay. Unit tests check repeated construction
+and deduplicated nested composition. Larger real application work may change the
+relative cost; these figures are specific to the fixtures above. They were
+captured before the follow-up optimization below. The current benchmark includes
+that optimization; the borrowed-enum baseline predates the API replacement.
+
+### Follow-up: isolate adapter cost and control run order
+
+The sequential old/new checkout timings above do not isolate a persistent 10%
+pipeline penalty. Background load changed enough between runs to materially
+change throughput. Keep those results as historical measurements, rather than a
+fixed cost attributed to the builder.
+
+The isolation fixtures in `module_application/isolation.rs` independently select
+builder/direct routing and typed/direct application, and also run the actual
+generated module. Payload and state sizes, event data, worker settings and timing
+boundaries match. All snapshots and the global total are validated outside timing.
+The direct control is a minimal handwritten adapter in the current backend, not
+a separately compiled previous release.
+
+```sh
+# Routing-only and individual pipeline components, using Criterion:
+cargo +1.90.0 bench -p contime --all-features --bench module_application -- 'module_application/(routing|isolation)'
+
+# Interleave the controls and actual module under the same machine load:
+CONTIME_PERF_PAIRED=1 cargo +1.90.0 bench -p contime --all-features --bench module_application
+```
+
+Paired mode runs all 120 permutations of the five cases in a fixed-seed shuffled
+order. Each case occupies each position 24 times; every within-round neighboring
+pair also occurs 24 times. Each sample submits 65,536 events to 256 snapshots in
+batches of 1,024. Reported throughput is total events divided by total measured
+time. Paired changes compare each case with the direct control from its own
+round. The middle half is the interquartile range, not a confidence interval.
+
+Latest paired run, Rust 1.90.0, all features, normal desktop background load:
+
+| Workers | Routing / application | M events/s | Median paired time change | Middle half |
+| --- | --- | ---: | ---: | --- |
+| 1 | Direct / direct | 8.73 | control | — |
+| 1 | Builder / direct | 8.65 | +0.19% | −1.12% to +1.35% |
+| 1 | Direct / typed | 8.43 | +2.82% | +1.76% to +4.05% |
+| 1 | Builder / typed | 8.42 | +3.72% | +2.81% to +4.71% |
+| 1 | Generated module | 8.38 | +3.90% | +3.02% to +5.23% |
+| 4 | Direct / direct | 25.05 | control | — |
+| 4 | Builder / direct | 25.25 | −1.06% | −3.43% to +3.18% |
+| 4 | Direct / typed | 24.51 | +2.55% | +0.17% to +4.11% |
+| 4 | Builder / typed | 24.26 | +2.50% | −0.78% to +6.48% |
+| 4 | Generated module | 24.59 | +2.03% | −0.41% to +5.95% |
+
+Two earlier 40-round rotating-order controls illustrate the variability. Before
+inlining, the generated module's median time difference was +1.45% with one
+worker and +0.56% with four. After inlining, another loaded run reported +2.07%
+and −2.25%, with wide interquartile ranges crossing zero. Those runs do not prove
+an end-to-end speedup from inlining. The larger balanced comparison still shows
+a few percent of typed-adapter cost; it does not establish zero overhead.
+
+Disassembly did identify an avoidable application-bridge boundary retaining
+virtual iterator calls. Inlining only the generated delegation left another
+bridge call. Keeping both layers inline removed that boundary without changing
+public methods or worker scheduling. The isolated application results were:
+
+| Configuration | 1 event | 8 events | 64 events |
+| --- | ---: | ---: | ---: |
+| Initial typed views (previous section) | 3.561 ns | 24.701 ns | 286.490 ns |
+| Inline hint on generated adapter | 3.425 ns | 24.013 ns | 297.660 ns |
+| Force generated adapter inline only | 3.394 ns | 23.624 ns | 280.690 ns |
+| Inline both bridges, lower-load sample | 0.760 ns | 15.673 ns | 275.640 ns |
+| Inline both bridges, later loaded sample | 0.945 ns | 20.423 ns | 317.030 ns |
+
+The one-event application path now approaches the earlier borrowed-enum fixture's
+sub-nanosecond result. This is not complete pipeline throughput. Larger buckets
+still buffer references, scan by type and allocate above eight events. Routing
+alone measured 1.143 µs for 256 builder-routed events versus 87.647 ns for direct
+field routing, about 4.47 ns versus 0.34 ns per event. That cost is real but did
+not produce a consistent 10% pipeline penalty here: routing and application run
+in separate parts of the threaded pipeline. Registration itself remains cached.
+Forced inlining can increase generated code size; these fixtures cover a small
+module and one-event-per-timestamp pipeline, not arbitrary application shapes.

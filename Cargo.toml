@@ -171,3 +171,8 @@ required-features = ["macros", "runtime", "time"]
 name = "ordered_list"
 path = "examples/ordered_list.rs"
 required-features = ["macros", "runtime", "time"]
+
+[[bench]]
+name = "module_application"
+harness = false
+required-features = ["runtime", "macros", "time"]
