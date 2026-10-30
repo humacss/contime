@@ -9,6 +9,27 @@ It has no `Send` or `Sync` requirement. The managed runtime adds those bounds
 at its own boundary; thread-local events, snapshots, and application contexts
 can use the shared storage directly.
 
+## Typed application definitions
+
+`module::EventId` supplies event identity. `SnapshotId::snapshot_id(&self)`
+reads an initialized snapshot's identity. `SnapshotApply::define` uses
+`EventSetBuilder` to register event types and callbacks that emit their final
+destination IDs. Routing does not initialize state; `create(id, EventRef)`
+initializes a selected history. Its snapshot ID must match the destination.
+
+`SnapshotApply::apply_batch` receives `impl ApplyContext<Self>` with metadata and
+repeatable typed views, `events::<EventType>()`. Each call handles one effective
+timestamp. Applications choose the order of type phases; each view preserves
+canonical ordering within its event type. No payload is cloned or boxed.
+Common buckets of up to eight events keep their borrowed references inline;
+larger buckets allocate reference storage. Event registration is cached per
+concrete module/snapshot definition, without a global registry lock.
+
+This module frontend uses runtime type identification: concrete event types must
+be `'static`, but values are borrowed and need not be `Clone`, `Send` or `Sync`.
+The lower-level `checkpoints::ApplyEvents` iterator contract continues to support
+non-static borrowed payload types. Replay and worker scheduling are unchanged.
+
 ## Application and storage
 
 The `checkpoints` module exposes snapshot contracts, `ApplyEvents`, checkpoint

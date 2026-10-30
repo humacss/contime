@@ -6,7 +6,7 @@ repository root. Use `--release` when comparing performance.
 
 | Example | Command | Read first |
 | --- | --- | --- |
-| Ordered list with derives | `cargo run --example ordered_list --features macros` | [`ordered_list.rs`](ordered_list.rs), step-by-step late insertion assertions |
+| Ordered list with trait-based data | `cargo run --example ordered_list --features macros` | [`ordered_list.rs`](ordered_list.rs), step-by-step late insertion assertions |
 | Dependent modules | `cargo run --example modules --features macros` | [`modules.rs`](modules.rs), shared dependencies and multiple snapshot types |
 | Finite counter walkthrough | `cargo run --example readme --features macros` | [`cases/counter/readme.rs`](cases/counter/readme.rs), a complete counter program |
 | Live counters | `cargo run --release --all-features --example counter` | [`cases/counter/model.rs`](cases/counter/model.rs), then [`cases/counter/setup.rs`](cases/counter/setup.rs) |
@@ -16,7 +16,7 @@ repository root. Use `--release` when comparing performance.
 | WebAssembly in a browser | See [`environments/browser/README.md`](environments/browser/README.md) | Shared WebAssembly Rust code, then [`environments/browser/src/clock.rs`](environments/browser/src/clock.rs) |
 
 Start the launcher with `cargo run --example launcher`; it handles build features
-for you. Native workload targets compile the derives, Runtime, Manual, monitoring, and simulation
+for you. Native workload targets compile the module derive, Runtime, Manual, monitoring, and simulation
 together. If running one directly, use `--all-features`, then choose
 `--execution runtime|manual` for live cases. Ordinary library consumers still get
 only Runtime by default.

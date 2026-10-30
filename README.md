@@ -100,8 +100,8 @@ Provide time-travel queries without needing a full persistent event store.
 
 ## Using `contime`
 
-ConTime 0.1.2 supports Rust 1.90 or newer. Enable `macros` to define events,
-snapshots and composable modules with derive macros:
+ConTime 0.1.2 supports Rust 1.90 or newer. Enable `macros` to assemble trait-based events and snapshots into
+composable modules with `ContimeModule`:
 
 ```toml
 [dependencies]
@@ -118,37 +118,85 @@ three. Its snapshot only appends values; ConTime supplies timestamp order even
 when events arrive late. The core application rule is:
 
 ```rust
-use contime::{ConTime, ContimeEvent, ContimeModule, ContimeSnapshot};
+use contime::prelude::*;
 
-#[derive(ContimeEvent)]
-#[contime_event(id = |event| contentid::typed_content_id_u128(
-    "OrderedValue.v1", &(event.time, event.list_id, u32::from(event.value))
-))]
+// Choose the ID function explicitly. Content ID hashes these event values;
+// repeating the same values produces the same ID and is treated as a retry.
 struct OrderedValue {
     time: i64,
     list_id: u128,
     value: char,
 }
-
-#[derive(ContimeSnapshot)]
-#[contime_snapshot(id = |list_id| contentid::typed_content_id_u128("OrderedList.v1", list_id), events = [OrderedValue], apply = {
-    for event in batch.events {
-        let OrderedListEvent::OrderedValue(event) = event;
-        self.values.push((event.time, event.value));
+impl contime::checkpoints::Event for OrderedValue {
+    type Time = i64;
+    fn time(&self) -> Self::Time {
+        self.time
     }
-})]
+}
+
+impl EventId for OrderedValue {
+    fn event_id(&self) -> u128 {
+        contentid::typed_content_id_u128("OrderedValue.v1", &(self.time, self.list_id, u32::from(self.value)))
+    }
+}
+
+// The builder routes each event to its list; create initializes the list identity.
+// Its explicit namespace keeps this snapshot identity separate from other types.
+// The update rule only appends: ConTime handles ordering and late-event replay.
+#[derive(Clone, Default)]
 struct OrderedList {
     time: i64,
     list_id: u128,
     values: Vec<(i64, char)>,
 }
+impl contime::checkpoints::Snapshot for OrderedList {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
+
+impl OrderedList {
+    fn id_for(list_id: &u128) -> u128 {
+        contentid::typed_content_id_u128("OrderedList.v1", list_id)
+    }
+}
+impl SnapshotId for OrderedList {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.list_id)
+    }
+}
+impl SnapshotApply for OrderedList {
+    fn define(events: &mut EventSetBuilder<Self>) {
+        events.event::<OrderedValue>(|event, emit| emit(Self::id_for(&event.list_id)));
+    }
+
+    fn create(_snapshot_id: u128, event: EventRef<'_>) -> Self {
+        let Some(event) = event.get::<OrderedValue>() else { unreachable!("the builder registers OrderedValue") };
+        Self { list_id: event.list_id, ..Self::default() }
+    }
+
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for event in batch.events::<OrderedValue>() {
+            self.values.push((event.time, event.value));
+        }
+    }
+}
 ```
 
-Both derives require an ID closure returning `u128`. ConTime uses the result
-unchanged, without adding hashing or a namespace. This example explicitly chooses
-Content ID. You can instead call your own function or return a supplied event ID
-with `id = |event| event.id`. Snapshot closure parameters name the logical key
-fields used for routing and queries. See the [identity guide](guides/modules/README.md#define-data-and-application-rules).
+`define` registers each accepted event type and a callback that emits its destination
+snapshot IDs. `create` initializes a selected history from its first event;
+`snapshot_id(&self)` must return that same ID. This example uses Content ID
+explicitly; ConTime does not choose an ID algorithm.
+
+`apply_batch` handles one effective timestamp at a time. Typed views such as
+`batch.events::<OrderedValue>()` borrow payloads and can be read repeatedly.
+For several event types, write one loop per type in the phase order your
+application requires. ConTime preserves canonical order within each view.
+See the [identity and application guide](guides/modules/README.md#define-data-and-application-rules).
 
 Register the event and snapshot together with their common time type:
 
@@ -165,7 +213,7 @@ submit an event, advance the processing target, and query state:
 let contime = ConTime::<Values>::start(config)?;
 contime.apply([OrderedValue { time: 30, list_id: 7, value: 'c' }.into()])?;
 contime.advance_to(30)?;
-let snapshots = contime.query_at(30, [OrderedList::snapshot_id(7)])?;
+let snapshots = contime.query_at(30, [OrderedList::id_for(&7)])?;
 ```
 
 `apply` queues work; queries observe available admitted history. The complete

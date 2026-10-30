@@ -10,7 +10,7 @@ A running application usually submits events as they arrive and queries state wh
 
 This walkthrough starts an in-memory ConTime instance with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
 
-The Rust blocks show the underlying trait contracts as one complete program. A derive-based version with the same behavior is available as [`examples/cases/counter/readme.rs`](https://github.com/humacss/contime/blob/main/examples/cases/counter/readme.rs). Run it from a ConTime checkout with:
+The Rust blocks show the underlying trait contracts as one complete program. A version using the module derive with the same behavior is available as [`examples/cases/counter/readme.rs`](https://github.com/humacss/contime/blob/main/examples/cases/counter/readme.rs). Run it from a ConTime checkout with:
 
 ```bash
 cargo run -p contime --example readme --features macros
@@ -62,8 +62,8 @@ See the [simulator guide](../../crates/simulator/README.md) for the APIs and exa
 
 ## Declarative application modules
 
-Enable `macros` to define events, snapshots and nested modules without writing
-their trait implementations. Start with the [module walkthrough](../modules/README.md)
+Enable `macros` to assemble trait-based events, snapshots and nested modules
+into flat lanes with `ContimeModule`. Start with the [module walkthrough](../modules/README.md)
 and `cargo run --example modules --features macros`. The explicit trait walkthrough
 below remains useful when adapting existing application types.
 
