@@ -429,8 +429,9 @@ Each client has a consistent color across the timeline, inputs, delivery animati
 and queried paths. Gray paths show earlier rendering states that now disagree;
 double delivery ticks mark out-of-order arrivals. The timeline spans six seconds,
 with unlabeled one-second divisions. The browser displays only the shared graphical
-view. The canvas is recorded directly at 30 fps, then converted to a 25 fps GIF
-for the README, avoiding repeated screenshots during simulation.
+view. The canvas is recorded directly at 60 fps, then a ten-second excerpt is
+converted to a 50 fps GIF for the README, avoiding repeated screenshots during
+simulation.
 
 To reproduce the choreography, first launch the browser host below, then add
 `showcase=1&client_spacing=18&movement_speed=8` to its URL, replacing any existing

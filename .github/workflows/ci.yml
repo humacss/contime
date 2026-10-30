@@ -29,7 +29,12 @@ jobs:
       - name: Test workspace and Rust documentation examples
         run: cargo +${{ matrix.toolchain }} test --workspace
       - name: Test optional features
-        run: cargo +${{ matrix.toolchain }} test --workspace --all-features
+        # Compiler diagnostics change between Rust releases; run their exact-output
+        # fixtures separately on the pinned compiler, keeping functional tests on stable.
+        run: cargo +${{ matrix.toolchain }} test --workspace --all-features -- --skip module_time_mismatches_and_cycles_are_compile_errors
+      - name: Test compiler diagnostics (Rust 1.90.0)
+        if: matrix.toolchain == '1.90.0'
+        run: cargo +1.90.0 test -p contime --all-features --test modules module_time_mismatches_and_cycles_are_compile_errors -- --exact
       - name: Check isolated Monitor features
         run: |
           cargo +${{ matrix.toolchain }} check -p contime-monitor --no-default-features --lib
