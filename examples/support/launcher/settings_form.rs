@@ -301,7 +301,7 @@ mod tests {
     fn configured_movement_values_are_available_and_forwarded_in_every_environment() {
         for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads, Environment::Browser] {
             let mut setup = session(environment, Execution::Manual, Domain::Movement, &[]);
-            assert_eq!(setup.field("--client-spacing").unwrap().value, "4");
+            assert_eq!(setup.field("--client-spacing").unwrap().value, "16");
             assert_eq!(setup.field("--movement-speed").unwrap().value, "6");
             setup.edit("--client-spacing", "9");
             setup.edit("--movement-speed", "10");

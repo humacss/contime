@@ -70,7 +70,11 @@ pub struct Session {
 impl Session {
     pub fn new(json: &str, domain: &str) -> Result<Self, String> {
         let task = if domain == "client-movement" {
-            Domain::Movement(Box::new(crate::movement_frame::Frame::new(crate::movement::config(json)?)?))
+            let mut frame = crate::movement_frame::Frame::new(crate::movement::config(json)?)?;
+            if serde_json::from_str::<serde_json::Value>(json).map_err(|e| e.to_string())?["showcase"].as_bool() == Some(true) {
+                frame.use_showcase()?;
+            }
+            Domain::Movement(Box::new(frame))
         } else {
             let settings = settings(json)?;
             match domain {
@@ -271,6 +275,43 @@ mod budget_monitor_tests {
 mod movement_tests {
     use super::*;
     #[test]
+    fn scripted_showcase_uses_real_replay_queries_and_validation() {
+        let json = serde_json::json!({"clients":5,"client_spacing":18,"movement_speed":8,
+            "input_hz":1,"query_hz":20,"average_latency_ms":1000,"jitter_ms":1000,
+            "trail_ms":5000,"fade_ms":5000,"retention_ms":10000,"checkpoint_interval":128,
+            "showcase":true}).to_string();
+        let mut session = Session::new(&json, "client-movement").unwrap();
+        let mut saw_reordered = false;
+        let mut saw_revised = false;
+        for tick in 0..1800 {
+            let frame: serde_json::Value = serde_json::from_str(
+                &session.frame(tick as f64 * 16.0, 1.0, 64, tick >= 1700, || 0.0).unwrap()).unwrap();
+            let report: crate::support::movement_report::Report = serde_json::from_value(frame["movement"].clone()).unwrap();
+            report.validate().unwrap();
+            saw_reordered |= report.network.iter().any(|input| input.reordered);
+            saw_revised |= frame["movement"]["corrections"].as_u64().unwrap() > 0;
+        }
+        assert!(saw_reordered && saw_revised);
+    }
+    #[test]
+    fn arrival_pulses_do_not_wait_for_a_slow_query() {
+        let config = serde_json::json!({"clients":2,"input_hz":10,"query_hz":1,
+            "average_latency_ms":0,"jitter_ms":0,"trail_ms":2000,"fade_ms":500,
+            "retention_ms":3000,"checkpoint_interval":4}).to_string();
+        let mut session = Session::new(&config, "client-movement").unwrap();
+        let mut visible_before_query = false;
+        for tick in 0..50 {
+            let frame: serde_json::Value = serde_json::from_str(
+                &session.frame(tick as f64 * 16.0, 1.0, 32, false, || 0.0).unwrap()).unwrap();
+            let scene = &frame["movement"];
+            let latest = scene["trails"].as_array().unwrap().iter()
+                .filter_map(|p| p["time_ns"].as_u64()).max().unwrap_or(0);
+            visible_before_query |= scene["arrivals"].as_array().unwrap().iter()
+                .any(|a| a["time_ns"].as_u64().unwrap() > latest && a["pulse"].as_f64().unwrap() > 0.0);
+        }
+        assert!(visible_before_query, "a delivered input must pulse before the next one-second query");
+    }
+    #[test]
     fn movement_obeys_frame_steps_and_replays_delayed_keyboard_and_bot_inputs() {
         let json =
             serde_json::json!({"clients":4,"client_spacing":9,"movement_speed":10,"input_hz":30,"query_hz":20,"average_latency_ms":100,
@@ -286,13 +327,34 @@ mod movement_tests {
             }
         }
         assert_eq!(initial["movement"]["positions"][1]["position"], serde_json::json!([9.0, 0.0]));
+        assert_eq!(initial["movement"]["positions"][0]["direction"], serde_json::json!([0.0, 0.0]));
         assert_eq!(initial["movement"]["client_spacing"], 9);
         assert_eq!(initial["movement"]["movement_speed"], 10);
+        let mut saw_waiting = false;
+        let mut saw_reordered = false;
         let mut last = serde_json::Value::Null;
         for i in 1..180 {
             last = serde_json::from_str(&session.frame(i as f64 * 16.0, 1.0, 32, false, || 0.0).unwrap()).unwrap();
             assert!(last["steps"].as_u64().unwrap() <= 32);
+            let rows = last["movement"]["network"].as_array().unwrap();
+            assert!(rows.len() <= crate::support::movement_report::MAX_NETWORK_EVENTS);
+            assert!(rows.windows(2).all(|pair| pair[0]["action_ns"].as_u64() <= pair[1]["action_ns"].as_u64()));
+            saw_waiting |= rows.iter().any(|e| e["arrived_ns"].is_null());
+            saw_reordered |= rows.iter().any(|e| e["reordered"] == true);
+
         }
+        assert!(saw_waiting && saw_reordered, "timeline must show queued inputs and actual reordered arrivals");
+        let movement = &last["movement"];
+        let segments = movement["trails"].as_array().unwrap();
+        assert!(!segments.is_empty());
+        assert!(segments.iter().all(|p| p["previous"].is_array() && (1..=4).contains(&p["client"].as_u64().unwrap())));
+        let arrivals = movement["arrivals"].as_array().unwrap();
+        assert!(!arrivals.is_empty());
+        assert!(arrivals.len() <= 128);
+        assert!(arrivals.iter().all(|a| a["time_ns"].as_u64().unwrap() < 3_000_000_000));
+        assert!(arrivals.iter().any(|a| a["pulse"].as_f64().unwrap() > 0.0));
+        let report: crate::support::movement_report::Report = serde_json::from_value(movement.clone()).unwrap();
+        report.validate().unwrap();
         assert!(last["movement"]["late"].as_u64().unwrap() > 0);
         assert!(last["movement"]["updates"].as_u64().unwrap() > 0);
         assert!(session.input("unknown").is_err());
@@ -304,6 +366,7 @@ mod movement_tests {
         }
         assert_eq!(last["done"], true, "{last}");
         assert_eq!(last["movement"]["keyboard_inputs"], 1);
+        assert_eq!(last["movement"]["positions"][0]["direction"], serde_json::json!([1.0, 0.0]));
         let x = last["movement"]["center"][0].as_f64().unwrap();
         assert!((28.0..30.0).contains(&x), "custom speed must travel ten units per second: {x}");
         assert_eq!(last["outstanding"], 0);

@@ -7,7 +7,7 @@ const params = new URLSearchParams(location.search);
 const result = window.contimeExample = { done: false, error: null, report: null, frames: 0 };
 let BudgetDemo, demo, config, movementView, running = false, animationId = null;
 let activeMs = 0, previousTime = null, overruns = 0, duration = null;
-function status(message) { $('state').textContent = message; }
+function status(message) { $('state').textContent = message; $('state').hidden = config?.domain === 'client-movement' && message !== 'Failed'; }
 function controls() {
     movementView?.running(running);
     $('start').disabled = !BudgetDemo || running || result.done || !!result.error;
@@ -46,9 +46,8 @@ function renderWorkers(workers) {
 function render(report) {
     $('movement-panel').hidden = !report.movement;
     if (report.movement) {
-        const m=report.movement;
-        movementView?.draw(m);
-        $('movement-stats').textContent = `${metric(m.clients)} clients · spacing ${metric(m.client_spacing)} · speed ${metric(m.movement_speed)} units/s · ${metric(m.late)} reordered inputs · ${metric(m.corrections)} corrected client histories · ${metric(m.updates)} queried updates${m.preview_limited ? ' · bounded visual preview; all clients validated' : ''}`;
+        movementView?.draw(report.movement);
+        return; // This case uses only the shared graphical view.
     }
     for (const id of metrics) $(id).textContent = metric(id === 'overruns' ? overruns : report[id]);
     $('visible').textContent = metric(report.completed);
@@ -134,13 +133,17 @@ $('reset').addEventListener('click', () => {
     $('worker-rows').replaceChildren();
     $('values-panel').hidden = true;
     $('movement-panel').hidden = true;
-    $('movement-stats').textContent = '';
     movementView?.reset();
     $('elapsed').textContent = '0 s'; $('values').textContent = 'Waiting for first query';
     status('Ready'); controls();
 });
 try {
     config = startupSettings(params);
+    const movement = config.domain === 'client-movement';
+    $('page').className = movement ? 'movement-example' : '';
+    $('diagnostics').open = !movement;
+    $('diagnostics-title').hidden = !movement;
+    $('run-title').hidden = movement;
     if (params.has('duration')) {
         duration = Number(params.get('duration'));
         if (!Number.isFinite(duration) || duration <= 0) throw new Error('duration must be a positive number of seconds');
@@ -154,5 +157,6 @@ try {
         movementView = createMovementView(graphics);
     }
     status('Ready'); controls();
-    if (params.get('autostart') === '1') $('start').click();
+    // The movement case is a graphical application, so no browser controls are needed.
+    if (movement || params.get('autostart') === '1') $('start').click();
 } catch (error) { fail(error); }

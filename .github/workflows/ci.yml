@@ -70,7 +70,7 @@ jobs:
       - name: Run ordered-list walkthrough
         run: cargo +${{ matrix.toolchain }} run -p contime --example ordered_list --features macros
       - name: Run client-movement example
-        run: cargo +${{ matrix.toolchain }} run -p contime --all-features --example client_movement -- --headless --duration 1 --clients 8
+        run: cargo +${{ matrix.toolchain }} run -p contime --all-features --example client_movement -- --headless --duration 1 --clients 5
 
   release-checks:
     runs-on: ubuntu-latest

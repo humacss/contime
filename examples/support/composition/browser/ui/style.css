@@ -4,4 +4,15 @@
 
 .hashes code { display: block; overflow-wrap: anywhere; font-size: .8rem; }
 
-.movement-viewport{position:relative;width:100%;aspect-ratio:5/3;min-height:240px}#movement-map{position:absolute;inset:0;display:block;width:100%;height:100%;background:#152535;border:1px solid #6c8095;border-radius:4px}
+.movement-viewport{position:relative;width:100%;aspect-ratio:1/1;min-height:240px}#movement-map{position:absolute;inset:0;display:block;width:100%;height:100%;background:#152535;border:1px solid #6c8095;border-radius:4px}
+
+/* Movement uses the shared graphical presentation without a second browser UI. */
+body:has(.movement-example){background:#152535}
+.movement-example{max-width:none;min-height:100dvh;padding:0;display:grid;place-items:center}
+.movement-example header,.movement-example .run-heading,.movement-example .actions,
+.movement-example #movement-title,
+.movement-example #diagnostics,.movement-example footer{display:none}
+.movement-example .layout{width:min(100vw,100dvh)}
+.movement-example .movement-viewport{min-height:0}
+.movement-example #movement-map{border:0;border-radius:0}
+.movement-example #error{position:fixed;inset:16px 16px auto;z-index:1}

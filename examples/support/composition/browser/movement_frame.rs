@@ -24,6 +24,9 @@ impl Frame {
         let driver = Driver::new(&backend, config).map_err(|e| e.to_string())?;
         Ok(Self { backend, driver })
     }
+    pub fn use_showcase(&mut self) -> Result<(), String> {
+        self.driver.use_showcase()
+    }
     pub fn input(&mut self, direction: &str) -> Result<(), String> {
         self.driver.input(crate::movement::direction(direction)?)
     }

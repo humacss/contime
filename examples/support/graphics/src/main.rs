@@ -48,14 +48,8 @@ fn desktop(
         let done = desktop.source.poll(&bridge)?;
         if let Some(report) = bridge.snapshot().report {
             if let Ok(mut window) = windows.single_mut() {
-                window.title = format!(
-                    "ConTime / {} clients / {} ms lag / {} late inputs / {} corrections{}",
-                    report.clients,
-                    report.average_latency_ms,
-                    report.late,
-                    report.corrections,
-                    if desktop.stopping { " / draining and validating" } else { " / WASD, Space, Esc" }
-                );
+                window.title =
+                    if desktop.stopping { "ConTime / Finishing validation" } else { "ConTime / Reconciliation in motion" }.into();
             }
             if done {
                 println!(

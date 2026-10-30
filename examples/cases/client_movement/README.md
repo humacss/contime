@@ -21,7 +21,8 @@ The launcher collects these settings before starting the example; direct launche
 use the same schema and editor. Settings are fixed for the run. Use WASD or arrows to choose
 a persistent direction, Space to stop, and q / Esc / Ctrl-C to quit. Keyboard
 inputs experience the same latency and reordering as bot inputs. Terminal key
-release events are not required. Client count includes the human-controlled client.
+release events are not required. Client count is limited to one through five, including the human-controlled client.
+Use Counter or Chain hash to explore larger workloads.
 
 ## Events, snapshots and the lane
 
@@ -35,7 +36,7 @@ Positions use fixed-point integers. Movement speed defaults to six world units p
 integration timestamp preserves the position anchor when ConTime updates snapshot
 metadata during queries or pruning. Rendering projects the accepted direction
 to the query time; it never applies keyboard input directly to a displayed character.
-By default, characters start four world units apart on a deterministic grid in a
+By default, characters start 16 world units apart on a deterministic grid in a
 96 × 56 world-unit arena. Positions stop at a wall until a new direction turns
 them inward. Spawns wrap around the finite grid; large client counts or spacing
 can place several characters at the same point. The spacing and movement speed make delayed turns and
@@ -43,39 +44,40 @@ revised paths easier to see.
 
 ## Late inputs and rendering states
 
-Defaults are 32 clients, five direction changes per bot per second, 350 ms average
-latency with ±300 ms jitter (50–650 ms per input), and up to 20 completed query updates per second.
-The jitter regularly delivers a newer input before an older input for the same
-character. Delivery is simulated in support; ConTime is unchanged.
+Defaults are five clients, one direction change per bot per second, 1,000 ms average
+latency with ±1,000 ms jitter (0–2,000 ms per input), and up to 20 completed query updates per second.
+Larger jitter can deliver a newer input before an older input for the same
+character; the browser demo uses 1,000 ms average latency with ±1,000 ms jitter. Delivery is simulated in support; ConTime is unchanged.
 
-The whole arena stays in view, with walls around its boundary. Your character is
-marked `@`; letters identify other clients.
-Cyan dots show the latest queried paths and draw above old paths. Old points fade
-in amber only where the latest query disagrees for the same client at the same
+The whole arena stays in view, with walls around its boundary. In the shared graphical view, gold with a ring identifies you; mint, sky blue,
+coral, and lilac identify the bots. Direction icons, timeline rows, delivery
+animations and current paths share each client’s color. Old paths fade
+in gray only where the latest query disagrees for the same client at the same
 historical timestamp; matching points and unmatched sliding-window endpoints are
-omitted. Affected characters are highlighted briefly, so ordinary motion is not
+omitted. Delivered input markers briefly grow on arrival; ordinary motion is not
 counted as reconciliation. Inputs arriving together
 may produce one visible correction.
 
 Rendering refreshes independently while queries are pending. A query cycle samples
 the retained trail every 200 ms plus its current endpoint and validates all clients,
-including those omitted by the bounded visual preview. At most 32 old rendering states are kept.
+including those omitted by the bounded visual preview. At most 320 old rendering states are kept, covering a five-second fade at up to 60 query updates per second.
 Trails live in presentation, not character snapshots.
 
 Worker-monitor readings confirm the submitted prefix before querying. Submissions
 and advancement pause during that query cycle so late arrivals cannot invalidate
 its captured reference; input generation, the simulated network, keyboard input
-and fading continue. The worker table shows cumulative totals and average rates.
+and fading continue. The direct terminal view includes worker totals and average
+rates; graphical hosts focus on the arena, timeline and legends.
 This real-time demonstration is not Maximum throughput mode; use Counter for that.
 
 ## Configuration and validation
 
 ```sh
 cargo run --release --all-features --example client_movement -- \
-  --no-setup --clients 64 --workers 4 --input-hz 5 --query-hz 20 \
+  --no-setup --clients 5 --workers 4 --input-hz 5 --query-hz 20 \
   --average-latency-ms 350 --jitter-ms 300 --trail-ms 2000 --fade-ms 1000
 cargo run --all-features --example client_movement -- \
-  --headless --duration 2 --clients 8
+  --headless --duration 2 --clients 5
 ```
 
 Average latency can be 50 ms, one second, several seconds or longer. Use
@@ -118,13 +120,13 @@ Direct native example commands retain the terminal map. For WASI the presenter
 forwards keys to the guest's input pipe and draws its bounded reports; all
 simulation, queries and validation remain in WebAssembly. In the browser, click
 the map and use WASD/arrows or Space. Old queried paths fade and revised paths
-appear amber. Visual reports cover the camera region and cap characters/path
+appear gray. Visual reports cover the camera region and cap characters/path
 points to bound transport and drawing; every configured client remains validated.
 
 ## Spacing and speed
 
 The launcher's **Client movement** group includes **Client spacing** and
-**Movement speed** in every environment. Defaults are 4 world units between
+**Movement speed** in every environment. Defaults are 16 world units between
 starting positions and 6 world units/second. Both accept whole numbers from
 0 to 1,000,000; zero spacing starts clients together and zero speed keeps them
 stationary while inputs and replay validation continue.
@@ -137,3 +139,11 @@ cargo run --release --example launcher -- --environment browser --example client
 The same flags work in Native, WASI and WASI Threads. Values are fixed at startup.
 Each movement input carries the run's motion settings so snapshot creation and
 late-event replay use the same origin and speed without global configuration.
+
+Bots send one input per second by default. Each period is split into evenly
+spaced client slots; the player’s slot stays reserved while keyboard input
+remains immediate. Random network delay can still reorder delivery.
+
+Bot generation selects only North, East, South, or West; it never sends Stop.
+The player can still stop with Space, and all renderers retain Stop icons.
+Arena walls still constrain movement.

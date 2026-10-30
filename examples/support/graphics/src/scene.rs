@@ -1,8 +1,4 @@
-use crate::{
-    animation::Animation,
-    bridge::Bridge,
-    hud::{COLUMNS, Hud, LABELS},
-};
+use crate::{animation::Animation, bridge::Bridge};
 use bevy::{camera::ScalingMode, math::Isometry2d, prelude::*};
 
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
@@ -13,6 +9,9 @@ pub enum GraphicsSet {
 #[derive(Default, Resource)]
 struct Display {
     animation: Animation,
+    transfers: crate::transfer::Transfers,
+    entries: crate::entrance::Entries,
+    tracks: crate::tracks::Tracks,
     generation: u64,
 }
 
@@ -22,7 +21,7 @@ pub fn app(bridge: Bridge, canvas: Option<String>) -> App {
         primary_window: Some(Window {
             title: "ConTime / Client movement".into(),
             canvas,
-            resolution: (1000, 660).into(),
+            resolution: (1000, 1000).into(),
             fit_canvas_to_parent: true,
             prevent_default_event_handling: false,
             ..default()
@@ -41,8 +40,9 @@ pub fn app(bridge: Bridge, canvas: Option<String>) -> App {
 fn setup(mut commands: Commands, mut config: ResMut<GizmoConfigStore>) {
     commands.spawn((
         Camera2d,
+        Transform::from_xyz(0.0, 20.0, 0.0),
         Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::AutoMin { min_width: 106.0, min_height: 76.0 },
+            scaling_mode: ScalingMode::AutoMin { min_width: 106.0, min_height: 116.0 },
             ..OrthographicProjection::default_2d()
         }),
     ));
@@ -52,6 +52,9 @@ fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut 
     let state = bridge.snapshot();
     if display.generation != state.generation {
         display.animation.reset();
+        display.transfers.reset();
+        display.entries.reset();
+        display.tracks.reset();
         display.generation = state.generation;
     }
     let Some(report) = state.report else {
@@ -59,27 +62,15 @@ fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut 
     };
     let elapsed = if state.running { time.delta_secs_f64() * 1000.0 } else { 0.0 };
     display.animation.update(&report, elapsed, state.reduced_motion || state.finished);
+    display.tracks.update(&report);
+    display.entries.update(&report, elapsed, state.reduced_motion || state.finished);
+    // Delivery effects follow the completed timeline entrance and the drawn track.
+    let Display { transfers, tracks, entries, .. } = &mut *display;
+    transfers.update(&report, tracks, entries, elapsed, state.reduced_motion || state.finished);
     let [hx, hy] = report.arena_half_extent.map(|v| v as f32);
     let color = |r, g, b, alpha| Color::srgba(r, g, b, alpha);
-    let hud = Hud::new(
-        &report,
-        if state.finished {
-            "Validated"
-        } else if state.running {
-            "Live"
-        } else {
-            "Paused"
-        },
-    );
-    let text = color(0.73, 0.83, 0.87, 1.0);
     let muted = color(0.50, 0.65, 0.72, 1.0);
     let anchor = Vec2::new(-0.5, 0.0);
-    gizmos.text_2d(Isometry2d::from_translation(Vec2::new(-hx, 36.5)), &hud.settings, 1.25, anchor, text);
-    for ((x, label), value) in COLUMNS.into_iter().zip(LABELS).zip(&hud.values) {
-        gizmos.text_2d(Isometry2d::from_translation(Vec2::new(x, 34.0)), label, 1.15, anchor, muted);
-        gizmos.text_2d(Isometry2d::from_translation(Vec2::new(x, 31.5)), value, 1.8, anchor, text);
-    }
-    gizmos.text_2d(Isometry2d::from_translation(Vec2::new(-hx, -32.5)), &hud.footer, 1.1, anchor, muted);
     let grid = color(0.13, 0.21, 0.28, 1.0);
     for x in ((-hx / 10.0).ceil() as i32)..=(hx / 10.0).floor() as i32 {
         gizmos.line_2d(Vec2::new(x as f32 * 10.0, -hy), Vec2::new(x as f32 * 10.0, hy), grid);
@@ -88,27 +79,37 @@ fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut 
         gizmos.line_2d(Vec2::new(-hx, y as f32 * 10.0), Vec2::new(hx, y as f32 * 10.0), grid);
     }
     gizmos.rect_2d(Isometry2d::IDENTITY, Vec2::new(hx * 2.0, hy * 2.0), color(0.42, 0.55, 0.62, 1.0));
-    // Current points are opaque and drawn last at the very same geometry.
-    for trail in ordered_trails(&report) {
-        let current = trail.current;
-        let p = Vec2::from_array(trail.position.map(|v| v as f32));
-        let c = if current { color(0.29, 0.84, 0.87, 1.0) } else { color(0.91, 0.67, 0.23, trail.opacity as f32 * 0.5) };
-        gizmos.circle_2d(p, 0.10, c).resolution(6);
+    crate::paths::draw(&report, state.reduced_motion, &mut gizmos);
+    crate::network::draw(&report, &display.entries, &display.tracks, state.reduced_motion, &mut gizmos);
+    for (y, label) in [
+        (-33.5, "Client colors: queried paths / Gray: revised old paths / Light arrows or squares: delivered inputs"),
+        (-36.0, "Ring: you / Arrow: direction / Dot: Stop / Square: past Stop / WASD or arrows, Space stops"),
+    ] {
+        gizmos.text_2d(Isometry2d::from_translation(Vec2::new(-hx, y)), label, 0.9, anchor, muted);
     }
     for (id, marker) in &display.animation.clients {
         let p = Vec2::from_array(marker.position.map(|v| v as f32));
-        let c = if *id == 1 { color(1.0, 0.85, 0.41, marker.opacity as f32) } else { color(0.29, 0.84, 0.87, marker.opacity as f32) };
-        gizmos.circle_2d(p, 0.40, c).resolution(16);
-        gizmos.circle_2d(p, 0.16, c).resolution(8);
-        gizmos.circle_2d(p, 0.72, color(0.91, 0.67, 0.23, (marker.opacity * marker.correction * 0.7) as f32)).resolution(20);
-        let label = if *id == 1 { '@' } else { char::from(b'a' + ((id - 1) % 26) as u8) };
-        gizmos.text_2d(Isometry2d::from_translation(p + Vec2::Y * 1.1), &label.to_string(), 1.3, Vec2::ZERO, c);
+        let c = crate::palette::input(*id, marker.opacity as f32);
+        let direction = Vec2::from_array(marker.direction.map(|v| v as f32));
+        if direction == Vec2::ZERO {
+            gizmos.circle_2d(p, 0.40, c).resolution(16);
+            gizmos.circle_2d(p, 0.22, c).resolution(8);
+        } else {
+            let tip = p + direction * 0.85;
+            let shoulder = p - direction * 0.07;
+            gizmos.line_2d(p - direction * 0.65, tip, c);
+            gizmos.line_2d(shoulder + direction.perp() * 0.45, tip, c);
+            gizmos.line_2d(shoulder - direction.perp() * 0.45, tip, c);
+        }
+        if *id == 1 {
+            gizmos.circle_2d(p, 1.35, color(0.78, 0.87, 0.90, marker.opacity as f32 * 0.7)).resolution(24);
+        }
     }
+    display.transfers.draw(&mut gizmos);
 }
 
-fn ordered_trails(report: &crate::report::Report) -> impl Iterator<Item = &crate::report::Point> {
-    report.trails.iter().filter(|point| !point.current).chain(report.trails.iter().filter(|point| point.current))
-}
+#[cfg(test)]
+use crate::paths::ordered_trails;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,12 +117,29 @@ mod tests {
     fn current_queried_paths_cover_revised_paths_at_the_same_positions() {
         let mut report = crate::animation::tests::scene(0.0);
         report.trails = vec![
-            crate::report::Point { position: [2.0, 3.0], current: true, corrected: false, opacity: 1.0 },
-            crate::report::Point { position: [2.0, 3.0], current: false, corrected: true, opacity: 0.5 },
+            crate::report::Point {
+                previous: Some([1.0, 3.0]),
+                client: 1,
+                time_ns: 1,
+                position: [2.0, 3.0],
+                current: true,
+                corrected: false,
+                opacity: 1.0,
+            },
+            crate::report::Point {
+                previous: Some([1.0, 3.0]),
+                client: 1,
+                time_ns: 1,
+                position: [2.0, 3.0],
+                current: false,
+                corrected: true,
+                opacity: 0.5,
+            },
         ];
         let points: Vec<_> = ordered_trails(&report).collect();
         assert!(!points[0].current && points[1].current);
         assert_eq!(points[0].position, points[1].position);
         assert_eq!(points[1].opacity, 1.0);
+        assert_eq!(points[0].previous, points[1].previous);
     }
 }

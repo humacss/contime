@@ -1,5 +1,5 @@
 //! Startup-only movement settings; there is no adaptive throughput producer here.
-use crate::support::execution::Kind;
+use crate::support::{execution::Kind, movement_report::MAX_CLIENTS};
 use std::time::Duration;
 #[derive(Clone)]
 pub struct Config {
@@ -27,16 +27,16 @@ impl Config {
         let args: Vec<_> = args.into_iter().collect();
         let manual = Kind::select(args.clone(), false)? == Kind::Manual;
         let mut config = Self {
-            clients: 32,
-            client_spacing: 4,
+            clients: MAX_CLIENTS,
+            client_spacing: 16,
             movement_speed: 6,
             workers: if manual { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(4) },
-            input_hz: 5,
+            input_hz: 1,
             query_hz: 20,
-            average_latency_ms: 350,
-            jitter_ms: 300,
-            trail_ms: 2000,
-            fade_ms: 1000,
+            average_latency_ms: 1000,
+            jitter_ms: 1000,
+            trail_ms: 5000,
+            fade_ms: 5000,
             retention_ms: 10000,
             automatic_retention: true,
             checkpoint_interval: 128,
@@ -138,12 +138,12 @@ impl Config {
         Ok(())
     }
     pub fn validate(&self) -> Result<(), String> {
-        if !(1..=10000).contains(&self.clients)
+        if !(1..=MAX_CLIENTS).contains(&self.clients)
             || !(1..=1024).contains(&self.workers)
             || !(1..=60).contains(&self.input_hz)
             || !(1..=60).contains(&self.query_hz)
         {
-            return Err("Use 1–10,000 clients, 1–1,024 workers and 1–60 inputs/queries per second".into());
+            return Err("Use 1–5 clients, 1–1,024 workers and 1–60 inputs/queries per second".into());
         }
         if self.client_spacing > 1_000_000 || self.movement_speed > 1_000_000 {
             return Err("Client spacing and movement speed must be whole numbers between 0 and 1,000,000".into());
@@ -210,7 +210,7 @@ mod tests {
     fn settings_keep_late_inputs_and_trails_inside_retention() {
         let parse = |args: &[&str]| Config::parse(args.iter().map(|s| s.to_string()));
         let c = parse(&[]).unwrap().unwrap();
-        assert!(c.jitter_ms > 1000 / c.input_hz);
+        assert_eq!(c.input_hz, 1);
         assert!(parse(&["--retention-ms", "1000"]).is_err());
         assert!(parse(&["--execution", "manual", "--workers", "2"]).is_err());
         assert!(parse(&["--clients", "1", "--latency-ms", "0", "--jitter-ms", "0", "--duration", "315360000"]).is_ok());
@@ -219,7 +219,8 @@ mod tests {
     fn spacing_and_speed_defaults_overrides_and_bounds_round_trip() {
         let parse = |args: &[&str]| Config::parse(args.iter().map(|s| s.to_string()));
         let default = parse(&[]).unwrap().unwrap();
-        assert_eq!((default.client_spacing, default.movement_speed), (4, 6));
+        assert_eq!(default.clients, 5);
+        assert_eq!((default.client_spacing, default.movement_speed), (16, 6));
         let custom = parse(&["--client-spacing", "9", "--movement-speed", "10"]).unwrap().unwrap();
         let round = Config::parse(custom.arguments()).unwrap().unwrap();
         assert_eq!((round.client_spacing, round.movement_speed), (9, 10));
@@ -230,6 +231,20 @@ mod tests {
             for value in ["-1", "1.5", "1000001", "NaN"] {
                 assert!(parse(&[flag, value]).is_err());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod client_limit_tests {
+    use super::*;
+    #[test]
+    fn movement_accepts_one_to_five_clients_and_rejects_larger_runs() {
+        for clients in [1, 5] {
+            assert!(Config::parse(["--clients".to_owned(), clients.to_string()]).is_ok());
+        }
+        for clients in [0, 6, 10000] {
+            assert!(Config::parse(["--clients".to_owned(), clients.to_string()]).is_err());
         }
     }
 }

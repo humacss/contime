@@ -416,22 +416,36 @@ The example submits event groups in reverse order and queries fully admitted tim
 
 ## Reproduce the reconciliation recording
 
-The README recording uses the existing browser client-movement case with 16
-clients, 600 ms average delivery latency and ±600 ms jitter. Cyan paths are the
-latest queried state; amber paths are earlier rendering states that now disagree.
-The camera stays fixed on the arena while the player and other clients move.
-The recording includes a short loop of player movement followed by a stop; player
-inputs use the same simulated delivery delay as the other clients. The in-game
-overlay shows the configuration, arrived inputs, reordered arrivals and corrections.
+The README recording uses an opt-in, repeatable choreography rather than random
+traffic. Five clients follow compact paths, with bots in four separate quadrants and the
+player near the center, with one action per second and
+staggered sends. Explicit delays from 150 to 1,700 ms regularly deliver newer
+turns before older ones. Bots keep moving; the player's square includes a rest
+to demonstrate Stop. All events still go through the same simulated delivery,
+ConTime processing, validated queries and renderer as the interactive example.
+No queried state or corrections are fabricated.
+
+Each client has a consistent color across the timeline, inputs, delivery animations
+and queried paths. Gray paths show earlier rendering states that now disagree;
+double delivery ticks mark out-of-order arrivals. The timeline spans six seconds,
+with unlabeled one-second divisions. The browser displays only the shared graphical
+view. The canvas is recorded directly at 30 fps, then converted to a 25 fps GIF
+for the README, avoiding repeated screenshots during simulation.
+
+To reproduce the choreography, first launch the browser host below, then add
+`showcase=1&client_spacing=18&movement_speed=8` to its URL, replacing any existing
+spacing and speed values. Five clients are required. The scripted inputs ignore
+keyboard movement, and after the initial two-second positioning, the complete sequence repeats every 24 seconds. Omit
+`showcase=1` to return to the normal interactive generator.
 
 With the [browser prerequisites](../../examples/environments/browser/README.md#build-directly)
 installed, run from the repository root:
 
 ```sh
 cargo run --release --example launcher -- \
-  --environment browser --execution manual --example client-movement --budget-ms 2 --no-setup -- \
-  --clients 16 --client-spacing 8 --movement-speed 12 --input-hz 3 --query-hz 20 \
-  --average-latency-ms 600 --jitter-ms 600 --trail-ms 2500 --fade-ms 1500
+  --environment browser --execution manual --example client-movement --budget-ms 1 --no-setup -- \
+  --clients 5 --client-spacing 16 --movement-speed 12 --input-hz 1 --query-hz 20 \
+  --average-latency-ms 1000 --jitter-ms 1000 --trail-ms 5000 --fade-ms 5000
 ```
 
 Click the map, then use WASD or the arrow keys to choose a direction. Space stops

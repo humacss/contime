@@ -18,13 +18,15 @@ use contime::contime_monitor::{WorkerMonitor, WorkerReading};
 use std::{sync::Arc, time::Duration};
 #[path = "../../cases/client_movement/generation.rs"]
 mod generation;
+#[path = "showcase.rs"]
+mod showcase;
 type Failure = Box<dyn std::error::Error>;
 pub struct Driver {
     pub config: Config,
     sequence: u64,
     motion: Motion,
-    reference: Reference,
-    delivery: Delivery,
+    pub(super) reference: Reference,
+    pub(super) delivery: Delivery,
     pub scene: Scene,
     pub latest: Option<Arc<WorkerReading<Time>>>,
     pub baseline: Option<Arc<WorkerReading<Time>>>,
@@ -35,6 +37,7 @@ pub struct Driver {
     stop: Option<Time>,
     stopped_at: Option<Duration>,
     next_inputs: u64,
+    showcase: bool,
     next_query: u64,
     last_target: Time,
     pub updates: u64,
@@ -45,6 +48,7 @@ pub struct Driver {
     pub done: bool,
     pub progressed: bool,
     pending_input: Vec<Direction>,
+    pub(super) arrivals: std::collections::VecDeque<(MovementInput, u64)>,
 }
 impl Driver {
     pub fn new<B: Backend<MovementExample>>(backend: &B, config: Config) -> Result<Self, Failure> {
@@ -75,6 +79,7 @@ impl Driver {
             stop: None,
             stopped_at: None,
             next_inputs: 0,
+            showcase: false,
             next_query: 0,
             last_target: Time(1),
             updates: 0,
@@ -84,9 +89,29 @@ impl Driver {
             done: false,
             progressed: false,
             pending_input: Vec::new(),
+            arrivals: std::collections::VecDeque::new(),
         })
     }
+    /// Opt into the fixed recording choreography before processing begins.
+    pub fn use_showcase(&mut self) -> Result<(), String> {
+        if self.config.clients != 5
+            || self.motion.client_spacing != 18
+            || self.motion.movement_speed != 8
+            || self.config.input_hz != 1
+            || self.config.max_latency_ms() < 1700
+        {
+            return Err(
+                "Showcase requires five clients, spacing 18, movement speed 8, input frequency 1 and a maximum delay of at least 1,700 ms"
+                    .into(),
+            );
+        }
+        self.showcase = true;
+        Ok(())
+    }
     pub fn input(&mut self, direction: Direction) -> Result<(), String> {
+        if self.showcase {
+            return Ok(());
+        }
         if self.pending_input.len() >= 64 {
             return Err("Too many keyboard inputs in one host turn".into());
         }
@@ -135,12 +160,31 @@ impl Driver {
                 self.config.jitter_ms,
             );
         }
-        if self.stop.is_none() && now >= self.next_inputs {
-            for input in generation::events(self.config.clients, self.sequence, Time(now), self.motion) {
-                self.delivery.schedule(input, now, self.config.average_latency_ms, self.config.jitter_ms);
+        if self.stop.is_none() {
+            // Bound catch-up after a long host pause; each input keeps its own action time.
+            for _ in 0..1024 {
+                if self.showcase {
+                    let (input, delay_ms) = showcase::input(self.next_inputs, self.motion);
+                    if input.time.0 > now {
+                        break;
+                    }
+                    self.sequence = input.id as u64;
+                    let at = input.time.0;
+                    self.delivery.schedule(input, at, delay_ms, 0);
+                    self.next_inputs += 1;
+                    continue;
+                }
+                let Some((client, time)) = generation::scheduled(self.config.clients, self.config.input_hz, self.next_inputs) else {
+                    break;
+                };
+                if time.0 > now {
+                    break;
+                }
                 self.sequence += 1;
+                let input = generation::event(client, self.sequence, time, self.motion);
+                self.delivery.schedule(input, now, self.config.average_latency_ms, self.config.jitter_ms);
+                self.next_inputs += 1;
             }
-            self.next_inputs = now + 1_000_000_000 / self.config.input_hz;
         }
         if self.stopped_at.is_some_and(|at| elapsed.saturating_sub(at) > self.config.drain_timeout()) {
             return Err("Final movement drain timed out".into());
@@ -154,6 +198,10 @@ impl Driver {
                 backend.submit(inputs.clone())?;
                 self.submitted += inputs.len() as u64;
                 for input in inputs {
+                    self.arrivals.push_back((input.clone(), now));
+                    while self.arrivals.len() > 128 {
+                        self.arrivals.pop_front();
+                    }
                     self.reference.insert(input);
                 }
             }
@@ -205,6 +253,7 @@ impl Driver {
                 self.next_query = now + 1_000_000_000 / self.config.query_hz;
             }
         }
+        self.arrivals.retain(|(input, _)| input.time.0 >= self.last_target.0.saturating_sub(self.config.trail_ms * 1_000_000));
         self.scene.expire(now, self.config.fade_ms * 1_000_000);
         Ok(self.done)
     }

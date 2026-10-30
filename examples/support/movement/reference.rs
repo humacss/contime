@@ -34,6 +34,15 @@ impl Reference {
             })
             .collect()
     }
+    /// Exact historical location of a delivered input, after canonical ordering.
+    pub fn position(&self, client: usize, time: Time) -> [i128; 2] {
+        let timeline = &self.timelines[client - 1];
+        let mut state = timeline.anchor.clone();
+        for event in timeline.inputs.values().take_while(|e| e.time <= time) {
+            state.apply_input(event);
+        }
+        state.position_at(time)
+    }
     pub fn compact(&mut self, before: Time) {
         for timeline in &mut self.timelines {
             let keys: Vec<_> = timeline.inputs.range(..(before, 0)).map(|(key, _)| *key).collect();

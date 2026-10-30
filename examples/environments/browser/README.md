@@ -15,7 +15,10 @@ snapshot count, event rate, average/maximum snapshots per event, query frequency
 retention, checkpoint interval and, for numeric rates, pending capacity. The browser additionally
 asks for a wall-clock allowance and maximum shared steps per frame.
 Configuration comes from the launcher; the browser has no settings panel. Direct
-page loads use default settings, with optional startup URL parameters. Pause excludes paused time; Resume continues the same instance.
+page loads use default settings, with optional startup URL parameters. Client movement starts
+automatically and displays only the shared graphical view, including its legends and
+keyboard controls. Counter and Chain hash retain the browser diagnostics and run controls.
+For those cases, Pause excludes paused time; Resume continues the same instance.
 Reset clears the instance and metrics and retains that startup configuration.
 Relaunch to change the configuration. Runs continue until paused or the page closes.
 
@@ -126,8 +129,9 @@ cargo run --release --example launcher -- --environment browser --example client
 ## Hosted demo and GitHub Pages
 
 The root README links to the browser client-movement demo on GitHub Pages with
-16 clients and 600 ms average input latency. The recording is also a link to that
-same playable configuration. All processing stays in the visitor's browser.
+five clients and 1,000 ms average input latency with ±1,000 ms jitter. The recording
+links to that interactive configuration, while the recording itself uses the
+[scripted choreography](../../../guides/usage/README.md#reproduce-the-reconciliation-recording). All processing stays in the visitor's browser.
 
 The [Browser demo workflow](../../../.github/workflows/pages.yml) builds the
 workload with Rust 1.90 and the isolated Bevy renderer with Rust 1.95 and installs the wasm-bindgen CLI version
@@ -149,15 +153,26 @@ under the repository's `/contime/` project-site prefix.
 
 ### Movement presentation
 
+A shared network timeline above the arena compares action time, scheduled due
+time and actual arrival time on the same clock. Clients have color-coded rows on one time ruler; horizontal delay lines connect
+actions to vertical delivery ticks. A double delivery tick highlights an older input arriving after a
+newer input for that client.
+The preview shows the next four waiting inputs plus arrivals retained to the
+left edge of the visible clock window, up to 128
+inputs; the waiting count includes the full simulated network queue.
+
 The shared Bevy markers ease toward the latest queried positions, without
 extrapolating beyond them or feeding visual state back into ConTime. New markers
-fade in; removed markers fade out. Amber correction rings soften state changes,
-and current cyan paths are drawn over revised paths at exact overlaps. Trails
+fade in; removed markers fade out. Connected client-colored paths are drawn over revised gray segments at exact overlaps.
+Recent paths are brighter. Lighter arrows in each client’s color show delivered directions and squares show Stop inputs. Recent
+inputs are larger and brighter; a brief size boost marks arrival at the historical
+input location. Reduced-motion mode suppresses the size animation. Trails
 remain queried history, rather than interpolated or predicted trajectories.
 The short visual transitions add a little display lag; query results, keyboard
 input delivery, monitoring and independent validation are unchanged. Reduced-motion
-preferences disable these transitions. Pause freezes animation time; Reset drops
-all presentation state before a new run.
+preferences disable these transitions. The movement page has no separate controls
+or diagnostics panel; reload to restart it. The shared renderer still supports
+pause and reset through its adapter.
 
 The movement case uses a fixed 96 × 56 world-unit arena. Its model stops positions
 at the walls, so queries and late-input replay observe the same collisions on all

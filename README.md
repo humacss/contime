@@ -13,13 +13,18 @@ It handles delayed, duplicated, and out-of-order events, and distributes indepen
 
 ## Reconciliation in action
 
-[![Client movement with delayed inputs: corrected cyan paths and fading amber paths that have changed.](assets/reconciliation.gif)][browser-demo]
+[![Five color-coded clients, delayed inputs, and reconciled paths.](assets/reconciliation.gif)][browser-demo]
 
 **[Play the interactive browser demo][browser-demo]** — click the map, then use WASD or the arrow keys. Space stops your client.
 
-Fifteen simulated clients and one keyboard-controlled client move inside a fixed
-arena with 600 ms average simulated input latency. Inputs regularly arrive out of order. **Cyan** shows the latest queried
-paths; **amber** fades out earlier paths only where those queries now disagree.
+Four simulated clients and one keyboard-controlled client move inside a fixed
+arena with 1,000 ms average input latency and ±1,000 ms jitter. **Each client has
+its own color**; **gray paths** show earlier rendering states that changed when
+late inputs arrived. The timeline shows each action and its delivery delay;
+double delivery ticks mark out-of-order arrivals. The recording uses choreographed
+inputs and delivery delays to make these corrections easy to follow; the
+interactive demo generates its own traffic.
+
 Markers ease between queried positions. Each update is checked against an
 independent reference. The [Bevy presentation](examples/support/graphics/README.md)
 is shared across desktop and browser hosts.
@@ -224,4 +229,4 @@ See the [current constraints](guides/workspace/README.md#current-constraints).
 
 [MIT](LICENSE)
 
-[browser-demo]: https://humacss.github.io/contime/?domain=client-movement&clients=16&client_spacing=8&movement_speed=12&input_hz=3&query_hz=20&average_latency_ms=600&jitter_ms=600&trail_ms=2500&fade_ms=1500&retention_ms=10000&checkpoint_interval=128&max_ms=2&max_steps=1000&autostart=1
+[browser-demo]: https://humacss.github.io/contime/?domain=client-movement&clients=5&client_spacing=16&movement_speed=12&input_hz=1&query_hz=20&average_latency_ms=1000&jitter_ms=1000&trail_ms=5000&fade_ms=5000&retention_ms=10000&checkpoint_interval=128&max_ms=2&max_steps=1000&autostart=1

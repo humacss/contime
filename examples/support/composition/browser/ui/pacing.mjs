@@ -10,10 +10,11 @@ export function parseRate(value) {
 export function readSettings(values) {
     if (values.domain === 'client-movement') {
         const result = { domain: values.domain, max_ms: Number(values.max_ms) };
-        const limits = {clients:[1,10000], client_spacing:[0,1000000], movement_speed:[0,1000000], input_hz:[1,60], query_hz:[1,60], average_latency_ms:[0,86400000], jitter_ms:[0,Number.MAX_SAFE_INTEGER],
+        if (values.showcase === '1') result.showcase = true;
+        const limits = {clients:[1,5], client_spacing:[0,1000000], movement_speed:[0,1000000], input_hz:[1,60], query_hz:[1,60], average_latency_ms:[0,86400000], jitter_ms:[0,Number.MAX_SAFE_INTEGER],
             trail_ms:[200,5000], fade_ms:[100,5000], retention_ms:[1,86400000], checkpoint_interval:[1,1000000000], max_steps:[1,100000]};
         for (const [key,[min,max]] of Object.entries(limits)) {
-            const n=Number(values[key] ?? ({client_spacing:4,movement_speed:6})[key]);
+            const n=Number(values[key] ?? ({client_spacing:16,movement_speed:6})[key]);
             if (!Number.isSafeInteger(n)||n<min||n>max) throw new Error(`Invalid ${key}`);
             result[key]=n;
         }
@@ -47,9 +48,9 @@ export function readSettings(values) {
 
 // The launcher supplies startup values through the URL; direct loads use defaults.
 export function startupSettings(params) {
-    const defaults = {domain:'counter',snapshots:1000,rate:'Maximum',query_hz:20,retention_ms:10000,
+    const defaults = {showcase:'0',domain:'counter',snapshots:1000,rate:'Maximum',query_hz:20,retention_ms:10000,
         checkpoint_interval:128,max_pending:20000,average_targets:'1.0',max_targets:2,snapshot_skew:0,
-        max_ms:2,max_steps:256,clients:32,client_spacing:4,movement_speed:6,input_hz:5,
-        average_latency_ms:350,jitter_ms:300,trail_ms:2000,fade_ms:1000};
+        max_ms:2,max_steps:256,clients:5,client_spacing:16,movement_speed:6,input_hz:1,
+        average_latency_ms:1000,jitter_ms:1000,trail_ms:5000,fade_ms:5000};
     return readSettings(Object.fromEntries(Object.entries(defaults).map(([key,value]) => [key,params.get(key) ?? value])));
 }

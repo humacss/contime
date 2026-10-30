@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone)]
 pub struct Marker {
+    pub direction: [f64; 2],
     pub position: [f64; 2],
     pub opacity: f64,
-    pub correction: f64,
 }
 #[derive(Default)]
 pub struct Animation {
@@ -25,21 +25,20 @@ impl Animation {
             present.insert(client.id);
             let existed = self.clients.contains_key(&client.id);
             let marker = self.clients.entry(client.id).or_insert(Marker {
+                direction: client.direction,
                 position: client.position,
                 opacity: if self.initialized { 0.0 } else { 1.0 },
-                correction: 0.0,
             });
+            marker.direction = client.direction;
             for (value, target) in marker.position.iter_mut().zip(client.position) {
                 *value += (target - *value) * amount;
             }
             if existed {
                 marker.opacity = (marker.opacity + elapsed / 180.0).min(1.0);
             }
-            marker.correction += (f64::from(client.corrected) - marker.correction) * amount;
             if reduced_motion {
                 marker.position = client.position;
                 marker.opacity = 1.0;
-                marker.correction = f64::from(client.corrected);
             }
         }
         self.clients.retain(|id, marker| {
@@ -72,8 +71,11 @@ pub(crate) mod tests {
             keyboard_inputs: 0,
             center: [x, 0.0],
             arena_half_extent: [48.0, 28.0],
-            positions: vec![Client { id: 1, position: [x, 0.0], corrected: false }],
+            positions: vec![Client { id: 1, direction: [0.0, 0.0], position: [x, 0.0], corrected: false }],
             trails: vec![],
+            arrivals: vec![],
+            now_ns: 0,
+            network: vec![],
             preview_limited: false,
         }
     }
@@ -88,6 +90,20 @@ pub(crate) mod tests {
         animation.update(&report, 1000.0, false);
         assert!((animation.clients[&1].position[0] - 10.0).abs() < 0.001);
         assert!(animation.clients[&1].position[0] <= 10.0);
+    }
+    #[test]
+    fn heading_comes_from_the_query_even_when_the_marker_is_still_easing() {
+        let mut animation = Animation::default();
+        let mut report = scene(0.0);
+        report.positions[0].direction = [-1.0, 0.0];
+        animation.update(&report, 0.0, false);
+        assert_eq!(animation.clients[&1].direction, [-1.0, 0.0]);
+        report.positions[0].direction = [0.0, -1.0];
+        animation.update(&report, 16.0, false);
+        assert_eq!(animation.clients[&1].direction, [0.0, -1.0]);
+        report.positions[0].direction = [0.0, 0.0];
+        animation.update(&report, 16.0, false);
+        assert_eq!(animation.clients[&1].direction, [0.0, 0.0]);
     }
     #[test]
     fn smoothing_is_independent_of_display_frequency() {

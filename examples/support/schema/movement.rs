@@ -1,6 +1,6 @@
 //! Movement-specific settings plus the ConTime settings shared with other cases.
 use super::{Definition, ValueKind};
-use crate::support::movement_config::Config;
+use crate::support::{movement_config::Config, movement_report::MAX_CLIENTS};
 pub fn definitions(c: &Config) -> Vec<Definition> {
     let mut definitions = super::contime(c.workers, c.manual, c.retention_ms, c.checkpoint_interval);
     if let Some(retention) = definitions.iter_mut().find(|d| d.id == "--retention-ms") {
@@ -22,12 +22,12 @@ pub fn definitions(c: &Config) -> Vec<Definition> {
         "--clients",
         "Client movement",
         "Clients (including you)",
-        "Client 1 uses WASD/arrows; other clients turn automatically.",
+        "One to five clients, including you. Client 1 uses WASD/arrows; other clients turn automatically.",
         "clients",
         1,
-        10000,
+        MAX_CLIENTS as u64,
         c.clients as u64,
-        &[1, 8, 32, 64, 128, 512, 1000, 10000],
+        &[1, 2, 3, 4, 5],
     );
     add(
         "--client-spacing",
@@ -55,7 +55,7 @@ pub fn definitions(c: &Config) -> Vec<Definition> {
         "--input-hz",
         "Client movement",
         "Inputs / bot / second",
-        "Direction changes generated per bot. Keyboard inputs use the same simulated delivery queue.",
+        "Direction changes per bot, evenly staggered across client slots. Keyboard inputs use the same simulated delivery queue.",
         "inputs/s",
         1,
         60,

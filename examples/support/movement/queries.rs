@@ -95,6 +95,8 @@ pub(super) fn poll_cycle<B: Backend<MovementExample>>(
             .rendering
             .samples
             .push(Sample { time: query.time, positions: query.actual.iter().map(|s| s.position_at(query.time)).collect() });
+        // Retain headings from the validated query, not screen-space motion.
+        cycle.rendering.directions = query.actual.iter().map(|s| s.direction.velocity(1).map(|v| v as f64)).collect();
         cycle.query = None;
     }
     if let Some(time) = cycle.remaining.pop_front() {
