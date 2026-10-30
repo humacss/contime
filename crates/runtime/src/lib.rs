@@ -37,12 +37,5 @@ pub use self::types::{
     Advance, CompletionHandle, EventQuery, Route, RouterBatch, RouterMessage, RouterProcess, SharedEvent, SnapshotListen, SnapshotListener,
     SnapshotListenerMessage, SnapshotQuery, WorkerBatch, WorkerMessage, WorkerProcess,
 };
-/// An input that can cross the managed runtime's thread boundaries.
-/// Manual processing and Core require only [`Input`].
-pub trait ThreadInput: Input<Time: Send + Sync> + Send + Sync {}
-impl<I> ThreadInput for I
-where
-    I: Input + Send + Sync,
-    I::Time: Send + Sync,
-{
-}
+mod thread_input;
+pub use self::thread_input::ThreadInput;
