@@ -2,11 +2,11 @@
 use crate::definition::{Example, Time};
 use contime::checkpoints::CheckpointConfig;
 use contime::checkpoints::{ApplyEvents, Event, Snapshot};
-use contime::manual::{FrameReport, ManualConTime, ManualConfig, StopReason};
+use contime::manual::{FrameReport, RawManualConTime, ManualConfig, StopReason};
 use serde::Serialize;
 use std::{cell::RefCell, collections::VecDeque, num::NonZeroUsize, rc::Rc};
 
-pub(crate) type Instance<M> = ManualConTime<<M as Example>::Event, <M as Example>::State>;
+pub(crate) type Instance<M> = RawManualConTime<<M as Example>::Event, <M as Example>::State>;
 enum QueryResult<M: Example> {
     Snapshot(Vec<M::State>),
     RetainedTimes(Vec<Time>),
@@ -61,7 +61,7 @@ impl<M: Example> Workload<M> {
             return Err("Choose an even event count between 2 and 8192".into());
         }
         let capacity = NonZeroUsize::new(batch_size + 32).expect("validated workload is nonempty");
-        let backend = ManualConTime::new(ManualConfig { queue_capacity: capacity, checkpoints: CheckpointConfig { interval: 32 } }, ());
+        let backend = RawManualConTime::new(ManualConfig { queue_capacity: capacity, checkpoints: CheckpointConfig { interval: 32 } }, ());
         Ok((
             backend,
             Self {

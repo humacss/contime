@@ -65,15 +65,15 @@ registrations forward nothing and drop the supplied sender.
 Run the unit tests from the ConTime repository root:
 
 ```bash
-cargo test --manifest-path crates/api/dev/Cargo.toml --lib
+cargo test --manifest-path crates/api/Cargo.toml --lib
 ```
 
 Run the inline Criterion benchmarks separately:
 
 ```bash
-cargo test --manifest-path crates/api/dev/Cargo.toml --release --lib benchmark_send -- --ignored --nocapture
-cargo test --manifest-path crates/api/dev/Cargo.toml --release --lib benchmark_apply -- --ignored --nocapture
-cargo test --manifest-path crates/api/dev/Cargo.toml --release --lib benchmark_send_listen_snapshots -- --ignored --nocapture
+cargo test --manifest-path crates/api/Cargo.toml --release --lib benchmark_send -- --ignored --nocapture
+cargo test --manifest-path crates/api/Cargo.toml --release --lib benchmark_apply -- --ignored --nocapture
+cargo test --manifest-path crates/api/Cargo.toml --release --lib benchmark_send_listen_snapshots -- --ignored --nocapture
 ```
 
 ## Benchmarks

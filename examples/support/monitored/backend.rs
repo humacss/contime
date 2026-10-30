@@ -59,7 +59,7 @@ where
         true
     }
     fn shutdown(self) -> Result<(), Failure> {
-        let shutdown = contime::ConTime::shutdown(self);
+        let shutdown = contime::RawConTime::shutdown(self);
         if shutdown.workers.iter().any(|outcome| !matches!(outcome, contime::ThreadOutcome::Completed))
             || shutdown.routers.iter().any(|outcome| !matches!(outcome, contime::ThreadOutcome::Completed))
         {

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
 
-use contime::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason};
+use contime::{ConTimeConfig, Input, RawConTime, RejectionMessage, RejectionReason};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -125,7 +125,7 @@ fn prepare_workload(batches: Vec<Vec<BenchInput>>) -> PreparedWorkload {
     PreparedWorkload { batches, rejections }
 }
 
-fn send_and_wait(contime: &ConTime<BenchInput, BenchSnapshot, ()>, workload: PreparedWorkload) -> usize {
+fn send_and_wait(contime: &RawConTime<BenchInput, BenchSnapshot, ()>, workload: PreparedWorkload) -> usize {
     for (batch, sender) in workload.batches {
         contime.send(batch, sender).unwrap();
     }
@@ -138,7 +138,7 @@ fn measure(iterations: u64, batch_size: usize) -> Duration {
     let mut measured = Duration::ZERO;
 
     for _ in 0..iterations {
-        let contime = ConTime::<BenchInput, BenchSnapshot, ()>::start(config(1, 1), ()).unwrap();
+        let contime = RawConTime::<BenchInput, BenchSnapshot, ()>::start(config(1, 1), ()).unwrap();
         contime.advance_to(Time(EVENT_COUNT as i64)).unwrap();
         assert_eq!(send_and_wait(&contime, prepare_workload(vec![vec![input(0)]])), 0);
         let workload = prepare_workload(batches(batch_size));
@@ -220,7 +220,7 @@ fn measure_topology(iterations: u64, router_count: usize, worker_count: usize, s
     let mut measured = Duration::ZERO;
 
     for _ in 0..iterations {
-        let contime = ConTime::<BenchInput, BenchSnapshot, ()>::start(config(router_count, worker_count), ()).unwrap();
+        let contime = RawConTime::<BenchInput, BenchSnapshot, ()>::start(config(router_count, worker_count), ()).unwrap();
         contime.advance_to(Time(EVENT_COUNT as i64)).unwrap();
         assert_eq!(send_and_wait(&contime, prepare_workload(vec![topology_warmup(snapshot_ids)])), 0);
         let workload = prepare_workload(topology_batches(snapshot_ids));

@@ -76,3 +76,17 @@ where
         self.request_worker_status().map_err(|error| WorkerMonitorError::Source(format!("{error:?}")))
     }
 }
+
+#[cfg(feature = "runtime")]
+impl<M, W> WorkerStatusSource<M::Time> for crate::contime_runtime::ModuleConTime<M, W>
+where
+    M: crate::contime_runtime::Module,
+    M::EventLanes: crate::contime_runtime::ThreadInput,
+{
+    fn worker_count(&self) -> usize {
+        std::ops::Deref::deref(self).worker_count()
+    }
+    fn request_worker_status(&self) -> Result<Receiver<WorkerStatus<M::Time>>, WorkerMonitorError> {
+        std::ops::Deref::deref(self).request_worker_status().map_err(|error| WorkerMonitorError::Source(format!("{error:?}")))
+    }
+}

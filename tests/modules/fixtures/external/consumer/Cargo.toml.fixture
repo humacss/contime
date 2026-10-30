@@ -1,0 +1,9 @@
+[package]
+name="contime-renamed-consumer"
+version="0.0.0"
+edition="2021"
+[dependencies]
+history={package="contime",path="@CONTIME_ROOT@",default-features=false,features=["macros","time"]}
+contime-domain-one={path="../one"}
+contime-domain-two={path="../two"}
+[workspace]

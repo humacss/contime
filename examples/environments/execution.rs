@@ -10,7 +10,7 @@ pub struct Config {
     pub checkpoint_interval: u64,
 }
 #[cfg(feature = "runtime")]
-pub type Runtime<M> = contime::ConTime<<M as Example>::Event, <M as Example>::State, ()>;
+pub type Runtime<M> = contime::RawConTime<<M as Example>::Event, <M as Example>::State, ()>;
 
 #[cfg(feature = "runtime")]
 pub fn runtime<M: Example>(config: &Config) -> Result<Runtime<M>, Failure>
@@ -20,7 +20,7 @@ where
 {
     use contime::{checkpoints::CheckpointConfig, ConTimeConfig, Placement};
     use std::time::Duration;
-    Ok(contime::ConTime::start(
+    Ok(contime::RawConTime::start(
         ConTimeConfig {
             router_count: 1,
             worker_count: config.workers,
@@ -38,7 +38,7 @@ mod manual {
     use super::*;
     use contime::{
         checkpoints::CheckpointConfig,
-        manual::{ManualConTime, ManualConfig},
+        manual::{ManualConfig, RawManualConTime},
     };
     use std::{
         cell::{Cell, RefCell},
@@ -48,12 +48,12 @@ mod manual {
     // Three batch/advance/prune messages plus a validation query fit after admission.
     const RESERVED: usize = 4;
     pub struct Manual<M: Example> {
-        contime: RefCell<ManualConTime<M::Event, M::State>>,
+        contime: RefCell<RawManualConTime<M::Event, M::State>>,
         retention: Time,
         last_prune: Cell<Time>,
     }
     impl<M: Example> Manual<M> {
-        pub fn inspect<R>(&self, read: impl FnOnce(&ManualConTime<M::Event, M::State>) -> R) -> R {
+        pub fn inspect<R>(&self, read: impl FnOnce(&RawManualConTime<M::Event, M::State>) -> R) -> R {
             read(&self.contime.borrow())
         }
         pub fn queued(&self) -> usize {
@@ -64,7 +64,7 @@ mod manual {
                 return Err("Manual execution uses one worker".into());
             }
             Ok(Self {
-                contime: RefCell::new(ManualConTime::new(
+                contime: RefCell::new(RawManualConTime::new(
                     ManualConfig {
                         queue_capacity: NonZeroUsize::new(QUEUE_CAPACITY).unwrap(),
                         checkpoints: CheckpointConfig { interval: config.checkpoint_interval },

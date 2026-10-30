@@ -61,9 +61,9 @@ impl checkpoints::ApplyEvents<Change> for Counter {
 #[cfg(feature = "manual")]
 #[test]
 fn manual_accepts_negative_and_minimum_timestamps_and_prunes() {
-    use contime::manual::{ManualConTime, ManualConfig};
+    use contime::manual::{ManualConfig, RawManualConTime};
     use std::{cell::RefCell, num::NonZeroUsize, rc::Rc};
-    let mut engine = ManualConTime::<Change, Counter>::new(
+    let mut engine = RawManualConTime::<Change, Counter>::new(
         ManualConfig { queue_capacity: NonZeroUsize::new(16).unwrap(), checkpoints: checkpoints::CheckpointConfig { interval: 1 } },
         (),
     );
@@ -88,7 +88,7 @@ fn manual_accepts_negative_and_minimum_timestamps_and_prunes() {
 #[test]
 fn runtime_accepts_negative_and_minimum_timestamps_and_retains_negative_history() {
     use std::time::Duration;
-    let engine = contime::ConTime::<Change, Counter, ()>::start(
+    let engine = contime::RawConTime::<Change, Counter, ()>::start(
         contime::ConTimeConfig {
             router_count: 1,
             worker_count: 1,
@@ -114,7 +114,7 @@ fn runtime_accepts_negative_and_minimum_timestamps_and_retains_negative_history(
 #[test]
 fn runtime_rejects_negative_retention_before_starting() {
     use std::time::Duration;
-    let result = contime::ConTime::<Change, Counter, ()>::start(
+    let result = contime::RawConTime::<Change, Counter, ()>::start(
         contime::ConTimeConfig {
             router_count: 1,
             worker_count: 1,

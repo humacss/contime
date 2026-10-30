@@ -1,6 +1,6 @@
 //! Public requests retain their identity across native transport packet boundaries.
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
-use contime::{ConTime, ConTimeConfig, Input};
+use contime::{ConTimeConfig, Input, RawConTime};
 use crossbeam_channel::{unbounded, RecvTimeoutError};
 use std::time::Duration;
 
@@ -76,7 +76,7 @@ fn mixed_submission_sizes_and_distinct_responses_preserve_canonical_state() {
     const EVENTS: usize = 8192;
     const HISTORIES: usize = 16;
     for (routers, workers) in [(1, 1), (1, 4), (3, 4)] {
-        let engine = ConTime::<Record, State, ()>::start(
+        let engine = RawConTime::<Record, State, ()>::start(
             ConTimeConfig {
                 router_count: routers,
                 worker_count: workers,

@@ -49,6 +49,8 @@ that would reintroduce Cargo's nested-package exclusion.
 
 The published archive contains ordinary source files at these paths, not links.
 Consumers need neither symlink support nor the original `crates/` directories.
+The proc-macro companion, `contime-macros`, remains separately compiled and
+published; it is not assembled through this directory.
 
 Cargo documents [symlink flattening](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
 and [nested-package exclusions](https://doc.rust-lang.org/cargo/reference/manifest.html#the-exclude-and-include-fields).
@@ -62,8 +64,8 @@ See [Git's symlink configuration](https://git-scm.com/docs/git-config#Documentat
 If a link appears as a small text file, fix the checkout configuration rather
 than copying source files or editing the link text.
 
-CI checks the link targets and archive contents, extracts the public package
-outside the checkout, then tests the extracted source.
+CI checks the link targets and archive contents, extracts both the public package
+and its macro companion outside the checkout, then tests the extracted source.
 It also maps coverage paths back to the authoritative files under `crates/`.
 Standalone component tests and benchmarks continue to run through commands such
 as `cargo test -p contime-worker` and `cargo bench -p contime-batcher --bench batcher`.

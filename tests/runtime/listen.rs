@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
-use contime::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, SnapshotListenerMessage};
+use contime::{ConTimeConfig, Input, RawConTime, RejectionMessage, RejectionReason, SnapshotListenerMessage};
 
 use crossbeam_channel::unbounded;
 
@@ -90,7 +90,7 @@ fn config() -> ConTimeConfig<Time> {
 
 #[test]
 fn public_listener_collection_batches_matching_replays_and_ignores_later_events() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(), ()).unwrap();
+    let contime = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(), ()).unwrap();
     let (notifications, observed) = unbounded();
     let snapshot_ids = (0..100_u128).collect::<Vec<_>>();
 

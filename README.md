@@ -95,40 +95,87 @@ Provide time-travel queries without needing a full persistent event store.
 
 ## Using `contime`
 
-ConTime supports Rust 1.90 or newer. Add it to your Rust project:
+ConTime 0.1.2 supports Rust 1.90 or newer. Enable `macros` to define events,
+snapshots and composable modules with derive macros:
 
 ```toml
 [dependencies]
-contime = "0.1"
+contime = { version = "0.1.2", features = ["macros"] }
 ```
 
-You define an **event type**, a **snapshot type**, and how events update a
-snapshot. ConTime keeps their history and answers queries at your application's
-timestamps. Once those types and your configuration are defined, the main API
-flow is:
+An **event** describes a timestamped change. A **snapshot** defines the state,
+its stable identity fields, and how it applies those changes. A **module**
+registers the types together and selects their shared time type.
+
+This example builds a list in application order. The snapshot only appends;
+ConTime supplies the events in timestamp order, even when they arrive out of order:
 
 ```rust
-use contime::ConTime;
+use contime::{ConTime, ContimeEvent, ContimeModule, ContimeSnapshot};
 
-let contime = ConTime::<MyEvent, MySnapshot, ()>::start(config, ())?;
+#[derive(ContimeEvent)]
+struct OrderedValue {
+    time: i64,
+    list_id: u128,
+    value: char,
+}
 
-contime.apply(events)?;
-contime.advance_to(now)?;
-let snapshots = contime.query_at(now, snapshot_ids)?;
-// Use the returned state in your application.
+#[derive(ContimeSnapshot)]
+#[contime_snapshot(id = [self.list_id], events = [OrderedValue], apply = {
+    for event in batch.events {
+        let OrderedListEvent::OrderedValue(event) = event;
+        self.values.push((event.time, event.value));
+    }
+})]
+struct OrderedList {
+    time: i64,
+    list_id: u128,
+    values: Vec<(i64, char)>,
+}
+
+#[derive(ContimeModule)]
+#[contime_module(time = i64, events = [OrderedValue], snapshots = [OrderedList])]
+struct Values;
+```
+
+The derives supply the required trait implementations, including event hashing
+and snapshot cloning and defaults. Routing reads `list_id` from each event;
+`OrderedList::snapshot_id` calculates the same identity for queries.
+
+With a `ConTimeConfig<i64>` named `config`, start one instance using that module:
+
+```rust
+let contime = ConTime::<Values>::start(config)?;
+
+// Arrival order: c, a, b.
+contime.apply([
+    OrderedValue { time: 30, list_id: 7, value: 'c' }.into(),
+    OrderedValue { time: -10, list_id: 7, value: 'a' }.into(),
+    OrderedValue { time: 10, list_id: 7, value: 'b' }.into(),
+])?;
+contime.advance_to(30)?;
+let snapshots = contime.query_at(30, [OrderedList::snapshot_id(7)])?;
+for snapshot in snapshots {
+    let ValuesSnapshotLanes::OrderedList(state) = *snapshot;
+    println!("{:?}", state.values);
+}
 
 let report = contime.shutdown();
 ```
 
-This is an API overview; `MyEvent`, `MySnapshot`, `config`, and the inputs come
-from your application. Use it inside a function returning `Result<_, AppError>`,
-where your application error type converts `contime::StartError` and
-`contime::ApiError` through `From`. The `?` operator propagates failures to the
-caller instead of panicking. The [complete usage guide](guides/usage/README.md) defines
-each of them in a runnable counter walkthrough:
+Once all three inputs have been admitted, the query returns
+`[(-10, 'a'), (10, 'b'), (30, 'c')]`. Appending in arrival order would produce
+`[(30, 'c'), (-10, 'a'), (10, 'b')]` instead. Events at the same timestamp are
+ordered by event ID.
+
+Use this flow inside a function returning `Result<_, AppError>`, where your
+application error converts `contime::StartError` and `contime::ApiError` through
+`From`. The `?` operator propagates failures instead of panicking. The
+[complete runnable example](examples/cases/modules/main.rs) supplies configuration,
+error handling and dependent modules, and inserts a late value after an initial query:
 
 ```sh
-cargo run --example readme
+cargo run --example modules --features macros
 ```
 
 `apply` queues work. Queries read available admitted history, so a running
@@ -136,7 +183,12 @@ application generally submits events as they arrive and queries when it needs
 state, rather than waiting after every event. The usage guide explains responses,
 rejections, configuration and retention.
 
-Runtime is enabled by default. Manual processing (`manual`), monitoring (`monitor`),
+Runtime and built-in integer time support are enabled by default. The
+[module walkthrough](guides/modules/README.md) explains module dependencies,
+custom identities and negative timestamps; the [explicit trait guide](guides/usage/README.md)
+shows the underlying contracts.
+
+Manual processing (`manual`), monitoring (`monitor`),
 and simulation (`simulator`) are opt-in. Monitoring automatically enables worker
 application counts; there is no separate counters feature.
 **Runtime** manages background threads when started. If your application owns the

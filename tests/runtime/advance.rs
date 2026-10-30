@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use contime::{checkpoints, ConTime, ConTimeConfig, Input, RejectionReason};
+use contime::{checkpoints, ConTimeConfig, Input, RawConTime, RejectionReason};
 
 use crossbeam_channel::{unbounded, TryRecvError};
 
@@ -98,7 +98,7 @@ fn event_for(snapshot_id: u128, id: u128, time: u64, value: u64) -> TestEvent {
 
 #[test]
 fn pruned_horizon_subscribers_receive_completed_progress_and_late_initial_value() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 3, 10), ()).unwrap();
+    let contime = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 3, 10), ()).unwrap();
     let first = contime.subscribe_pruned_horizon().unwrap();
     let second = contime.subscribe_pruned_horizon().unwrap();
     assert_eq!(first.recv_timeout(Duration::from_secs(2)).unwrap(), Time(0));
@@ -126,7 +126,7 @@ fn pruned_horizon_subscribers_receive_completed_progress_and_late_initial_value(
 
 #[test]
 fn advance_preserves_state_and_rejects_late_old_events() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
+    let contime = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
     contime.apply([event(1, 1, 1), event(2, 5, 1), event(3, 10, 1), event(4, 15, 1)]).unwrap();
     contime.wait_until_idle(Duration::from_secs(2)).unwrap();
     assert!(contime.errors().is_empty());
@@ -154,7 +154,7 @@ fn advance_preserves_state_and_rejects_late_old_events() {
 fn repeated_and_backward_advances_are_no_ops_and_pruned_ids_can_be_reused() {
     let mut settings = config(1, 1, 10);
     settings.pruning_interval = Duration::ZERO;
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
+    let contime = RawConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
     contime.apply([event(1, 1, 1), event(2, 10, 1)]).unwrap();
     contime.advance_to(Time(20)).unwrap();
     contime.wait_until_idle(Duration::from_secs(2)).unwrap();
@@ -172,7 +172,7 @@ fn repeated_and_backward_advances_are_no_ops_and_pruned_ids_can_be_reused() {
 
 #[test]
 fn advance_admission_closes_and_old_queries_return_no_snapshot() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 4, 10), ()).unwrap();
+    let contime = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 4, 10), ()).unwrap();
     contime.apply([event(1, 1, 1), event(2, 5, 1), event(3, 10, 1)]).unwrap();
     let (completion, done) = unbounded();
 
@@ -186,7 +186,7 @@ fn advance_admission_closes_and_old_queries_return_no_snapshot() {
 
 #[test]
 fn advance_forces_dirty_pre_horizon_replay_before_pruning() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
+    let contime = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
     let (completion, applied) = unbounded();
     contime.send([event(1, 5, 7)], completion).unwrap();
 
@@ -200,7 +200,7 @@ fn advance_forces_dirty_pre_horizon_replay_before_pruning() {
 
 #[test]
 fn event_at_the_horizon_remains_available_after_immediate_replay() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
+    let contime = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
     let (completion, applied) = unbounded();
     contime.send([event(1, 10, 7)], completion).unwrap();
 
@@ -215,7 +215,7 @@ fn event_at_the_horizon_remains_available_after_immediate_replay() {
 
 #[test]
 fn a_history_first_seen_after_advancement_starts_at_the_active_horizon() {
-    let contime = ConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
+    let contime = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(1, 1, 10), ()).unwrap();
     contime.advance_to(Time(20)).unwrap();
     contime.wait_until_idle(Duration::from_secs(2)).unwrap();
 

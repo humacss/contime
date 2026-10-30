@@ -1,0 +1,7 @@
+[package]
+name="contime-domain-two"
+version="0.0.0"
+edition="2021"
+[dependencies]
+contime={path="@CONTIME_ROOT@",default-features=false,features=["macros","time"]}
+[workspace]

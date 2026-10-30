@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
-use contime::{ConTime, ConTimeConfig, Input};
+use contime::{ConTimeConfig, Input, RawConTime};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);
@@ -88,7 +88,7 @@ fn config() -> ConTimeConfig<Time> {
 
 #[test]
 fn public_queries_return_historical_snapshots_and_owned_event_handles() {
-    let contime = ConTime::<Event, State, ()>::start(config(), ()).unwrap();
+    let contime = RawConTime::<Event, State, ()>::start(config(), ()).unwrap();
     contime
         .apply([
             Event { id: 1, time: Time(10), value: 1 },

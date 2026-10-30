@@ -2,7 +2,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
-use contime::{AdvanceTime, ConTime, ConTimeConfig, Input, Placement};
+use contime::{AdvanceTime, ConTimeConfig, Input, Placement, RawConTime};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 struct Time(u64);
@@ -92,7 +92,7 @@ fn main() {
         history_retention: Time(1_000),
         checkpoints: CheckpointConfig { interval: 32 },
     };
-    let history = ConTime::<CounterChanged, Counter, ()>::start(config, ()).expect("start ConTime");
+    let history = RawConTime::<CounterChanged, Counter, ()>::start(config, ()).expect("start ConTime");
 
     let start = Instant::now();
     let duration = Duration::from_secs(5);

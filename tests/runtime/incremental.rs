@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use contime::{checkpoints::*, ConTime, ConTimeConfig, IdleError, Input, Placement, RejectionReason};
+use contime::{checkpoints::*, ConTimeConfig, IdleError, Input, Placement, RawConTime, RejectionReason};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -110,7 +110,7 @@ fn config(routers: usize, workers: usize, retention: u64) -> ConTimeConfig<Time>
 #[test]
 fn future_history_can_be_queried_without_advancing_or_publishing_effects() {
     let (applied, effects) = unbounded();
-    let core = ConTime::start(config(2, 2, 1_000), Observe { applied, block: None }).unwrap();
+    let core = RawConTime::start(config(2, 2, 1_000), Observe { applied, block: None }).unwrap();
     core.apply([event(10), event(20)]).unwrap();
     core.wait_until_idle(Duration::from_secs(2)).unwrap();
     assert!(effects.is_empty());
@@ -129,7 +129,7 @@ fn future_history_can_be_queried_without_advancing_or_publishing_effects() {
 fn an_active_application_keeps_causal_work_admissible_while_pruning_waits() {
     let (applied, effects) = unbounded();
     let (release, blocked) = unbounded();
-    let core = ConTime::start(config(2, 2, 0), Observe { applied, block: Some(Arc::new((10, blocked))) }).unwrap();
+    let core = RawConTime::start(config(2, 2, 0), Observe { applied, block: Some(Arc::new((10, blocked))) }).unwrap();
     core.apply([event(10), event(20)]).unwrap();
     core.advance_to(Time(100)).unwrap();
     assert_eq!(effects.recv_timeout(Duration::from_secs(2)).unwrap(), 10);
@@ -149,7 +149,7 @@ fn an_active_application_keeps_causal_work_admissible_while_pruning_waits() {
 
 #[test]
 fn accepted_fanout_is_preserved_across_multi_router_pruning() {
-    let core = ConTime::<Event, State, ()>::start(config(3, 4, 0), ()).unwrap();
+    let core = RawConTime::<Event, State, ()>::start(config(3, 4, 0), ()).unwrap();
     core.apply((1..=50).map(|time| Event { time: Time(time), id: time.into(), snapshots: (0..16).collect() })).unwrap();
     core.advance_to(Time(100)).unwrap();
     core.wait_until_idle(Duration::from_secs(3)).unwrap();
@@ -177,7 +177,7 @@ impl ApplyWrapper<State, Event> for Causal {
 #[test]
 fn live_callbacks_submit_cross_worker_causal_work_before_their_reports() {
     let emit: Emit = Arc::new(std::sync::OnceLock::new());
-    let core = Arc::new(ConTime::start(config(3, 4, 0), Causal(emit.clone())).unwrap());
+    let core = Arc::new(RawConTime::start(config(3, 4, 0), Causal(emit.clone())).unwrap());
     let weak = Arc::downgrade(&core);
     assert!(emit
         .set(Box::new(move |time| {

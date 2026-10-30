@@ -1,6 +1,6 @@
 //! Measures native submit-to-application and query response latency under load.
 use contime::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, Event, EventBatch, Snapshot, Timestamp};
-use contime::{ConTime, ConTimeConfig, Input};
+use contime::{RawConTime, ConTimeConfig, Input};
 use crossbeam_channel::{select, tick, unbounded, Sender};
 use std::time::{Duration, Instant};
 
@@ -110,7 +110,7 @@ fn main() {
     assert!(["sparse", "burst", "saturated"].contains(&arrivals));
     let (done, completed) = unbounded();
     let target = Time((total / 64) as i64);
-    let engine = ConTime::start(
+    let engine = RawConTime::start(
         ConTimeConfig {
             router_count: 1,
             worker_count: workers,

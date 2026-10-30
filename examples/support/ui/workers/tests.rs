@@ -231,8 +231,8 @@ mod native;
 #[test]
 fn native_worker_reports_render_without_advancing_or_querying() {
     for workers in [1, 4] {
-        use contime::{checkpoints::CheckpointConfig, ConTime, ConTimeConfig, Placement};
-        let runtime = ConTime::<native::Increment, native::Counter, ()>::start(
+        use contime::{checkpoints::CheckpointConfig, ConTimeConfig, Placement, RawConTime};
+        let runtime = RawConTime::<native::Increment, native::Counter, ()>::start(
             ConTimeConfig {
                 worker_count: workers,
                 router_count: 1,

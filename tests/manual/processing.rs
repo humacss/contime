@@ -1,5 +1,5 @@
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
-use contime::manual::{FrameBudget, ManualConTime, ManualConfig};
+use contime::manual::{FrameBudget, ManualConfig, RawManualConTime};
 use std::{cell::RefCell, num::NonZeroUsize, rc::Rc, time::Duration};
 #[derive(Clone, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);
@@ -64,8 +64,8 @@ impl ApplyEvents<Change> for Counter {
         self.values.extend(batch.events.map(|e| *e.value));
     }
 }
-fn engine(capacity: usize) -> ManualConTime<Change, Counter> {
-    ManualConTime::new(
+fn engine(capacity: usize) -> RawManualConTime<Change, Counter> {
+    RawManualConTime::new(
         ManualConfig { queue_capacity: NonZeroUsize::new(capacity).unwrap(), checkpoints: CheckpointConfig { interval: 1 } },
         (),
     )
@@ -73,7 +73,7 @@ fn engine(capacity: usize) -> ManualConTime<Change, Counter> {
 fn event(id: u128, time: u64, value: u64, targets: &[u128]) -> Change {
     Change { id, time: Time(time), targets: targets.into(), value: Rc::new(value) }
 }
-fn process(engine: &mut ManualConTime<Change, Counter>) {
+fn process(engine: &mut RawManualConTime<Change, Counter>) {
     engine.process_with_clock(FrameBudget { duration: Duration::from_secs(1), max_steps: 1000 }, || Duration::ZERO).unwrap();
 }
 #[test]

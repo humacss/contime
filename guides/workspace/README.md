@@ -9,10 +9,17 @@ managed background processing; Manual runs an existing worker when the host call
 
 ## Shared source and publication
 
-Only `contime` is published to crates.io. Its root library compiles the component
+The implementation is published as `contime`. The optional proc macros are a
+separate `contime-macros` package because Rust requires a separately compiled
+proc-macro crate. Its root library compiles the component
 implementations directly as modules and re-exports the consumer-facing API.
 Cargo does not bundle workspace dependencies into a published package, so the
-root package has no internal `contime-*` package dependencies.
+root package has no internal execution-component package dependencies. Its
+optional `contime-macros` dependency must be published separately before a release
+that enables macros. For the 0.1.2 release, publish `contime-macros` 0.1.2 first,
+then verify the root package against the registry without a local override. CI
+uses a local macro override to check matching uncommitted companion changes;
+that proves source compatibility, not registry availability.
 
 Components keep conventional, non-publishable development packages under
 `crates/<component>/Cargo.toml`, with implementation, tests and benchmarks beside
@@ -34,7 +41,9 @@ Published-package consumers receive ordinary files.
 CI checks the link targets and archive contents, then extracts the package
 outside the checkout and runs its tests and examples. Ordinary component
 manifests and original source directories are absent from that extracted tree.
-
+The optional proc-macro companion remains a separate compiler dependency; CI
+also packages it and uses its extracted copy for this check, so neither package
+reads implementation files from the original checkout.
 
 Application code should use types re-exported by `contime` consistently. A type
 compiled inside `contime` and the same source compiled in a standalone development
@@ -55,6 +64,7 @@ cargo publish -p contime --all-features --dry-run
 | [`contime-batcher`](../../crates/batcher/README.md) | Bounded packetization and ready-queue draining for the native pipeline |
 | [`contime-manual`](../../crates/manual/README.md) | Caller-driven processing of one worker between complete operations |
 | [`contime-time`](../../crates/time/README.md) | Ordered time contracts and optional integer implementations |
+| `contime-macros` | Derives for event metadata, snapshot application and nested modules |
 | `contime` (root) | Public facade and selection of manual or managed runtime processing |
 | [`contime-core`](https://github.com/humacss/contime/blob/main/crates/core/README.md) | Shared application contracts and synchronous history/storage adapters |
 | [`contime-api`](https://github.com/humacss/contime/blob/main/crates/api/README.md) | Input requests, responses, and optional local callback adapters |
@@ -89,7 +99,7 @@ configurable browser host.
 - Queries earlier than retained history cannot reconstruct discarded events.
 - Checkpoints clone snapshot state, so large snapshots can be expensive.
 - Submission and advancement across workers do not provide transactional rollback. Integrations that need stronger ordering must supply it at their own boundary.
-- The API is still evolving. The root re-exports the current input and application contracts; application-specific macros belong in consumers.
+- The API is still evolving. The root re-exports application contracts and the optional event, snapshot and module derives.
 
 ## Verification
 

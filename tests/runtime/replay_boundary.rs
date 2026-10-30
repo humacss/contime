@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use contime::{checkpoints, ConTime, ConTimeConfig, Input};
+use contime::{checkpoints, ConTimeConfig, Input, RawConTime};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 struct Time(u64);
@@ -96,7 +96,7 @@ fn event_for(snapshot_id: u128, id: u128, time: u64, value: u64) -> TestEvent {
 
 #[test]
 fn idle_wait_finishes_all_queued_batches_without_advancing_time() {
-    let core = ConTime::<TestEvent, TestSnapshot, ()>::start(config(3, 4, 1_000), ()).unwrap();
+    let core = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(3, 4, 1_000), ()).unwrap();
     core.wait_until_idle(Duration::from_secs(2)).unwrap();
     for id in 0..128 {
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -116,7 +116,7 @@ fn idle_wait_finishes_all_queued_batches_without_advancing_time() {
 
 #[test]
 fn repeated_idle_subscriptions_do_not_stop_later_work() {
-    let core = ConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 3, 1_000), ()).unwrap();
+    let core = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 3, 1_000), ()).unwrap();
     for round in 0..20 {
         core.wait_until_idle(Duration::from_secs(2)).unwrap();
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -129,7 +129,7 @@ fn repeated_idle_subscriptions_do_not_stop_later_work() {
 
 #[test]
 fn independent_callers_can_wait_for_the_same_idle_topology() {
-    let core = ConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 3, 1_000), ()).unwrap();
+    let core = RawConTime::<TestEvent, TestSnapshot, ()>::start(config(2, 3, 1_000), ()).unwrap();
     std::thread::scope(|scope| {
         let first = scope.spawn(|| core.wait_until_idle(Duration::from_secs(2)));
         let second = scope.spawn(|| core.wait_until_idle(Duration::from_secs(2)));
@@ -161,7 +161,7 @@ impl checkpoints::ApplyWrapper<TestSnapshot, TestEvent> for BlockReplay {
 fn idle_wait_includes_after_apply_and_does_not_block_empty_queries() {
     let (entered, observed) = crossbeam_channel::unbounded();
     let (release, blocked) = crossbeam_channel::unbounded();
-    let core = ConTime::start(config(2, 2, 1_000), BlockReplay { entered, release: blocked }).unwrap();
+    let core = RawConTime::start(config(2, 2, 1_000), BlockReplay { entered, release: blocked }).unwrap();
     core.advance_to(Time(10)).unwrap();
     let (tx, _rx) = crossbeam_channel::unbounded();
     core.send([event(1, 10, 1)], tx).unwrap();
@@ -183,7 +183,7 @@ fn late_buckets_and_boundary_updates_preserve_checkpoints() {
         for late_count in [1, 2, 10, 50] {
             let mut settings = config(1, 1, 50);
             settings.checkpoints.interval = interval;
-            let core = ConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
+            let core = RawConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
             core.apply([event(1, 0, 1), event(2, 50, 1)]).unwrap();
             core.advance_to(Time(50)).unwrap();
             core.wait_until_idle(Duration::from_secs(2)).unwrap();
@@ -224,7 +224,7 @@ fn uneven_late_buckets_preserve_checkpoint_suffix() {
     for interval in [2, 3, 5, 10] {
         let mut settings = config(1, 1, 30);
         settings.checkpoints.interval = interval;
-        let core = ConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
+        let core = RawConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
         core.advance_to(Time(30)).unwrap();
         let mut seed = 17u64;
         let mut id = 1;
@@ -251,7 +251,7 @@ fn repeated_pruning_and_updates_at_the_retained_boundary_preserve_state() {
     for interval in [1, 2, 3, 10, 100] {
         let mut settings = config(1, 1, 0);
         settings.checkpoints.interval = interval;
-        let core = ConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
+        let core = RawConTime::<TestEvent, TestSnapshot, ()>::start(settings, ()).unwrap();
         let mut id = 1;
         for boundary in (0..1000).step_by(20) {
             for offset in [0, 10, 20, 1, 0, 19, 20, 0] {

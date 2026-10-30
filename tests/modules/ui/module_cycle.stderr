@@ -1,0 +1,21 @@
+error: cycle in ConTime module dependencies
+ --> tests/modules/ui/module_cycle.rs:9:8
+  |
+7 | #[derive(ContimeModule)]
+  |          ------------- in this macro invocation
+8 | #[contime_module(time = i64, modules = [First])]
+9 | struct Second;
+  |        ^^^^^^
+  |
+  = note: this error originates in the macro `__contime_types_Second::Dependency0::Module0` which comes from the expansion of the macro `__contime_module_Second` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: cycle in ConTime module dependencies
+ --> tests/modules/ui/module_cycle.rs:5:8
+  |
+3 | #[derive(ContimeModule)]
+  |          ------------- in this macro invocation
+4 | #[contime_module(time = i64, modules = [Second])]
+5 | struct First;
+  |        ^^^^^
+  |
+  = note: this error originates in the macro `__contime_types_First::Dependency0::Module0` which comes from the expansion of the macro `__contime_module_First` (in Nightly builds, run with -Z macro-backtrace for more info)

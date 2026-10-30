@@ -1,6 +1,6 @@
 //! Fixed-work scaling benchmark. This is not part of the published workspace.
 use contime::checkpoints::{ApplyBatch, ApplyEvents, ApplyInner, ApplyWrapper, CheckpointConfig, Event, EventBatch, Snapshot, Timestamp};
-use contime::{ConTime, ConTimeConfig, Input};
+use contime::{RawConTime, ConTimeConfig, Input};
 use contime::contime_api::{AdvanceOutput, ApplyOutput};
 use contime::contime_router::{AdvanceWorkerOutput, RouteOutput, WorkerOutput};
 use contime::contime_runtime::Worker;
@@ -187,7 +187,7 @@ fn run(mode: &str, settings: Settings, expected: &[State]) -> (f64, f64, f64, f6
     let mut threads = Vec::new();
     let barrier = Arc::new(Barrier::new(settings.workers + 1));
     if mode == "full" {
-        let pipeline = ConTime::start(
+        let pipeline = RawConTime::start(
             ConTimeConfig {
                 router_count: 1,
                 worker_count: settings.workers,

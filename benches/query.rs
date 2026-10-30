@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
 
-use contime::{ConTime, ConTimeConfig, Input};
+use contime::{ConTimeConfig, Input, RawConTime};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
@@ -91,8 +91,8 @@ fn config(router_count: usize, worker_count: usize) -> ConTimeConfig<Time> {
     }
 }
 
-fn prepared_runtime(router_count: usize, worker_count: usize) -> ConTime<BenchEvent, BenchSnapshot, ()> {
-    let contime = ConTime::start(config(router_count, worker_count), ()).unwrap();
+fn prepared_runtime(router_count: usize, worker_count: usize) -> RawConTime<BenchEvent, BenchSnapshot, ()> {
+    let contime = RawConTime::start(config(router_count, worker_count), ()).unwrap();
     contime
         .apply((0..SNAPSHOT_COUNT).map(|index| BenchEvent { id: index as u128, snapshot_id: index as u128, time: Time(10) }).chain(
             (0..SNAPSHOT_COUNT).map(|index| BenchEvent {

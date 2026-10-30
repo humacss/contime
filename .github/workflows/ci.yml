@@ -117,8 +117,10 @@ jobs:
               assert (fixtures / source.relative_to("crates/runtime/tests/controlled")).as_posix() in files
           assert not any(p.startswith(("crates/", "component-packages/")) for p in files)
           PYTHON
-      - name: Verify release package without uploading
-        run: cargo +1.90.0 publish -p contime --all-features --dry-run
+      - name: Verify release packages without uploading
+        run: |
+          cargo +1.90.0 package -p contime-macros
+          cargo +1.90.0 publish -p contime --all-features --dry-run --config "patch.crates-io.contime-macros.path=\"$PWD/crates/macros\""
       - name: Extract the package outside the checkout
         run: |
           python3 - <<'PYTHON' > package-root.txt
@@ -128,14 +130,22 @@ jobs:
           package = tomllib.loads(Path("Cargo.toml").read_text())["package"]
           name = f"{package['name']}-{package['version']}"
           destination = Path(tempfile.mkdtemp(prefix="contime-package-", dir=os.environ["RUNNER_TEMP"]))
-          for archived in (name,):
+          macros = tomllib.loads((root / "crates/macros/Cargo.toml").read_text())["package"]
+          macro_name = f"{macros['name']}-{macros['version']}"
+          for archived in (name, macro_name):
               with tarfile.open(root / "target/package" / f"{archived}.crate") as archive:
                   assert all(not p.issym() and not p.islnk() for p in archive.getmembers())
                   archive.extractall(destination, filter="data")
           extracted = destination / name
           manifest = tomllib.loads((extracted / "Cargo.toml").read_text())
           assert not (extracted / "crates").exists()
-          assert all(not dep.startswith("contime-") for dep in manifest.get("dependencies", {}))
+          assert all(not dep.startswith("contime-") or dep == "contime-macros"
+                     for dep in manifest.get("dependencies", {}))
+          # The compiler companion is also taken from its own verified archive.
+          config = extracted / ".cargo/config.toml"
+          config.parent.mkdir()
+          config.write_text("[patch.crates-io]\ncontime-macros = { path = "
+                            + json.dumps(str(destination / macro_name)) + " }\n")
           print(extracted)
           PYTHON
       - name: Test the extracted package and examples

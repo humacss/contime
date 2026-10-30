@@ -2,11 +2,11 @@
 mod tests {
     use super::super::model::*;
     use contime::checkpoints::CheckpointConfig;
-    use contime::{ConTime, ConTimeConfig, Placement};
+    use contime::{ConTimeConfig, Placement, RawConTime};
     use std::time::Duration;
     #[test]
     fn late_events_and_duplicate_ids_preserve_history_counts() {
-        let contime = ConTime::<CounterChanged, Counter, ()>::start(
+        let contime = RawConTime::<CounterChanged, Counter, ()>::start(
             ConTimeConfig {
                 router_count: 1,
                 worker_count: 2,

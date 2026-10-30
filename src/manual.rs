@@ -1,9 +1,9 @@
 //! A complete caller-driven instance using the ordinary ConTime application contracts.
 //!
-//! Create an instance, enqueue operations, then call [`ManualConTime::process`](crate::manual::ManualConTime::process)
+//! Create an instance, enqueue operations, then call [`ManualConTime::process`](crate::manual::RawManualConTime::process)
 //! from the host loop. Query callbacks run during processing; they may capture `Rc`
 //! state. No callback is invoked for a request discarded before processing. Manual
-//! retention is explicit through [`ManualConTime::prune_before`](crate::manual::ManualConTime::prune_before).
+//! retention is explicit through [`ManualConTime::prune_before`](crate::manual::RawManualConTime::prune_before).
 //!
 //! Subscriptions are not exposed by this convenience API. Advanced applications
 //! can use [`WorkerDriver`](crate::manual::WorkerDriver) with their own worker message and storage contracts.
@@ -44,7 +44,7 @@ type Request<I, S> = Message<SharedEvent<I>, S, <I as crate::checkpoints::Event>
 /// runtime without imposing thread-safety bounds. Queue operations return
 /// immediately. Processing and query callbacks execute on the calling thread.
 /// A single complete operation may exceed the soft processing budget.
-pub struct ManualConTime<I, S, W = ()>
+pub struct RawManualConTime<I, S, W = ()>
 where
     I: Input,
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + 'static,
@@ -53,7 +53,7 @@ where
     driver: WorkerDriver<Request<I, S>, CheckpointStorage<I, S, W>>,
     rejections: Rc<RefCell<Vec<InsertionRejection>>>,
 }
-impl<I, S, W> ManualConTime<I, S, W>
+impl<I, S, W> RawManualConTime<I, S, W>
 where
     I: Input,
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + 'static,
@@ -149,3 +149,7 @@ where
         std::mem::take(&mut *self.rejections.borrow_mut())
     }
 }
+
+#[path = "manual_module.rs"]
+mod module_instance;
+pub use module_instance::ManualConTime;

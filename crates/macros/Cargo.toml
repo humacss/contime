@@ -1,0 +1,23 @@
+[package]
+name = "contime-macros"
+version = "0.1.2"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+readme = "README.md"
+description = "Derive macros for ConTime events, snapshots, and modules"
+repository = "https://github.com/humacss/contime"
+publish = ["crates-io"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+blake3 = "1.8"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
+proc-macro-crate = "3"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }

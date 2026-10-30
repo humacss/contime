@@ -3,7 +3,7 @@
 use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
-use contime::{checkpoints::*, ConTime, ConTimeConfig, Input, Placement, RejectionReason};
+use contime::{checkpoints::*, ConTimeConfig, Input, Placement, RawConTime, RejectionReason};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 const SOURCE: u128 = 1;
@@ -77,7 +77,7 @@ impl ApplyEvents<TestEvent> for TestSnapshot {
         self.sum += batch.events.map(|event| event.value).sum::<u64>();
     }
 }
-type TestCore = ConTime<TestEvent, TestSnapshot, Observe>;
+type TestCore = RawConTime<TestEvent, TestSnapshot, Observe>;
 struct Feedback {
     core: Weak<TestCore>,
     time: Time,
@@ -136,7 +136,7 @@ fn late_insertion_can_publish_from_before_its_own_timestamp() {
     let expected_sum = 3;
 
     let (published, publications) = unbounded();
-    let core = ConTime::start(config(1, 1, 100, 1_000), Observe { published, feedback: None }).unwrap();
+    let core = RawConTime::start(config(1, 1, 100, 1_000), Observe { published, feedback: None }).unwrap();
     core.apply([event(1, PREFIX), event(2, INITIAL_TARGET)]).unwrap();
     core.advance_to(Time(INITIAL_TARGET)).unwrap();
     core.wait_until_idle(TIMEOUT).unwrap();
@@ -183,7 +183,8 @@ fn accepted_replay_feedback_survives_horizon_advancement(
         let (published, publications) = unbounded();
         let feedback = Arc::new(OnceLock::new());
         let core = Arc::new(
-            ConTime::start(config(routers, workers, interval, retention), Observe { published, feedback: Some(feedback.clone()) }).unwrap(),
+            RawConTime::start(config(routers, workers, interval, retention), Observe { published, feedback: Some(feedback.clone()) })
+                .unwrap(),
         );
         assert!(feedback
             .set(Feedback { core: Arc::downgrade(&core), time: Time(output_time), destinations: destinations.clone(), gate: None })
@@ -230,7 +231,7 @@ fn requested_horizon_closes_external_admission_without_cutting_off_active_feedba
     let (entered, entering) = unbounded();
     let (release, released) = unbounded();
     let feedback = Arc::new(OnceLock::new());
-    let core = Arc::new(ConTime::start(config(3, 4, 100, 100), Observe { published, feedback: Some(feedback.clone()) }).unwrap());
+    let core = Arc::new(RawConTime::start(config(3, 4, 100, 100), Observe { published, feedback: Some(feedback.clone()) }).unwrap());
     assert!(feedback
         .set(Feedback { core: Arc::downgrade(&core), time: Time(PREFIX), destinations: vec![2, 3], gate: Some((entered, released)) })
         .is_ok());
@@ -270,7 +271,7 @@ fn completed_forwarding_prevents_replay_before_horizon_but_accepts_at_horizon() 
     let expected_rejection = RejectionReason::BeforeHistoryHorizon;
 
     let (published, publications) = unbounded();
-    let core = ConTime::start(config(3, 4, 100, 100), Observe { published, feedback: None }).unwrap();
+    let core = RawConTime::start(config(3, 4, 100, 100), Observe { published, feedback: None }).unwrap();
     let horizons = core.subscribe_pruned_horizon().unwrap();
     core.apply([event(1, PREFIX), event(2, INITIAL_TARGET)]).unwrap();
     core.advance_to(Time(FINAL_TARGET)).unwrap();

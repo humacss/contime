@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Snapshot};
-use contime::{ConTime, ConTimeConfig, Input, RejectionMessage, RejectionReason, SnapshotListenerMessage};
+use contime::{ConTimeConfig, Input, RawConTime, RejectionMessage, RejectionReason, SnapshotListenerMessage};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use crossbeam_channel::{unbounded, Receiver};
@@ -135,7 +135,7 @@ fn prepare_batches(snapshot_count: usize, batch_count: usize, next_id: &mut u128
         .collect()
 }
 
-fn warm_runtime(contime: &ConTime<BenchEvent, BenchSnapshot, ()>, snapshot_count: usize, next_id: &mut u128) {
+fn warm_runtime(contime: &RawConTime<BenchEvent, BenchSnapshot, ()>, snapshot_count: usize, next_id: &mut u128) {
     contime.advance_to(Time(1)).unwrap();
     let (rejections, completed) = unbounded::<RejectionMessage<RejectionReason>>();
     contime.send(prepare_batches(snapshot_count, 1, next_id).pop().unwrap(), rejections).unwrap();
@@ -155,7 +155,7 @@ fn benchmark_replay_overhead(criterion: &mut Criterion) {
                 let mode = if listeners_enabled { "enabled" } else { "baseline" };
                 let benchmark_id = BenchmarkId::new(format!("{routers}_routers_{workers}_workers/{mode}"), snapshot_count);
                 group.bench_function(benchmark_id, |bencher| {
-                    let contime = ConTime::<BenchEvent, BenchSnapshot, ()>::start(config(routers, workers), ()).unwrap();
+                    let contime = RawConTime::<BenchEvent, BenchSnapshot, ()>::start(config(routers, workers), ()).unwrap();
                     let mut next_id = 1;
                     warm_runtime(&contime, snapshot_count, &mut next_id);
 

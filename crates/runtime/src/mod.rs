@@ -14,6 +14,9 @@ mod instance;
 #[cfg(test)]
 mod listen;
 mod message;
+mod module;
+pub use crate::contime_core::module::Module;
+pub use module::ModuleConTime;
 #[cfg(test)]
 #[path = "../tests/controlled/replay_frontier.rs"]
 mod replay_frontier_tests;

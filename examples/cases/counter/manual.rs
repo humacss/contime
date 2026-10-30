@@ -2,7 +2,7 @@
 //!
 //! Included as a complete code sample in the Manual Rust documentation.
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
-use contime::manual::{ManualConTime, ManualConfig};
+use contime::manual::{RawManualConTime, ManualConfig};
 use contime::{AdvanceTime, Input};
 use std::{
     cell::Cell,
@@ -70,7 +70,7 @@ impl ApplyEvents<Count> for Counter {
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut contime = ManualConTime::<Count, Counter>::new(
+    let mut contime = RawManualConTime::<Count, Counter>::new(
         ManualConfig { queue_capacity: NonZeroUsize::new(128).unwrap(), checkpoints: CheckpointConfig { interval: 100 } },
         (),
     );

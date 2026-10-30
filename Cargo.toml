@@ -32,17 +32,22 @@ include = [
 [features]
 default = ["runtime", "time"]
 time = []
+macros = ["dep:contime-macros", "dep:contentid", "dep:blake3"]
 runtime = ["dep:traitstub"]
 monitor = []
 simulator = []
 manual = ["dep:traitstub"]
 
 [dependencies]
+contime-macros = { path = "crates/macros", version = "0.1.2", optional = true }
+contentid = { version = "1.0.0", default-features = false, features = ["local"], optional = true }
+blake3 = { version = "1.8", optional = true }
 ahash = "0.8"
 crossbeam-channel = "0.5"
 traitstub = { version = "0.1.0", optional = true }
 
 [dev-dependencies]
+trybuild = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 crossbeam-channel = "0.5"
@@ -77,6 +82,7 @@ required-features = ["runtime"]
 resolver = "2"
 exclude = ["examples/environments/wasi", "examples/environments/browser", "benches/scaling"]
 members = [
+    "crates/macros",
     "crates/time",
     "crates/api",
     "crates/batcher",
@@ -149,3 +155,13 @@ required-features = ["runtime", "manual", "monitor", "simulator"]
 name = "client_movement"
 path = "examples/support/entrypoints/client_movement.rs"
 required-features = ["runtime", "manual", "monitor", "simulator"]
+
+[[test]]
+name = "modules"
+path = "tests/modules/main.rs"
+required-features = ["macros", "runtime", "manual", "time"]
+
+[[example]]
+name = "modules"
+path = "examples/cases/modules/main.rs"
+required-features = ["macros", "runtime", "time"]

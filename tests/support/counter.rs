@@ -73,8 +73,8 @@ impl ApplyEvents<Change> for Counter {
     }
 }
 #[cfg(feature = "runtime")]
-pub fn runtime(workers: usize) -> contime::ConTime<Change, Counter, ()> {
-    contime::ConTime::start(
+pub fn runtime(workers: usize) -> contime::RawConTime<Change, Counter, ()> {
+    contime::RawConTime::start(
         contime::ConTimeConfig {
             worker_count: workers,
             router_count: 1,
@@ -88,8 +88,8 @@ pub fn runtime(workers: usize) -> contime::ConTime<Change, Counter, ()> {
     .unwrap()
 }
 #[cfg(feature = "manual")]
-pub fn manual() -> contime::manual::ManualConTime<Change, Counter> {
-    contime::manual::ManualConTime::new(
+pub fn manual() -> contime::manual::RawManualConTime<Change, Counter> {
+    contime::manual::RawManualConTime::new(
         contime::manual::ManualConfig {
             queue_capacity: std::num::NonZeroUsize::new(64).unwrap(),
             checkpoints: CheckpointConfig { interval: 4 },
@@ -98,7 +98,7 @@ pub fn manual() -> contime::manual::ManualConTime<Change, Counter> {
     )
 }
 #[cfg(feature = "manual")]
-pub fn drive(engine: &mut contime::manual::ManualConTime<Change, Counter>) {
+pub fn drive(engine: &mut contime::manual::RawManualConTime<Change, Counter>) {
     for _ in 0..10_000 {
         if !engine.process().unwrap() {
             return;

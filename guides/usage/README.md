@@ -8,7 +8,7 @@ if you just want to see the shape of the API.
 
 A running application usually submits events as they arrive and queries state when it needs to display or use it. It does not wait for every submission to finish before doing anything else.
 
-This walkthrough starts an in-memory ConTime engine with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
+This walkthrough starts an in-memory ConTime instance with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
 
 The Rust blocks form one complete program, in order. The same program is available as [`examples/cases/counter/readme.rs`](https://github.com/humacss/contime/blob/main/examples/cases/counter/readme.rs). Run it from a ConTime checkout with:
 
@@ -18,19 +18,22 @@ cargo run -p contime --example readme
 
 ## Dependencies and Features
 
-To use ConTime 0.1 in your own Rust binary project, add:
+To use ConTime 0.1.2 in your own Rust binary project, add:
 
 ```toml
 [dependencies]
-contime = "0.1.1"
+contime = "0.1.2"
 fastrand = "2"
 ```
 
-ConTime supports Rust 1.90 or newer. Runtime and built-in integer time support are enabled by default, so ordinary
+ConTime supports Rust 1.90 or newer. Runtime and built-in integer time support (`time`) are enabled by default, so ordinary
 applications need no feature list. Enable `manual` for caller-driven processing,
 `monitor` for monitoring, or `simulator` for traffic generation and feedback tools.
-Call `ConTime::start` for managed background processing, or create a
-`contime::manual::ManualConTime` instance and call `process()` from your own loop.
+The [module API](../modules/README.md) starts managed processing with
+`ConTime::<App>::start(config)`, or caller-driven processing with
+`contime::manual::ManualConTime::<App>::new(config)`. This explicit-trait walkthrough
+uses `RawConTime` and `manual::RawManualConTime` instead. Call `process()` from
+your own loop when using Manual.
 Creating a Manual instance starts no threads. `process_with_clock` is an optional
 helper for budgeted processing. The [manual crate](../../crates/manual/README.md)
 describes its worker contracts and processing budget. Shared contracts and storage
@@ -57,6 +60,13 @@ caller-driven adaptive admission and query validation tools when `monitor` is
 also enabled. Event generation alone does not enable worker bookkeeping. It starts no threads and changes no execution or replay rules.
 See the [simulator guide](../../crates/simulator/README.md) for the APIs and examples.
 
+## Declarative application modules
+
+Enable `macros` to define events, snapshots and nested modules without writing
+their trait implementations. Start with the [module walkthrough](../modules/README.md)
+and `cargo run --example modules --features macros`. The explicit trait walkthrough
+below remains useful when adapting existing application types.
+
 ## Define Time
 
 First, import ConTime and the traits used by the example:
@@ -66,10 +76,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Snapshot, Timestamp};
-use contime::{AdvanceTime, ConTime, ConTimeConfig, Input, Placement};
+use contime::{AdvanceTime, RawConTime, ConTimeConfig, Input, Placement};
 ```
 
-ConTime uses your application's time type. Here, `Time` counts logical milliseconds. The application will calculate it from elapsed time; ConTime does not own a clock. The type provides ordering, an explicit minimum, a checked predecessor, and retention subtraction.
+ConTime uses your application's time type. Here, `Time` counts logical milliseconds. The application will calculate it from elapsed time; ConTime does not own a clock. The type provides ordering, an explicit minimum, a checked predecessor, and retention subtraction. `Default`
+is an ordinary construction value, not the history boundary. Built-in integer
+types already implement these contracts when the default `time` feature is enabled;
+signed integers support negative timestamps down to their minimum.
 
 ```rust
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -168,7 +181,7 @@ impl ApplyEvents<CounterChanged> for Counter {
 
 ## Start ConTime
 
-Start the in-memory engine inside `main`:
+Start the in-memory ConTime instance inside `main`:
 
 ```rust
 fn main() {
@@ -180,7 +193,7 @@ fn main() {
         history_retention: Time(1_000),
         checkpoints: CheckpointConfig { interval: 32 },
     };
-    let history = ConTime::<CounterChanged, Counter, ()>::start(config, ())
+    let history = RawConTime::<CounterChanged, Counter, ()>::start(config, ())
         .expect("start ConTime");
 ```
 
@@ -280,7 +293,7 @@ when it processes work. No ConTime background threads are started. Use the same
 to define worker messages or storage adapters.
 
 ```toml
-contime = { version = "0.1", features = ["manual", "time"] }
+contime = { version = "0.1.2", features = ["manual"] }
 ```
 
 The self-contained [Manual code sample](../../examples/cases/counter/manual.rs),
@@ -295,8 +308,11 @@ For a constrained build that omits the managed runtime, monitoring, counters, an
 simulator, explicitly select only Manual:
 
 ```toml
-contime = { version = "0.1", default-features = false, features = ["manual", "time"] }
+contime = { version = "0.1.2", default-features = false, features = ["manual", "time"] }
 ```
+
+Keep `time` for built-in integer timestamps. With a custom time type implementing
+the time traits, it can also be omitted.
 
 Likewise, `default-features = false, features = ["runtime", "time"]` selects a lean
 Runtime without worker counters or the monitoring and simulation tools. Feature
@@ -386,7 +402,7 @@ delayed delivery path as simulated clients. See the
 Use `--headless --duration 5` for finite comparisons without terminal rendering.
 The browser demo exposes one Manual worker and a configurable frame allowance.
 Measurements include example overhead; these are live diagnostics rather than
-isolated engine benchmarks.
+isolated ConTime benchmarks.
 
 ## Verify Order-Sensitive State
 

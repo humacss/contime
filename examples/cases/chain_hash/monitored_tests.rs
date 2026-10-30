@@ -1,12 +1,12 @@
 use super::*;
 use contime::contime_monitor::{WorkerMonitor, WorkerReading};
-use contime::{checkpoints::CheckpointConfig, ConTime, ConTimeConfig, Placement};
+use contime::{checkpoints::CheckpointConfig, ConTimeConfig, Placement, RawConTime};
 use model::{Counter, CounterChanged, Time};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-type Runtime = ConTime<CounterChanged, Counter, ()>;
+type Runtime = RawConTime<CounterChanged, Counter, ()>;
 
 #[test]
 fn shared_hash_host_verifies_fixed_and_maximum_load_with_variable_fanout_and_retention() {

@@ -1,7 +1,7 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use contime::{checkpoints::*, ConTime, ConTimeConfig, Input, Placement, ProgressObservation, ProgressPolicy};
+use contime::{checkpoints::*, ConTimeConfig, Input, Placement, ProgressObservation, ProgressPolicy, RawConTime};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -111,7 +111,7 @@ fn reached(reports: &Receiver<ProgressObservation<Time>>, boundary: u64) -> Prog
 #[test]
 fn reports_beyond_pruning_without_removing_history_or_rejecting_late_input() {
     let (policy, reports) = policy(800);
-    let core = ConTime::<Event, State, ()>::start_with_progress(settings(), (), policy).unwrap();
+    let core = RawConTime::<Event, State, ()>::start_with_progress(settings(), (), policy).unwrap();
     core.apply([event(200)]).unwrap();
     core.advance_to(Time(1100)).unwrap();
     let first = reached(&reports, 300);
@@ -133,7 +133,7 @@ fn reports_beyond_pruning_without_removing_history_or_rejecting_late_input() {
 #[test]
 fn empty_intervals_are_reported_without_pruning_or_periodic_idle_work() {
     let (policy, reports) = policy(100);
-    let core = ConTime::<Event, State, ()>::start_with_progress(settings(), (), policy).unwrap();
+    let core = RawConTime::<Event, State, ()>::start_with_progress(settings(), (), policy).unwrap();
     core.advance_to(Time(400)).unwrap();
     reached(&reports, 300);
     core.wait_until_idle(WAIT).unwrap();
@@ -159,7 +159,7 @@ impl ProgressPolicy<Time> for BeyondTarget {
 #[test]
 fn policy_cannot_certify_time_beyond_the_processing_target() {
     let (sender, reports) = unbounded();
-    let core = ConTime::<Event, State, ()>::start_with_progress(settings(), (), BeyondTarget(sender)).unwrap();
+    let core = RawConTime::<Event, State, ()>::start_with_progress(settings(), (), BeyondTarget(sender)).unwrap();
     core.apply([event(600)]).unwrap();
     core.advance_to(Time(400)).unwrap();
     let report = reached(&reports, 400);
@@ -190,7 +190,7 @@ fn blocked_processing_inside_buffer_prevents_a_complete_report() {
     let (policy, reports) = policy(100);
     let (entered, arrivals) = unbounded();
     let (release, blocked) = unbounded();
-    let core = ConTime::start_with_progress(settings(), Block { entered, release: blocked }, policy).unwrap();
+    let core = RawConTime::start_with_progress(settings(), Block { entered, release: blocked }, policy).unwrap();
     core.apply([event(200)]).unwrap();
     core.advance_to(Time(400)).unwrap();
     arrivals.recv_timeout(WAIT).unwrap();
@@ -221,7 +221,7 @@ impl ApplyWrapper<State, Event> for Feedback {
 fn cross_worker_feedback_settles_with_no_further_advancement() {
     let (policy, reports) = policy(100);
     let emit: Emit = Arc::new(OnceLock::new());
-    let core = Arc::new(ConTime::start_with_progress(settings(), Feedback(emit.clone()), policy).unwrap());
+    let core = Arc::new(RawConTime::start_with_progress(settings(), Feedback(emit.clone()), policy).unwrap());
     let weak = Arc::downgrade(&core);
     assert!(emit
         .set(Box::new(move |time| {
@@ -245,7 +245,7 @@ fn cross_worker_feedback_settles_with_no_further_advancement() {
 fn internal_feedback_before_a_previous_observation_remains_admissible() {
     let (policy, reports) = policy(100);
     let emit: Emit = Arc::new(OnceLock::new());
-    let core = Arc::new(ConTime::start_with_progress(settings(), Feedback(emit.clone()), policy).unwrap());
+    let core = Arc::new(RawConTime::start_with_progress(settings(), Feedback(emit.clone()), policy).unwrap());
     let weak = Arc::downgrade(&core);
     assert!(emit
         .set(Box::new(move |time| {
@@ -275,7 +275,7 @@ fn internal_feedback_before_a_previous_observation_remains_admissible() {
 // monitoring without changing the queried state or status-report shape.
 #[test]
 fn monitoring_controls_runtime_application_bookkeeping() {
-    let core = ConTime::<Event, State, ()>::start(settings(), ()).unwrap();
+    let core = RawConTime::<Event, State, ()>::start(settings(), ()).unwrap();
     core.apply([event(1), event(2)]).unwrap();
     core.advance_to(Time(2)).unwrap();
     core.wait_until_idle(WAIT).unwrap();

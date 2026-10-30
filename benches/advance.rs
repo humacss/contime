@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use contime::{checkpoints, ConTime, ConTimeConfig, Input};
+use contime::{checkpoints, ConTimeConfig, Input, RawConTime};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
@@ -121,7 +121,7 @@ fn events(workload: Workload) -> Vec<BenchEvent> {
 
 fn measure_once(router_count: usize, worker_count: usize, workload: Workload) -> Duration {
     let dirty = matches!(workload, Workload::Dirty);
-    let contime = ConTime::<BenchEvent, BenchSnapshot, ()>::start(config(router_count, worker_count), ()).unwrap();
+    let contime = RawConTime::<BenchEvent, BenchSnapshot, ()>::start(config(router_count, worker_count), ()).unwrap();
     contime.apply(events(workload)).unwrap();
     if !dirty {
         // Materialize clean fixtures without moving the retained horizon.

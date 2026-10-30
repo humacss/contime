@@ -9,6 +9,24 @@
 //! generation; enable both tools for adaptive monitoring-based load control.
 #![deny(missing_docs)]
 #![cfg_attr(
+    feature = "macros",
+    doc = r###"
+# Declarative modules
+
+With `macros`, derive [`ContimeEvent`], [`ContimeSnapshot`] and [`ContimeModule`].
+A module selects the time type and combines its events, snapshots and dependencies.
+Start managed processing with `ConTime::<App>::start(config)` or drive the same
+module through `manual::ManualConTime::<App>::new(config)` with `manual` enabled.
+All nested declarations must agree on the time type. Generated event and snapshot
+lanes remain available for typed submission and query results.
+
+The default `time` feature supplies integer time implementations, including the
+full signed range. Disabling it leaves `time::Timestamp` and `time::AdvanceTime`
+available for custom types. The explicit minimum sets the initial history bound;
+`Default` does not define the beginning of time.
+"###
+)]
+#![cfg_attr(
     feature = "runtime",
     doc = r###"Continuous-time state from delayed, duplicated, and out-of-order events.
 
@@ -30,18 +48,18 @@ Pass `()` as the application wrapper unless you need the hooks in
 
 # Completion and retention
 
-[`ConTime::apply`] queues admission; a successful return does not mean that
-events have been applied. [`ConTime::errors`] reports asynchronous rejections.
-[`ConTime::send`] gives a caller its own insertion response channel instead.
+[`ConTime::apply`](RawConTime::apply) queues admission; a successful return does not mean that
+events have been applied. [`ConTime::errors`](RawConTime::errors) reports asynchronous rejections.
+[`ConTime::send`](RawConTime::send) gives a caller its own insertion response channel instead.
 Insertion responses establish insertion, not completed replay. Running
 applications should observe operation-specific responses or progress rather
-than waiting for global idle. [`ConTime::wait_until_idle`] is a helper for
+than waiting for global idle. [`ConTime::wait_until_idle`](RawConTime::wait_until_idle) is a helper for
 controlled tests and benchmarks only. Queries observe available retained
 history and do not wait for global idle or publish application effects.
 
-[`ConTime::advance_to`] raises the processing target without waiting for replay.
+[`ConTime::advance_to`](RawConTime::advance_to) raises the processing target without waiting for replay.
 It also requests time-based retention through [`ConTimeConfig::history_retention`].
-[`ConTime::subscribe_pruned_horizon`] observes completed pruning, while
+[`ConTime::subscribe_pruned_horizon`](RawConTime::subscribe_pruned_horizon) observes completed pruning, while
 [`ProgressPolicy`] supplies separate local processing observations.
 Neither a query nor a progress observation establishes external delivery or
 durable storage. ConTime owns no persistence or network protocol.
@@ -57,14 +75,25 @@ Run this example with `cargo run -p contime --example readme`."###
 
 /// Shared application contracts and storage adapters for either execution mode.
 pub use crate::contime_core as core;
+pub mod module;
+pub use crate::contime_core::module::Module;
 pub use crate::contime_core::{checkpoints, lanes, AdvanceTime, Input, RejectionReason};
+#[cfg(feature = "runtime")]
+pub use crate::contime_runtime::ConTime as RawConTime;
+#[cfg(feature = "runtime")]
+pub use crate::contime_runtime::ModuleConTime as ConTime;
+#[cfg(feature = "macros")]
+pub use contime_macros::{ContimeEvent, ContimeModule, ContimeSnapshot};
+#[cfg(feature = "macros")]
+#[doc(hidden)]
+pub use contime_macros::{__contime_collect_module, __contime_register_module};
 /// Caller-driven processing; creating an instance starts no background threads.
 #[cfg(feature = "manual")]
 pub mod manual;
 #[cfg(feature = "runtime")]
 pub use crate::contime_runtime::{
-    ApiError, ApplyResponse, ConTime, ConTimeConfig, IdleError, Placement, ProgressObservation, ProgressPolicy, RejectionMessage,
-    SharedEvent, ShutdownReport, SnapshotListenerMessage, StartError, ThreadInput, ThreadOutcome, WorkerCounters, WorkerStatus,
+    ApiError, ApplyResponse, ConTimeConfig, IdleError, Placement, ProgressObservation, ProgressPolicy, RejectionMessage, SharedEvent,
+    ShutdownReport, SnapshotListenerMessage, StartError, ThreadInput, ThreadOutcome, WorkerCounters, WorkerStatus,
 };
 
 /// Worker observations and application accounting, separate from presentation.
