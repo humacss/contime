@@ -86,9 +86,60 @@ jobs:
         run: cargo +1.90.0 doc --workspace --all-features --no-deps
       - name: Run README walkthrough
         run: cargo +1.90.0 run -p contime --example readme
-      - name: Verify single-package release without uploading
-        run: cargo +1.90.0 publish -p contime --all-features --dry-run
-      - name: Test packaged examples
+      - name: Check standalone component benchmark targets
+        run: cargo +1.90.0 bench --workspace --all-features --no-run
+      - name: Check packaged component sources
         run: |
-          package_version="$(cargo +1.90.0 metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "contime"))')"
-          cargo +1.90.0 test --manifest-path "target/package/contime-${package_version}/Cargo.toml" --all-features --examples
+          cargo +1.90.0 package -p contime --list --all-features > package-files.txt
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import tomllib
+          root = Path.cwd()
+          files = set(Path("package-files.txt").read_text().splitlines())
+          components = [p.parent for p in Path("crates").glob("*/Cargo.toml")
+                        if tomllib.loads(p.read_text())["package"].get("publish") is False]
+          assert components, "No development components found"
+          for component in components:
+              linked = Path("src/_symlinks") / component.name
+              link = linked / "src"
+              assert link.is_symlink(), f"Expected a symbolic link: {link}"
+              assert link.resolve(strict=True) == (root / component / "src").resolve(strict=True)
+              for source in (component / "src").rglob("*.rs"):
+                  assert (linked / source.relative_to(component)).as_posix() in files, source
+              assert not (linked / "README.md").exists()
+          assert "src/_symlinks/README.md" in files
+          fixtures = Path("src/_symlinks/runtime/tests/controlled")
+          assert fixtures.is_symlink()
+          assert fixtures.resolve(strict=True) == (root / "crates/runtime/tests/controlled").resolve(strict=True)
+          for source in Path("crates/runtime/tests/controlled").rglob("*.rs"):
+              assert (fixtures / source.relative_to("crates/runtime/tests/controlled")).as_posix() in files
+          assert not any(p.startswith(("crates/", "component-packages/")) for p in files)
+          PYTHON
+      - name: Verify release package without uploading
+        run: cargo +1.90.0 publish -p contime --all-features --dry-run
+      - name: Extract the package outside the checkout
+        run: |
+          python3 - <<'PYTHON' > package-root.txt
+          from pathlib import Path
+          import json, os, tarfile, tempfile, tomllib
+          root = Path.cwd()
+          package = tomllib.loads(Path("Cargo.toml").read_text())["package"]
+          name = f"{package['name']}-{package['version']}"
+          destination = Path(tempfile.mkdtemp(prefix="contime-package-", dir=os.environ["RUNNER_TEMP"]))
+          for archived in (name,):
+              with tarfile.open(root / "target/package" / f"{archived}.crate") as archive:
+                  assert all(not p.issym() and not p.islnk() for p in archive.getmembers())
+                  archive.extractall(destination, filter="data")
+          extracted = destination / name
+          manifest = tomllib.loads((extracted / "Cargo.toml").read_text())
+          assert not (extracted / "crates").exists()
+          assert all(not dep.startswith("contime-") for dep in manifest.get("dependencies", {}))
+          print(extracted)
+          PYTHON
+      - name: Test the extracted package and examples
+        run: |
+          package_root="$(cat package-root.txt)"
+          export CARGO_TARGET_DIR="$package_root/target"
+          cd "$package_root"
+          cargo +1.90.0 test --all-features
+          cargo +1.90.0 test --all-features --examples

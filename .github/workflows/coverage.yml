@@ -53,6 +53,23 @@ jobs:
           cargo +1.90.0 llvm-cov report --package '*' --lcov
           --ignore-filename-regex '(^|/)(tests|benches|examples)/'
           --output-path target/lcov.info
+      - name: Map coverage back to authoritative source paths
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          root = Path.cwd().resolve()
+          report = Path("target/lcov.info")
+          lines = []
+          for line in report.read_text().splitlines(keepends=True):
+              if line.startswith("SF:"):
+                  source = Path(line[3:].strip()).resolve()
+                  try:
+                      line = "SF:" + source.relative_to(root).as_posix() + "\n"
+                  except ValueError:
+                      pass
+              lines.append(line)
+          report.write_text("".join(lines))
+          PYTHON
       - name: Save coverage report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

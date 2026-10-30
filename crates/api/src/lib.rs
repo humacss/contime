@@ -36,6 +36,11 @@
 
 #![deny(missing_docs)]
 
+#[cfg(feature = "manual")]
+#[doc(hidden)]
+pub extern crate contime_worker;
+#[doc(hidden)]
+pub extern crate self as contime_api;
 mod advance_to;
 mod apply;
 mod query_at;

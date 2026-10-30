@@ -1,0 +1,33 @@
+[package]
+name = "contime-batcher"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+autobenches = false
+license = "MIT"
+description = "Bounded, nonblocking transport batching for ConTime"
+publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-batcher"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "batcher"
+path = "benches/batcher.rs"
+harness = false
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[test]]
+name = "packetization"
+path = "tests/packetization.rs"

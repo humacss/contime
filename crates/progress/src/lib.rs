@@ -26,6 +26,9 @@
 
 #![deny(missing_docs)]
 
+#[doc(hidden)]
+pub extern crate self as contime_progress;
+
 mod coverage;
 mod policy;
 mod round;

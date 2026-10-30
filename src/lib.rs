@@ -81,60 +81,60 @@ pub use crate::contime_simulator as simulator;
 // package: internal path dependencies would need separately published registry
 // packages. Cargo also excludes nested packages from the parent archive.
 //
-// Each component therefore keeps its development manifest and thin crate wrapper
-// under crates/<component>/dev/, outside the implementation source tree. Those
-// development crates are not published. This package includes the shared source
-// files and compiles them directly as modules through the paths below. Both
-// arrangements use the same implementation; no release-time source generation
-// or second copy of the algorithms is needed.
+// Components keep normal manifests and authoritative source under crates/.
+// src/_symlinks/ exposes that same source through tracked symbolic links,
+// without the component manifests. Cargo packages the links as ordinary files.
+// Standalone src/lib.rs and embedded src/mod.rs declare the same implementation
+// files; no generated release source or second maintained copy is needed.
+// See src/_symlinks/README.md for the layout and checkout requirements.
 //
 // The re-exports above provide the consumer-facing API. The feature gates below
 // select the implementations needed for that API, while doc(hidden) keeps these
 // assembly entry points out of the normal generated documentation.
 #[cfg(any(feature = "runtime", feature = "manual"))]
 #[doc(hidden)]
-#[path = "../crates/api/src/lib.rs"]
+#[path = "_symlinks/api/src/mod.rs"]
 pub mod contime_api;
 #[cfg(feature = "runtime")]
 #[doc(hidden)]
-#[path = "../crates/batcher/src/lib.rs"]
+#[path = "_symlinks/batcher/src/mod.rs"]
 pub mod contime_batcher;
 #[doc(hidden)]
-#[path = "../crates/snapshots/src/lib.rs"]
+#[path = "_symlinks/snapshots/src/mod.rs"]
 pub mod contime_checkpoints;
 #[doc(hidden)]
-#[path = "../crates/core/src/lib.rs"]
+#[path = "_symlinks/core/src/mod.rs"]
 pub mod contime_core;
 #[doc(hidden)]
-#[path = "../crates/events/src/lib.rs"]
+#[path = "_symlinks/events/src/mod.rs"]
 pub mod contime_events;
 #[doc(hidden)]
-#[path = "../crates/lanes/src/lib.rs"]
+#[path = "_symlinks/lanes/src/mod.rs"]
 pub mod contime_lanes;
 #[cfg(feature = "manual")]
 #[doc(hidden)]
-#[path = "../crates/manual/src/lib.rs"]
+#[path = "_symlinks/manual/src/mod.rs"]
 pub mod contime_manual;
 #[cfg(feature = "monitor")]
 #[doc(hidden)]
-#[path = "../crates/monitor/src/lib.rs"]
+#[path = "_symlinks/monitor/src/mod.rs"]
 pub mod contime_monitor;
 #[cfg(feature = "runtime")]
 #[doc(hidden)]
-#[path = "../crates/progress/src/lib.rs"]
+#[path = "_symlinks/progress/src/mod.rs"]
 pub mod contime_progress;
 #[cfg(feature = "runtime")]
 #[doc(hidden)]
-#[path = "../crates/router/src/lib.rs"]
+#[path = "_symlinks/router/src/mod.rs"]
 pub mod contime_router;
 #[cfg(feature = "runtime")]
 #[doc(hidden)]
-#[path = "../crates/runtime/src/lib.rs"]
+#[path = "_symlinks/runtime/src/mod.rs"]
 pub mod contime_runtime;
 #[cfg(feature = "simulator")]
 #[doc(hidden)]
-#[path = "../crates/simulator/src/lib.rs"]
+#[path = "_symlinks/simulator/src/mod.rs"]
 pub mod contime_simulator;
 #[doc(hidden)]
-#[path = "../crates/worker/src/lib.rs"]
+#[path = "_symlinks/worker/src/mod.rs"]
 pub mod contime_worker;

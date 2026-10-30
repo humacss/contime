@@ -9,5 +9,8 @@
 
 #![deny(missing_docs)]
 
+#[doc(hidden)]
+pub extern crate self as contime_batcher;
+
 mod batching;
 pub use self::batching::{drain, Batch, Batcher, Request, GATHER_WORK, MAX_EVENTS, MAX_REQUESTS};

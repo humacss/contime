@@ -15,6 +15,9 @@
 
 #![deny(missing_docs)]
 
+#[doc(hidden)]
+pub extern crate self as contime_router;
+
 mod advance;
 mod listen;
 mod placement;

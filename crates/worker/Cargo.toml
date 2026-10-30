@@ -1,0 +1,41 @@
+[package]
+name = "contime-worker"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+autobenches = false
+license = "MIT"
+description = "Isolated worker-side replay orchestration for ConTime"
+publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-worker"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+
+[features]
+default = []
+monitor = []
+
+[dependencies]
+ahash = "0.8"
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "messages"
+path = "benches/messages.rs"
+harness = false
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[test]]
+name = "incremental"
+path = "tests/incremental.rs"

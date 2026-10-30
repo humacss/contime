@@ -20,9 +20,6 @@ include = [
     "/LICENSE",
     "/README.md",
     "/src/**",
-    "/crates/*/src/**",
-    "/crates/*/README.md",
-    "/crates/runtime/tests/controlled/**",
     "/examples/**",
     "/tests/**",
     "/benches/**",
@@ -79,19 +76,19 @@ required-features = ["runtime"]
 resolver = "2"
 exclude = ["examples/environments/wasi", "examples/environments/browser", "benches/scaling"]
 members = [
-    "crates/api/dev",
-    "crates/batcher/dev",
-    "crates/core/dev",
-    "crates/events/dev",
-    "crates/lanes/dev",
-    "crates/manual/dev",
-    "crates/monitor/dev",
-    "crates/simulator/dev",
-    "crates/progress/dev",
-    "crates/router/dev",
-    "crates/runtime/dev",
-    "crates/snapshots/dev",
-    "crates/worker/dev",
+    "crates/api",
+    "crates/batcher",
+    "crates/core",
+    "crates/events",
+    "crates/lanes",
+    "crates/manual",
+    "crates/monitor",
+    "crates/simulator",
+    "crates/progress",
+    "crates/router",
+    "crates/runtime",
+    "crates/snapshots",
+    "crates/worker",
 ]
 
 [package.metadata.docs.rs]

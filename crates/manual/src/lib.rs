@@ -12,5 +12,9 @@
 //! block waiting for this same driver. Panics propagate; discard a driver after
 //! catching a storage/application panic, just as for the native worker.
 #![deny(missing_docs)]
+#[doc(hidden)]
+pub extern crate contime_worker;
+#[doc(hidden)]
+pub extern crate self as contime_manual;
 mod driver;
 pub use self::driver::{FrameBudget, FrameReport, ManualConTime, ProcessError, StopReason};

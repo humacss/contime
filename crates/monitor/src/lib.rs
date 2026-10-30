@@ -1,6 +1,14 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "runtime")]
+#[doc(hidden)]
+pub extern crate contime_runtime;
+#[cfg(feature = "monitor")]
+#[doc(hidden)]
+pub extern crate contime_worker;
+#[doc(hidden)]
+pub extern crate self as contime_monitor;
 mod monitor;
 mod observation;
 

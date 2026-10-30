@@ -1,0 +1,44 @@
+[package]
+name = "contime-router"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+autobenches = false
+license = "MIT"
+description = "Isolated deterministic input routing for ConTime"
+publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-router"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+
+[dependencies]
+traitstub = "0.1.0"
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
+
+[[bench]]
+name = "router"
+path = "benches/router.rs"
+harness = false
+
+[[bench]]
+name = "query"
+path = "benches/query.rs"
+harness = false
+
+[[bench]]
+name = "advance"
+path = "benches/advance.rs"
+harness = false
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+all-features = true

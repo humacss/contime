@@ -1,0 +1,63 @@
+[package]
+name = "contime-snapshots"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+autobenches = false
+license = "MIT"
+description = "Snapshot store with query, replay, forwarding, and pruning for ConTime"
+publish = false
+repository = "https://github.com/humacss/contime"
+documentation = "https://docs.rs/contime-snapshots"
+readme = "README.md"
+authors = ["humacss"]
+keywords = ["events", "history", "replay", "snapshots"]
+categories = ["data-structures", "concurrency"]
+
+[[bench]]
+name = "api"
+path = "benches/api.rs"
+harness = false
+
+[features]
+monitor = []
+
+[dependencies]
+
+[dev-dependencies]
+rstest = { version = "0.26", default-features = false }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[lib]
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[test]]
+name = "forward_prune"
+path = "tests/forward_prune.rs"
+
+[[test]]
+name = "forwarding_hooks"
+path = "tests/forwarding_hooks.rs"
+
+[[test]]
+name = "insertion"
+path = "tests/insertion.rs"
+
+[[test]]
+name = "lookahead"
+path = "tests/lookahead.rs"
+
+[[test]]
+name = "merged_event_history"
+path = "tests/merged_event_history.rs"
+
+[[test]]
+name = "process_until"
+path = "tests/process_until.rs"
+
+[[test]]
+name = "query"
+path = "tests/query.rs"

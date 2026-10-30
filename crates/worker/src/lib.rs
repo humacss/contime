@@ -17,6 +17,8 @@
 
 #![deny(missing_docs)]
 
+#[doc(hidden)]
+pub extern crate self as contime_worker;
 mod listen;
 mod query;
 mod types;

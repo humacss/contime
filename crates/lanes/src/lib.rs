@@ -22,6 +22,9 @@
 
 #![deny(missing_docs)]
 
+#[doc(hidden)]
+pub extern crate self as contime_lanes;
+
 mod apply;
 mod filter;
 mod route;

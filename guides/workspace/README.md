@@ -14,12 +14,27 @@ implementations directly as modules and re-exports the consumer-facing API.
 Cargo does not bundle workspace dependencies into a published package, so the
 root package has no internal `contime-*` package dependencies.
 
-For isolated development, each component has a non-publishable manifest and a
-thin wrapper in `crates/<component>/dev/`. The wrapper compiles the same files
-under `crates/<component>/src/`; tests and benchmarks remain beside that source.
+Components keep conventional, non-publishable development packages under
+`crates/<component>/Cargo.toml`, with implementation, tests and benchmarks beside
+them. The root facade includes each component through `src/_symlinks/`, a set
+of tracked symbolic links to that same source. Each component's `src/lib.rs` is
+its standalone entry point; `src/mod.rs` is its embedded entry point. Both stay
+thin and declare the same implementation files.
+
+Cargo excludes nested packages from the parent archive, but copies symlink
+targets into the archive as ordinary files. This lets the root package contain
+the shared implementation without the component manifests. There is one
+maintained implementation; the links need no regeneration or release script.
 Workspace commands such as `cargo test -p contime-worker` and
-`cargo bench -p contime-batcher --bench batcher` still select individual crates.
-The published archive excludes these development packages.
+`cargo bench -p contime-batcher --bench batcher` continue to select individual
+components. The [symlink guide](../../src/_symlinks/README.md) explains
+the source links, relative fixtures, and symlink requirements for development checkouts.
+Published-package consumers receive ordinary files.
+
+CI checks the link targets and archive contents, then extracts the package
+outside the checkout and runs its tests and examples. Ordinary component
+manifests and original source directories are absent from that extracted tree.
+
 
 Application code should use types re-exported by `contime` consistently. A type
 compiled inside `contime` and the same source compiled in a standalone development
