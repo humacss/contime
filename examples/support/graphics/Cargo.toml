@@ -11,7 +11,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-bevy = { version = "=0.19.1", default-features = false, features = ["std", "async_executor", "bevy_asset", "bevy_log", "bevy_window", "bevy_winit", "bevy_camera", "bevy_render", "bevy_core_pipeline", "bevy_gizmos", "bevy_gizmos_render", "bevy_sprite", "bevy_sprite_render", "webgl2", "x11", "wayland"] }
+bevy = { version = "=0.19.1", default-features = false, features = ["std", "async_executor", "bevy_asset", "bevy_log", "bevy_window", "bevy_winit", "bevy_camera", "bevy_render", "bevy_core_pipeline", "bevy_gizmos", "bevy_gizmos_render", "bevy_sprite", "bevy_sprite_render", "bevy_text", "bevy_ui", "bevy_ui_render", "webgl2", "x11", "wayland"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

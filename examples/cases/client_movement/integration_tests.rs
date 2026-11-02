@@ -120,3 +120,39 @@ fn manual_replays_wall_collisions_after_a_late_turn() {
     let options = Options { snapshots: 1, retention_ms: 30_000, checkpoint_interval: 1, ..Default::default() };
     verify_walls(backend::Manual::<MovementExample>::new(&options).unwrap());
 }
+
+fn verify_square<B: Backend<MovementExample>>(backend: B) {
+    let input = |second: u64, direction| MovementInput {
+        id: u128::from(second + 1),
+        client_id: 1,
+        time: Time(second * SECOND as u64 + 1),
+        direction,
+        motion: Motion::default(),
+    };
+    let mut count = 0;
+    for cycle in 0..8 {
+        let start = cycle * 4;
+        let target = Time((start + 4) * SECOND as u64 + 1);
+        // Materialize a wrong path before the delayed southward turn arrives.
+        backend.submit(vec![input(start, Direction::East), input(start + 2, Direction::West), input(start + 3, Direction::North)]).unwrap();
+        count += 3;
+        backend.advance(target).unwrap();
+        confirmed(&backend, count, target);
+        assert_ne!(position(&backend, target).0, [0, 0]);
+        backend.submit(vec![input(start + 1, Direction::South)]).unwrap();
+        count += 1;
+        confirmed(&backend, count, target);
+        assert_eq!(position(&backend, target), ([0, 0], count));
+    }
+    backend.check_rejections().unwrap();
+    backend.shutdown().unwrap();
+}
+#[test]
+fn runtime_restores_every_square_after_late_turns() {
+    verify_square(backend::runtime::<MovementExample>(&Options { snapshots: 1, retention_ms: 60_000, ..Default::default() }).unwrap());
+}
+#[cfg(feature = "manual")]
+#[test]
+fn manual_restores_every_square_after_late_turns() {
+    verify_square(backend::Manual::<MovementExample>::new(&Options { snapshots: 1, retention_ms: 60_000, ..Default::default() }).unwrap());
+}

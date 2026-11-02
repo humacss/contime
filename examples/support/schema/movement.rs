@@ -82,7 +82,7 @@ pub fn definitions(c: &Config) -> Vec<Definition> {
         0,
         u64::MAX,
         c.average_latency_ms,
-        &[0, 50, 100, 350, 1000, 2000, 5000, 10000, 30000, 60000, 300000],
+        &[0, 50, 100, 350, 500, 1000, 2000, 5000, 10000, 30000, 60000, 300000],
     );
     add(
         "--jitter-ms",
@@ -93,7 +93,7 @@ pub fn definitions(c: &Config) -> Vec<Definition> {
         0,
         u64::MAX,
         c.jitter_ms,
-        &[0, 25, 50, 100, 300, 600, 1000, 5000],
+        &[0, 25, 50, 100, 300, 500, 600, 1000, 5000],
     );
     add(
         "--trail-ms",

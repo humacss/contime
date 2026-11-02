@@ -79,6 +79,26 @@ impl Driver {
                 pulse: (1.0 - (self.now.as_nanos() as u64 + 1).saturating_sub(*arrived) as f64 / 800_000_000.0).clamp(0.0, 1.0),
             })
             .collect();
+        let unreconciled_arrivals = self
+            .arrivals
+            .iter()
+            .filter(|(input, _)| input.time.0 >= oldest)
+            .filter_map(|(input, arrived)| {
+                let position = self.arrival_state.position(input.client_id, *arrived)?;
+                Some(Arrival {
+                    id: input.id as u64,
+                    client: input.client_id as usize,
+                    time_ns: input.time.0,
+                    position: world(position),
+                    direction: input.direction.velocity(1).map(|v| v as f64),
+                    opacity: brightness(input.time.0),
+                    pulse: (1.0 - now.saturating_sub(*arrived) as f64 / 800_000_000.0).clamp(0.0, 1.0),
+                })
+            })
+            .collect();
+        let displayed = self.scene.current.samples.last().map_or(now, |sample| sample.time.0);
+        let (unreconciled_positions, mut unreconciled_trails) = self.arrival_state.view(displayed, self.config.trail_ms);
+        limited |= limit_trails(&mut trails, &mut unreconciled_trails);
         Report {
             clients: self.config.clients,
             client_spacing: self.config.client_spacing,
@@ -94,9 +114,13 @@ impl Driver {
             keyboard_inputs: self.keyboard_inputs,
             center,
             arena_half_extent: crate::movement_example::model::ARENA_HALF_EXTENT.map(|value| value as f64 / SECOND as f64),
+            intended_paths: self.intended_paths.clone(),
             positions,
             trails,
+            unreconciled_positions,
+            unreconciled_trails,
             arrivals,
+            unreconciled_arrivals,
             now_ns: now,
             network: self.delivery.timeline(
                 now,
@@ -104,5 +128,38 @@ impl Driver {
             ),
             preview_limited: limited,
         }
+    }
+}
+
+// Reserve equal budgets: revisions cannot crowd the comparison route off screen.
+fn limit_trails(left: &mut Vec<Point>, right: &mut Vec<Point>) -> bool {
+    let limit = 2048;
+    let limited = left.len() > limit || right.len() > limit;
+    // Current queried paths precede revisions; preserve those first.
+    left.truncate(limit);
+    if right.len() > limit {
+        right.drain(..right.len() - limit);
+    }
+    limited
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn crowded_revisions_leave_space_for_both_routes() {
+        let point = Point {
+            previous: Some([0.0, 0.0]),
+            position: [1.0, 0.0],
+            client: 1,
+            time_ns: 1,
+            current: true,
+            corrected: false,
+            opacity: 1.0,
+        };
+        let mut left = vec![point.clone(); 4096];
+        let mut right = vec![point; 4096];
+        assert!(limit_trails(&mut left, &mut right));
+        assert_eq!((left.len(), right.len()), (2048, 2048));
     }
 }

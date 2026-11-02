@@ -96,9 +96,13 @@ mod tests {
     use super::*;
     use crate::movement_example::model::{Direction, Motion};
     #[test]
-    fn demonstration_delays_regularly_reorder_inputs_for_every_bot() {
+    fn wider_delay_range_regularly_reorders_inputs_for_every_bot() {
         let mut queue = Delivery::new();
-        let config = crate::support::movement_config::Config::parse(std::iter::empty()).unwrap().unwrap();
+        // A 0–2 second delay can reorder the one-second bot cadence.
+        let config =
+            crate::support::movement_config::Config::parse(["--average-latency-ms", "1000", "--jitter-ms", "1000"].map(str::to_owned))
+                .unwrap()
+                .unwrap();
         let mut id = 0;
         for second in 0..80 {
             for client in 2..=5 {

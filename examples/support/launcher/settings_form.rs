@@ -196,7 +196,8 @@ mod tests {
     #[test]
     fn groups_are_composed_for_the_selected_case_and_environment() {
         let movement = session(Environment::Terminal, Execution::Manual, Domain::Movement, &[]);
-        assert!(movement.field("--average-latency-ms").is_some());
+        assert_eq!(movement.field("--average-latency-ms").unwrap().value, "500");
+        assert_eq!(movement.field("--jitter-ms").unwrap().value, "500");
         assert!(movement.field("--events-per-second").is_none());
         assert!(movement.field("--workers").is_none());
         assert_eq!(movement.field("--clients").unwrap().group, Some("Client movement"));

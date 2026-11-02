@@ -69,6 +69,15 @@ captured target. Every snapshot count, value and full digest is checked; any
 validation failure stops the run. The first 20 snapshot comparisons show the latest canonical
 generated count and full digest with the last verified count and full digest.
 
+## Pause and resume
+
+Hiding the tab automatically pauses processing and freezes active simulation time.
+Returning resumes the run without catching up the time spent away. In client movement,
+press P to pause or resume manually; Space still stops the character. A manual pause
+survives tab changes. The shared game view shows Paused, including while animations
+are frozen. Pending events and queries are preserved; their simulated deadlines do
+not include paused wall-clock time. Completed or failed runs do not resume automatically.
+
 ## Automated live checks
 
 Common URL parameters are `domain=counter|chain-hash`, `snapshots`, `rate` (`0`
@@ -129,7 +138,7 @@ cargo run --release --example launcher -- --environment browser --example client
 ## Hosted demo and GitHub Pages
 
 The root README links to the browser client-movement demo on GitHub Pages with
-five clients and 1,000 ms average input latency with ±1,000 ms jitter. The recording
+five clients and 500 ms average input latency with ±500 ms jitter (0–1,000 ms per input). The recording
 links to that interactive configuration, while the recording itself uses the
 [scripted choreography](../../../guides/usage/README.md#reproduce-the-reconciliation-recording). All processing stays in the visitor's browser.
 
@@ -163,7 +172,10 @@ inputs; the waiting count includes the full simulated network queue.
 
 The shared Bevy markers ease toward the latest queried positions, without
 extrapolating beyond them or feeding visual state back into ConTime. New markers
-fade in; removed markers fade out. Connected client-colored paths are drawn over revised gray segments at exact overlaps.
+fade in; removed markers fade out. Solid client-colored paths cover replaced
+paths at exact overlaps. Replaced paths fade as dim dashes in the same client
+color; faint gray dashes mark the intended routes in both arenas. The scripted
+recording also shows the player’s intended route through the center.
 Recent paths are brighter. Lighter arrows in each client’s color show delivered directions and squares show Stop inputs. Recent
 inputs are larger and brighter; a brief size boost marks arrival at the historical
 input location. Reduced-motion mode suppresses the size animation. Trails

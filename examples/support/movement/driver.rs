@@ -18,6 +18,8 @@ use contime::contime_monitor::{WorkerMonitor, WorkerReading};
 use std::{sync::Arc, time::Duration};
 #[path = "../../cases/client_movement/generation.rs"]
 mod generation;
+#[path = "routes.rs"]
+mod routes;
 #[path = "showcase.rs"]
 mod showcase;
 type Failure = Box<dyn std::error::Error>;
@@ -28,6 +30,7 @@ pub struct Driver {
     pub(super) reference: Reference,
     pub(super) delivery: Delivery,
     pub scene: Scene,
+    pub(super) arrival_state: super::arrival_state::ArrivalState,
     pub latest: Option<Arc<WorkerReading<Time>>>,
     pub baseline: Option<Arc<WorkerReading<Time>>>,
     collecting: bool,
@@ -38,6 +41,7 @@ pub struct Driver {
     stopped_at: Option<Duration>,
     next_inputs: u64,
     showcase: bool,
+    pub(super) intended_paths: Vec<crate::support::movement_report::IntendedPath>,
     next_query: u64,
     last_target: Time,
     pub updates: u64,
@@ -62,7 +66,10 @@ impl Driver {
         for input in seeds {
             reference.insert(input);
         }
+        let arrival_state = super::arrival_state::ArrivalState::new(config.clients, motion);
+        let intended_paths = routes::paths(&config, false);
         Ok(Self {
+            intended_paths,
             sequence: config.clients as u64,
             submitted: config.clients as u64,
             config,
@@ -70,6 +77,7 @@ impl Driver {
             reference,
             delivery: Delivery::new(),
             scene: Scene::default(),
+            arrival_state,
             latest: None,
             baseline: None,
             collecting: false,
@@ -105,6 +113,7 @@ impl Driver {
                     .into(),
             );
         }
+        self.intended_paths = routes::paths(&self.config, true);
         self.showcase = true;
         Ok(())
     }
@@ -147,6 +156,8 @@ impl Driver {
             .map_err(|_| "Simulation clock exceeded its range")?
             .checked_add(1)
             .ok_or("Simulation clock exceeded its range")?;
+        let displayed = self.scene.current.samples.last().map_or(now, |sample| sample.time.0);
+        self.arrival_state.expire(displayed, self.config.trail_ms);
         if stop || self.config.duration.is_some_and(|d| elapsed >= d) {
             self.stop.get_or_insert(Time(now));
             self.stopped_at.get_or_insert(elapsed);
@@ -181,7 +192,8 @@ impl Driver {
                     break;
                 }
                 self.sequence += 1;
-                let input = generation::event(client, self.sequence, time, self.motion);
+                let input =
+                    generation::event(client, self.sequence, time, self.motion, self.next_inputs / (self.config.clients - 1) as u64);
                 self.delivery.schedule(input, now, self.config.average_latency_ms, self.config.jitter_ms);
                 self.next_inputs += 1;
             }
@@ -198,6 +210,7 @@ impl Driver {
                 backend.submit(inputs.clone())?;
                 self.submitted += inputs.len() as u64;
                 for input in inputs {
+                    self.arrival_state.deliver(&input, now);
                     self.arrivals.push_back((input.clone(), now));
                     while self.arrivals.len() > 128 {
                         self.arrivals.pop_front();
@@ -256,5 +269,95 @@ impl Driver {
         self.arrivals.retain(|(input, _)| input.time.0 >= self.last_target.0.saturating_sub(self.config.trail_ms * 1_000_000));
         self.scene.expire(now, self.config.fade_ms * 1_000_000);
         Ok(self.done)
+    }
+}
+
+#[cfg(all(test, feature = "manual"))]
+mod comparison_tests {
+    use super::*;
+    use crate::support::monitored::{backend, Options};
+
+    #[test]
+    fn late_out_of_order_input_repairs_only_the_reconciled_view_on_the_same_query_clock() {
+        let config = Config::parse(["--headless", "--clients", "1"].map(str::to_owned)).unwrap().unwrap();
+        let backend = backend::Manual::<MovementExample>::new(&Options { snapshots: 1, ..Default::default() }).unwrap();
+        let mut driver = Driver::new(&backend, config).unwrap();
+        let mut monitor = WorkerMonitor::attach(&backend);
+        let input = |id: u128, action_ms: u64, direction| MovementInput {
+            id,
+            client_id: 1,
+            time: Time(action_ms * 1_000_000 + 1),
+            direction,
+            motion: driver.motion,
+        };
+        // The old North input is delivered after the newer Stop. Both views
+        // receive that exact delivery order through the real driver pipeline.
+        driver.delivery.schedule(input(2, 0, Direction::East), 1, 0, 0);
+        driver.delivery.schedule(input(3, 1000, Direction::North), 1_000_000_001, 1000, 0);
+        driver.delivery.schedule(input(4, 1500, Direction::Stop), 1_500_000_001, 0, 0);
+        for ms in 0..5000 {
+            driver.step(&backend, &mut monitor, Duration::from_millis(ms), ms >= 3000).unwrap();
+            if driver.done {
+                break;
+            }
+        }
+        assert!(driver.done, "the real worker must drain and finish its validated queries");
+        let report = driver.report();
+        report.validate().unwrap();
+        let query_time = driver.scene.current.samples.last().unwrap().time.0;
+        assert_eq!(query_time, 3_000_000_001);
+        assert_eq!(report.positions[0].position, [6.0, 3.0]);
+        assert_eq!(report.positions[0].direction, [0.0, 0.0]);
+        assert!(report.corrections > 0);
+
+        let delivery = |id| report.network.iter().find(|event| event.id == id).unwrap();
+        let east = delivery(2).arrived_ns.unwrap();
+        let north = delivery(3).arrived_ns.unwrap();
+        let stop = delivery(4).arrived_ns.unwrap();
+        assert!(east < stop && stop < north);
+        assert!(delivery(3).reordered);
+        // This side integrates the actual handoff times, without repairing its
+        // earlier East movement or ignoring the late North command after Stop.
+        let expected = [6.0 * (stop - east) as f64 / 1e9, 6.0 * (query_time - north) as f64 / 1e9];
+        for (actual, expected) in report.unreconciled_positions[0].position.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-9, "both views must use the completed query time");
+        }
+        assert_eq!(report.unreconciled_positions[0].direction, [0.0, 1.0]);
+        assert_eq!(report.arrivals.iter().map(|input| input.id).collect::<Vec<_>>(), vec![2, 4, 3]);
+        assert_eq!(report.unreconciled_arrivals.iter().map(|input| input.id).collect::<Vec<_>>(), vec![2, 4, 3]);
+        drop(monitor);
+        backend.shutdown().unwrap();
+    }
+
+    #[test]
+    fn zero_delay_views_share_the_query_clock_and_remain_frozen_after_stop() {
+        let config =
+            Config::parse(["--headless", "--clients", "1", "--query-hz", "1", "--latency-ms", "0", "--jitter-ms", "0"].map(str::to_owned))
+                .unwrap()
+                .unwrap();
+        let backend = backend::Manual::<MovementExample>::new(&Options { snapshots: 1, ..Default::default() }).unwrap();
+        let mut driver = Driver::new(&backend, config).unwrap();
+        let mut monitor = WorkerMonitor::attach(&backend);
+        driver.input(Direction::East).unwrap();
+        let mut observations = 0;
+        for ms in 0..4000 {
+            driver.step(&backend, &mut monitor, Duration::from_millis(ms), ms >= 2000).unwrap();
+            let report = driver.report();
+            if !report.positions.is_empty() {
+                assert_eq!(report.positions[0].position, report.unreconciled_positions[0].position);
+                observations += 1;
+            }
+            if driver.done {
+                let final_position = report.positions[0].position;
+                driver.step(&backend, &mut monitor, Duration::from_secs(10), true).unwrap();
+                let final_report = driver.report();
+                assert_eq!(final_report.positions[0].position, final_position);
+                assert_eq!(final_report.unreconciled_positions[0].position, final_position);
+                break;
+            }
+        }
+        assert!(driver.done && observations > 100);
+        drop(monitor);
+        backend.shutdown().unwrap();
     }
 }

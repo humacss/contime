@@ -9,15 +9,14 @@ pub fn input(index: u64, motion: Motion) -> (MovementInput, u64) {
     let second = index / 5;
     let phase = second as usize % 8;
     let direction = match client {
-        // An eight-second square followed by a rest makes Stop easy to recognize.
-        1 => [East, East, South, South, West, West, North, North, Stop, Stop, Stop, Stop][second as usize % 12],
-        // First move into separate quadrants, then loop within each region.
-        2 | 5 if second < 2 => North,
-        3 | 4 if second < 2 => South,
-        2 => [West, South, East, North][(second as usize - 2) % 4],
-        3 => [East, North, West, South][(second as usize - 2) % 4],
-        4 => [West, North, East, South][(second as usize - 2) % 4],
-        _ => [East, South, West, North][(second as usize - 2) % 4],
+        // Each outward leg is followed by an equal trip back to the center.
+        // Keeping to the axes makes arrival-time drift easy to recognize.
+        1 => [North, South, East, West, West, East, South, North, Stop, Stop][second as usize % 10],
+        // Each bot stays in its own quadrant with a distinct square phase.
+        2 => [East, South, West, North][second as usize % 4],
+        3 => [South, East, North, West][second as usize % 4],
+        4 => [West, North, East, South][second as usize % 4],
+        _ => [North, West, South, East][second as usize % 4],
     };
     let time = Time(second * 1_000_000_000 + (client - 1) * 200_000_000 + 1);
     let delay_ms = [1700, 150, 700, 1150, 1550, 200, 900, 450][(phase + client as usize * 2) % 8];
@@ -47,9 +46,9 @@ mod tests {
             if event.time.0 >= 3_000_000_000 && event.client_id != 1 {
                 let [x, y] = state.position;
                 let (right, upper) = match event.client_id {
-                    2 => (true, true),
+                    2 => (true, false),
                     3 => (false, false),
-                    4 => (true, false),
+                    4 => (true, true),
                     _ => (false, true),
                 };
                 assert_eq!(x > 0, right);
@@ -61,6 +60,26 @@ mod tests {
             assert!(position[0].abs() < 47 * SECOND && position[1].abs() < 27 * SECOND, "{index}: {position:?}");
         }
         assert!(stopped);
+    }
+    #[test]
+    fn player_returns_to_center_on_each_axis_and_stays_clear_of_bot_routes() {
+        let motion = Motion { client_spacing: 18, movement_speed: 8 };
+        let mut states: Vec<_> = (1..=5).map(|id| Character::spawn(id, motion)).collect();
+        for index in 0..600 {
+            let (event, _) = input(index, motion);
+            states[event.client_id as usize - 1].apply_input(&event);
+            let player = states[0].position_at(event.time);
+            assert!(player.iter().all(|coordinate| coordinate.abs() <= 8 * SECOND));
+            assert!(player[0] == 0 || player[1] == 0, "intended movement stays on the central axes");
+            for bot in &states[1..] {
+                let position = bot.position_at(event.time);
+                let separation = (player[0] - position[0]).abs().max((player[1] - position[1]).abs());
+                assert!(separation >= 8 * SECOND, "intended routes must remain separate: {index}");
+            }
+            if event.client_id == 1 && index / 5 % 2 == 0 {
+                assert_eq!(player, [0, 0], "each outward-and-back pair returns to the exact center");
+            }
+        }
     }
     #[test]
     fn every_client_demonstrates_out_of_order_delivery() {

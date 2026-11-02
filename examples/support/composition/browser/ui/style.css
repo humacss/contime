@@ -12,7 +12,7 @@ body:has(.movement-example){background:#152535}
 .movement-example header,.movement-example .run-heading,.movement-example .actions,
 .movement-example #movement-title,
 .movement-example #diagnostics,.movement-example footer{display:none}
-.movement-example .layout{width:min(100vw,100dvh)}
-.movement-example .movement-viewport{min-height:0}
+.movement-example .layout{width:min(100vw,160dvh)}
+.movement-example .movement-viewport{min-height:0;aspect-ratio:8/5}
 .movement-example #movement-map{border:0;border-radius:0}
 .movement-example #error{position:fixed;inset:16px 16px auto;z-index:1}

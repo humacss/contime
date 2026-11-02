@@ -42,8 +42,10 @@ test('numeric source windows are independent of snapshot fanout', () => {
 
 // Load the actual host module with lightweight DOM and binding adapters. The
 // startup parsing and run controls still execute unchanged.
-async function browserPage(search, report = null) {
-    let frameCallback;
+async function browserPage(search, report = null, hidden = false) {
+    let frameCallback, now = 0;
+    const frameTimes = [];
+    const inputs = [];
     const { readFile } = await import('node:fs/promises');
     const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
     const elements = new Map();
@@ -58,24 +60,33 @@ async function browserPage(search, report = null) {
     const graphicsEvents = [];
     globalThis.graphicsBindings = { default: async () => {}, start_graphics: () => graphicsEvents.push("start"),
         update_scene() { graphicsEvents.push("draw"); }, finish_scene: () => graphicsEvents.push("finish"), set_running: value => graphicsEvents.push(value), reset_scene: () => graphicsEvents.push("reset") };
-    globalThis.window = {};
+    globalThis.window = { handlers: {}, listenerOptions: {}, addEventListener(name, handler, options) { this.handlers[name] = handler; this.listenerOptions[name] = options; } };
     globalThis.location = { search };
-    globalThis.document = { getElementById: id => elements.get(id) };
+    globalThis.document = { hidden, handlers: {}, listenerOptions: {}, addEventListener(name, handler, options) { this.handlers[name] = handler; this.listenerOptions[name] = options; }, getElementById: id => elements.get(id) };
+    const document = globalThis.document;
+    globalThis.browserNow = () => now;
     globalThis.requestAnimationFrame = callback => { frameCallback = callback; return 1; };
-    globalThis.cancelAnimationFrame = () => {};
+    globalThis.cancelAnimationFrame = () => { frameCallback = null; };
     elements.get('start').click = () => elements.get('start').handlers.click();
     globalThis.browserBindings = { default: async () => {}, BudgetDemo: class {
         constructor(json) { started.push(JSON.parse(json)); }
         free() {}
-        frame() { return JSON.stringify(report); }
+        input(direction) { inputs.push(direction); }
+        frame(elapsed) { frameTimes.push(elapsed); return JSON.stringify(report); }
     } };
     const source = (await readFile(new URL('../ui/app.js', import.meta.url), 'utf8'))
+        .replaceAll("performance.now()", "globalThis.browserNow()")
         .replace("'./movement.mjs'", JSON.stringify(new URL('../ui/movement.mjs', import.meta.url).href))
         .replace("'./pacing.mjs'", JSON.stringify(new URL('../ui/pacing.mjs', import.meta.url).href))
         .replace("await import('../pkg/contime_browser_example.js')", 'globalThis.browserBindings')
         .replace("await import('../pkg/graphics/contime_graphics_example.js')", 'globalThis.graphicsBindings');
     await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#${encodeURIComponent(search)}`);
-    return { elements, started, graphicsEvents, result: window.contimeExample, runFrame: () => frameCallback() };
+    return { elements, started, graphicsEvents, frameTimes, inputs, listenerOptions: window.listenerOptions, result: window.contimeExample,
+        runFrame: (elapsed = 16) => { now += elapsed; const callback = frameCallback; frameCallback = null; callback?.(); },
+        visibility: (hidden, elapsed = 0) => { now += elapsed; document.hidden = hidden; document.handlers.visibilitychange?.(); },
+        canvasKey: key => elements.get('movement-map').handlers.keydown({key, preventDefault() {}}),
+        key: (key, options = {}) => window.handlers.keydown?.({key, preventDefault() {}, ...options}),
+    };
 }
 test('browser has no settings form or editable configuration controls', async () => {
     const { elements, result } = await browserPage('');
@@ -134,6 +145,8 @@ test('movement starts without browser controls while counter retains its diagnos
     const movement = await browserPage('?domain=client-movement&focus-test=1');
     assert.equal(movement.result.error, null);
     assert.equal(movement.started.length, 1);
+    assert.equal(movement.started[0].average_latency_ms, 500);
+    assert.equal(movement.started[0].jitter_ms, 500);
     assert.equal(movement.elements.get('diagnostics').open, false);
     assert.equal(movement.elements.get('run-title').hidden, true);
     const counter = await browserPage('?domain=counter&focus-test=1');
@@ -177,4 +190,75 @@ test('counter frames retain their visible diagnostics', async () => {
     assert.equal(page.elements.get('visible').textContent, '8');
     assert.equal(page.elements.get('pending').textContent, '2');
     assert.ok(!page.graphicsEvents.includes('draw'));
+});
+
+
+const movementReport = { movement: { clients: 5 }, done: false };
+test('hidden tabs freeze active time and resume without charging hours away', async () => {
+    const page = await browserPage('?domain=client-movement&pause-hidden=1', movementReport);
+    page.runFrame(16);
+    const before = page.frameTimes.at(-1);
+    page.visibility(true);
+    assert.equal(page.graphicsEvents.at(-1), false);
+    page.runFrame(3_600_000);
+    assert.equal(page.frameTimes.length, 1);
+    page.visibility(false);
+    page.runFrame(16);
+    assert.equal(page.frameTimes.at(-1), before + 16);
+    assert.equal(page.result.error, null);
+});
+test('P pause is preserved across visibility changes and keyboard repeats', async () => {
+    const page = await browserPage('?domain=client-movement&pause-manual=1', movementReport);
+    assert.equal(page.listenerOptions.keydown.capture, true, 'P must run before Bevy consumes canvas keys');
+    page.runFrame(16);
+    page.key('p');
+    assert.equal(page.graphicsEvents.at(-1), false);
+    page.key('p', { repeat: true });
+    page.visibility(true);
+    page.visibility(false, 60_000);
+    page.runFrame(16);
+    assert.equal(page.frameTimes.length, 1);
+    page.key('P');
+    page.runFrame(16);
+    assert.equal(page.frameTimes.length, 2);
+    assert.equal(page.frameTimes[1], page.frameTimes[0] + 16);
+});
+test('hidden startup and reset never schedule unwanted background work', async () => {
+    const page = await browserPage('?domain=client-movement&pause-start=1', movementReport, true);
+    page.runFrame(60_000);
+    assert.equal(page.frameTimes.length, 0);
+    page.visibility(false);
+    page.runFrame(16);
+    assert.equal(page.frameTimes[0], 16);
+    page.visibility(true);
+    page.elements.get('reset').handlers.click();
+    page.visibility(false, 60_000);
+    page.runFrame(16);
+    assert.equal(page.result.frames, 0);
+    assert.equal(page.started.length, 1);
+});
+test('completed runs do not resume through visibility or P', async () => {
+    const page = await browserPage('?domain=client-movement&pause-done=1', {...movementReport, done:true});
+    page.runFrame();
+    page.visibility(true);
+    page.visibility(false, 60_000);
+    page.key('p');
+    page.runFrame();
+    assert.equal(page.frameTimes.length, 1);
+    assert.equal(page.result.done, true);
+});
+
+
+test('P preserves browser shortcuts and Space still stops movement only while running', async () => {
+    const page = await browserPage('?domain=client-movement&pause-controls=1', movementReport);
+    page.runFrame();
+    page.key('p', { ctrlKey: true });
+    page.canvasKey(' ');
+    assert.deepEqual(page.inputs, ['stop']);
+    page.key('p');
+    page.canvasKey(' ');
+    assert.deepEqual(page.inputs, ['stop']);
+    page.key('p');
+    page.canvasKey(' ');
+    assert.deepEqual(page.inputs, ['stop', 'stop']);
 });

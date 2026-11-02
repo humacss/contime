@@ -64,6 +64,13 @@ pub struct Client {
     pub position: [f64; 2],
     pub corrected: bool,
 }
+/// Planned geometry supplied by the example, independent of delivery and queries.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntendedPath {
+    pub client: usize,
+    pub points: Vec<[f64; 2]>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Report {
@@ -81,10 +88,20 @@ pub struct Report {
     pub keyboard_inputs: u64,
     pub center: [f64; 2],
     pub arena_half_extent: [f64; 2],
+    #[serde(default)]
+    pub intended_paths: Vec<IntendedPath>,
     pub positions: Vec<Client>,
     pub trails: Vec<Point>,
+    /// Arrival-time-only comparison, fed by the same actual network handoffs.
+    #[serde(default)]
+    pub unreconciled_positions: Vec<Client>,
+    #[serde(default)]
+    pub unreconciled_trails: Vec<Point>,
     #[serde(default)]
     pub arrivals: Vec<Arrival>,
+    /// Same deliveries at their arrival-time-only positions, with matching pulses.
+    #[serde(default)]
+    pub unreconciled_arrivals: Vec<Arrival>,
     #[serde(default)]
     pub now_ns: u64,
     #[serde(default)]
@@ -100,8 +117,19 @@ impl Report {
         }
         if !(1..=MAX_CLIENTS).contains(&self.clients)
             || !(1..=1024).contains(&self.workers)
+            || self.intended_paths.len() > self.clients
+            || self.intended_paths.iter().any(|path| {
+                path.client == 0
+                    || path.client > self.clients
+                    || !(2..=9).contains(&path.points.len())
+                    || path.points.iter().any(|point| {
+                        !finite(point) || point.iter().zip(self.arena_half_extent).any(|(coordinate, extent)| coordinate.abs() > extent)
+                    })
+            })
             || self.positions.len() > MAX_CLIENTS
             || self.trails.len() > 4096
+            || self.unreconciled_positions.len() > MAX_CLIENTS
+            || self.trails.len().saturating_add(self.unreconciled_trails.len()) > 4096
             || self.network.len() > MAX_NETWORK_EVENTS
             || self.network.iter().any(|e| {
                 e.client == 0
@@ -113,7 +141,8 @@ impl Report {
                     || !matches!(e.direction, [0.0, 0.0] | [1.0, 0.0] | [-1.0, 0.0] | [0.0, 1.0] | [0.0, -1.0])
             })
             || self.arrivals.len() > 128
-            || self.arrivals.iter().any(|a| {
+            || self.unreconciled_arrivals.len() > 128
+            || self.arrivals.iter().chain(&self.unreconciled_arrivals).any(|a| {
                 a.client == 0
                     || a.client > self.clients
                     || !finite(&a.position)
@@ -124,23 +153,39 @@ impl Report {
                     || !(0.0..=1.0).contains(&a.opacity)
                     || !matches!(a.direction, [0.0, 0.0] | [1.0, 0.0] | [-1.0, 0.0] | [0.0, 1.0] | [0.0, -1.0])
             })
-            || self.trails.iter().any(|p| p.previous.is_some_and(|v| !finite(&v) || p.client == 0 || p.client > self.clients))
+            || self
+                .trails
+                .iter()
+                .chain(&self.unreconciled_trails)
+                .any(|p| p.previous.is_some_and(|v| !finite(&v) || p.client == 0 || p.client > self.clients))
             || !finite(&self.center)
             || !finite(&self.arena_half_extent)
             || self.arena_half_extent.iter().any(|extent| *extent <= 0.0)
-            || self.positions.iter().any(|p| {
+            || self.positions.iter().chain(&self.unreconciled_positions).any(|p| {
                 p.id == 0
                     || p.id > self.clients
                     || !finite(&p.position)
                     || !matches!(p.direction, [0.0, 0.0] | [1.0, 0.0] | [-1.0, 0.0] | [0.0, 1.0] | [0.0, -1.0])
             })
-            || self.trails.iter().any(|p| !finite(&p.position) || !p.opacity.is_finite() || !(0.0..=1.0).contains(&p.opacity))
+            || self
+                .trails
+                .iter()
+                .chain(&self.unreconciled_trails)
+                .any(|p| !finite(&p.position) || !p.opacity.is_finite() || !(0.0..=1.0).contains(&p.opacity))
         {
             return Err("Invalid or oversized movement presentation".into());
         }
         let mut seen = std::collections::BTreeSet::new();
+        if self.intended_paths.iter().any(|path| !seen.insert(path.client)) {
+            return Err("Duplicate intended path client".into());
+        }
+        seen.clear();
         if self.positions.iter().any(|p| !seen.insert(p.id)) {
             return Err("Duplicate movement presentation client".into());
+        }
+        seen.clear();
+        if self.unreconciled_positions.iter().any(|p| !seen.insert(p.id)) {
+            return Err("Duplicate arrival-time comparison client".into());
         }
         Ok(())
     }

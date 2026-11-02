@@ -1,5 +1,5 @@
 //! Queried paths and delivered-input annotations. Geometry never feeds simulation.
-use crate::report::{Arrival, Point, Report};
+use crate::report::{Arrival, IntendedPath, Point, Report};
 use bevy::{math::Isometry2d, prelude::*};
 
 pub fn ordered_trails(report: &Report) -> impl Iterator<Item = &Point> {
@@ -9,16 +9,49 @@ fn position(p: [f64; 2]) -> Vec2 {
     Vec2::from_array(p.map(|v| v as f32))
 }
 
+/// Faint planned paths sit behind queried trails and never move with corrections.
+pub fn draw_intended(report: &Report, gizmos: &mut Gizmos) {
+    for path in &report.intended_paths {
+        for (start, end) in intended_segments(path) {
+            for (from, to) in path_dashes(position(start), position(end)) {
+                gizmos.line(from.extend(-0.1), to.extend(-0.1), Color::srgba(0.65, 0.65, 0.65, 0.12));
+            }
+        }
+    }
+}
+
+// Out-and-back legs share one guide; drawing them twice would brighten the cross.
+fn intended_segments(path: &IntendedPath) -> impl Iterator<Item = ([f64; 2], [f64; 2])> + '_ {
+    path.points
+        .windows(2)
+        .enumerate()
+        .filter(|(index, segment)| {
+            segment[0] != segment[1]
+                && !path
+                    .points
+                    .windows(2)
+                    .take(*index)
+                    .any(|earlier| earlier == *segment || (earlier[0] == segment[1] && earlier[1] == segment[0]))
+        })
+        .map(|(_, segment)| (segment[0], segment[1]))
+}
+
 pub fn draw(report: &Report, reduced_motion: bool, gizmos: &mut Gizmos) {
-    // Opaque client paths are drawn last, so shared geometry hides old gray exactly.
+    // Solid, opaque current paths cover replaced geometry at exact overlaps.
     for segment in ordered_trails(report) {
         let Some(start) = segment.previous else {
             continue;
         };
         let strength = segment.opacity as f32;
-        let color =
-            if segment.current { crate::palette::path(segment.client, strength) } else { Color::srgba(0.60, 0.60, 0.60, strength * 0.5) };
-        gizmos.line_2d(position(start), position(segment.position), color);
+        let start = position(start);
+        let end = position(segment.position);
+        if segment.current {
+            gizmos.line_2d(start, end, crate::palette::path(segment.client, strength));
+        } else {
+            for (from, to) in path_dashes(start, end) {
+                gizmos.line_2d(from, to, crate::palette::revision(segment.client, strength));
+            }
+        }
     }
     for input in &report.arrivals {
         let p = position(input.position);
@@ -36,6 +69,30 @@ pub fn draw(report: &Report, reduced_motion: bool, gizmos: &mut Gizmos) {
         }
     }
 }
+// Both patterns stay anchored to world coordinates across queries and reversals.
+fn segment_coordinates(start: Vec2, end: Vec2) -> (Vec2, Vec2, f32, f32) {
+    let mut axis = (end - start).normalize_or_zero();
+    if axis.x < 0.0 || (axis.x == 0.0 && axis.y < 0.0) {
+        axis = -axis;
+    }
+    let anchor = start.dot(axis);
+    let other = end.dot(axis);
+    (start - axis * anchor, axis, anchor.min(other), anchor.max(other))
+}
+
+fn path_dashes(start: Vec2, end: Vec2) -> impl Iterator<Item = (Vec2, Vec2)> {
+    const PERIOD: f32 = 1.5;
+    const LENGTH: f32 = 0.85;
+    let (origin, axis, lo, hi) = segment_coordinates(start, end);
+    let first = (lo / PERIOD).floor() as i32;
+    let last = (hi / PERIOD).ceil() as i32;
+    (first..last).filter_map(move |index| {
+        let from = (index as f32 * PERIOD).max(lo);
+        let to = (index as f32 * PERIOD + LENGTH).min(hi);
+        (to > from).then(|| (origin + axis * from, origin + axis * to))
+    })
+}
+
 // Historical age sets the resting size; arrival adds a short ease-out boost.
 fn marker_scale(input: &Arrival, reduced_motion: bool) -> f32 {
     let boost = if reduced_motion { 0.0 } else { 0.9 * (input.pulse as f32).powi(2) };
@@ -51,6 +108,24 @@ fn arrow(input: &Arrival, scale: f32) -> (Vec2, Vec2, Vec2) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn return_trips_and_stops_do_not_brighten_the_same_intended_segment() {
+        let path = IntendedPath { client: 1, points: vec![[0.0, 0.0], [0.0, 8.0], [0.0, 0.0], [8.0, 0.0], [0.0, 0.0], [0.0, 0.0]] };
+        assert_eq!(intended_segments(&path).collect::<Vec<_>>(), vec![([0.0, 0.0], [0.0, 8.0]), ([0.0, 0.0], [8.0, 0.0]),]);
+    }
+    #[test]
+    fn guide_dashes_are_stable_across_sampling_and_direction_changes() {
+        let start = Vec2::new(-3.0, 0.0);
+        let end = Vec2::new(3.0, 0.0);
+        let whole: Vec<_> = path_dashes(start, end).collect();
+        assert_eq!(whole, path_dashes(end, start).collect::<Vec<_>>());
+        let split = Vec2::new(0.85, 0.0);
+        let pieces: Vec<_> = path_dashes(start, split).chain(path_dashes(split, end)).collect();
+        assert_eq!(whole, pieces);
+        assert_eq!(path_dashes(start, start).count(), 0);
+        assert!(path_dashes(Vec2::ZERO, Vec2::Y * 3.0).all(|(a, b)| a.x == 0.0 && b.x == 0.0 && a.y < b.y));
+        assert!(whole.iter().all(|(a, b)| b.x > a.x && b.x - a.x <= 0.850001));
+    }
     #[test]
     fn arrows_use_the_commanded_direction_and_historical_position() {
         let input = Arrival { id: 9, client: 1, time_ns: 10, position: [4.0, 5.0], direction: [-1.0, 0.0], opacity: 1.0, pulse: 1.0 };

@@ -1,6 +1,18 @@
 use crate::report::Report;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A hidden tab may resume without ever rendering its paused state.
+#[derive(Default)]
+pub struct FrameClock {
+    epoch: Option<u64>,
+}
+impl FrameClock {
+    pub fn elapsed(&mut self, running: bool, epoch: u64, milliseconds: f64) -> f64 {
+        let resumed = self.epoch.replace(epoch) != Some(epoch);
+        if running && !resumed { milliseconds.max(0.0) } else { 0.0 }
+    }
+}
+
 #[derive(Clone)]
 pub struct Marker {
     pub direction: [f64; 2],
@@ -71,9 +83,13 @@ pub(crate) mod tests {
             keyboard_inputs: 0,
             center: [x, 0.0],
             arena_half_extent: [48.0, 28.0],
+            intended_paths: Vec::new(),
             positions: vec![Client { id: 1, direction: [0.0, 0.0], position: [x, 0.0], corrected: false }],
             trails: vec![],
+            unreconciled_positions: vec![],
+            unreconciled_trails: vec![],
             arrivals: vec![],
+            unreconciled_arrivals: vec![],
             now_ns: 0,
             network: vec![],
             preview_limited: false,
@@ -137,5 +153,15 @@ pub(crate) mod tests {
         assert!(animation.clients[&1].opacity > 0.0);
         animation.update(&empty, 200.0, false);
         assert!(animation.clients.is_empty());
+    }
+    #[test]
+    fn resume_ignores_the_first_large_delta_and_pause_never_advances() {
+        let mut clock = FrameClock::default();
+        assert_eq!(clock.elapsed(true, 1, 250.0), 0.0);
+        assert_eq!(clock.elapsed(true, 1, 16.0), 16.0);
+        // No rendering occurred between the hidden pause and visible resume.
+        assert_eq!(clock.elapsed(true, 2, 250.0), 0.0);
+        assert_eq!(clock.elapsed(true, 2, 16.0), 16.0);
+        assert_eq!(clock.elapsed(false, 2, 1000.0), 0.0);
     }
 }

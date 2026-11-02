@@ -12,15 +12,28 @@ pub fn scheduled(clients: usize, hz: u64, index: u64) -> Option<(usize, Time)> {
     Some((client as usize, Time(time)))
 }
 
-pub fn event(client: usize, sequence: u64, time: Time, motion: Motion) -> MovementInput {
+fn square_direction(client: usize, turn: u64) -> Direction {
+    // Direction indices 1–4 are North, East, South, West; skip zero (Stop).
+    let phase = (turn % 4 + client.saturating_sub(1) as u64 % 4) % 4;
+    let direction = Direction::from_index(phase + 1);
+    // Keep purple on the outer left and blue nearer the center; the two
+    // right-side routes retain their existing alignment.
+    match (client, direction) {
+        (3 | 5, Direction::East) => Direction::West,
+        (3 | 5, Direction::West) => Direction::East,
+        _ => direction,
+    }
+}
+
+pub fn event(client: usize, sequence: u64, time: Time, motion: Motion, turn: u64) -> MovementInput {
     EventStream::new(
         StreamConfig { event_count: 1, seed: sequence ^ 42, settings: () },
-        move |_, random| MovementInput {
+        move |_, _| MovementInput {
             id: u128::from(sequence),
             client_id: 0,
             time,
-            // Indices 1–4 are movement; zero (Stop) is reserved for the player.
-            direction: Direction::from_index(random.next_u64() % 4 + 1),
+            // Equal-duration turns close a square; client phases keep paths distinct.
+            direction: square_direction(client, turn),
             motion,
         },
         move |_, _, event: &mut MovementInput| {
@@ -48,7 +61,7 @@ mod tests {
     fn bots_generate_all_four_movement_directions_and_never_stop() {
         let mut seen = [false; 4];
         for sequence in 1..=4096 {
-            let input = event(2, sequence, Time(sequence), Motion::default());
+            let input = event(2, sequence, Time(sequence), Motion::default(), sequence);
             let index = match input.direction {
                 Direction::North => 0,
                 Direction::East => 1,
@@ -62,8 +75,43 @@ mod tests {
         assert_eq!(Direction::Stop.velocity(12), [0, 0], "Stop remains supported for player input");
     }
     #[test]
+    fn every_bot_repeats_a_closed_square_with_equal_sides() {
+        use crate::movement_example::model::{Character, SECOND};
+        for client in 2..=5 {
+            let mut state = Character::spawn(client, Motion::default());
+            let origin = state.position;
+            for turn in 0..40 {
+                let input = event(client as usize, turn + 1, Time(turn * SECOND as u64), Motion::default(), turn);
+                state.apply_input(&input);
+                if turn % 4 == 3 {
+                    assert_eq!(state.position_at(Time((turn + 1) * SECOND as u64)), origin);
+                }
+            }
+        }
+    }
+    #[test]
     fn generated_input_keeps_its_assigned_client_time_and_identity() {
-        let input = event(3, 12, Time(400_000_001), Motion::default());
+        let input = event(3, 12, Time(400_000_001), Motion::default(), 0);
         assert_eq!((input.id, input.client_id, input.time), (12, 3, Time(400_000_001)));
+    }
+    #[test]
+    fn showcase_scale_keeps_each_square_in_its_own_quadrant() {
+        use crate::movement_example::model::{Character, SECOND};
+        let motion = Motion { client_spacing: 16, movement_speed: 12 };
+        for client in 2..=5 {
+            let mut state = Character::spawn(client, motion);
+            for turn in 0..20 {
+                state.apply_input(&event(client as usize, turn + 1, Time(turn * SECOND as u64), motion, turn));
+                let [x, y] = state.position_at(Time((turn + 1) * SECOND as u64));
+                assert_eq!(x > 0, matches!(client, 2 | 4));
+                assert_eq!(y > 0, matches!(client, 4 | 5));
+                assert!(x.abs() >= 4 * SECOND && y.abs() >= 8 * SECOND);
+                if client == 3 {
+                    assert!(x >= -16 * SECOND, "blue square stays right of its origin");
+                } else if client == 5 {
+                    assert!(x <= -16 * SECOND, "purple square stays left of its origin");
+                }
+            }
+        }
     }
 }

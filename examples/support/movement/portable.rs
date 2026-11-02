@@ -1,5 +1,6 @@
 //! Host-independent movement state machine, input delivery and queried scene.
 #![allow(dead_code, unused_imports)]
+mod arrival_state;
 mod delivery;
 mod driver;
 mod queries;

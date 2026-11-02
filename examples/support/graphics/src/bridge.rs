@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 pub struct State {
     pub report: Option<Arc<Report>>,
     pub running: bool,
+    pub resume_epoch: u64,
     pub finished: bool,
     pub reduced_motion: bool,
     pub generation: u64,
@@ -24,7 +25,11 @@ impl Bridge {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
     pub fn running(&self, running: bool) {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).running = running;
+        let mut state = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if running && !state.running {
+            state.resume_epoch = state.resume_epoch.wrapping_add(1);
+        }
+        state.running = running;
     }
     pub fn reduced_motion(&self, reduced: bool) {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).reduced_motion = reduced;
@@ -58,5 +63,16 @@ mod tests {
         assert!(!state.running);
         bridge.reset();
         assert!(!bridge.snapshot().finished);
+    }
+    #[test]
+    fn pause_and_resume_are_observable_even_without_a_paused_render_frame() {
+        let bridge = Bridge::default();
+        bridge.running(true);
+        let first = bridge.snapshot().resume_epoch;
+        bridge.running(true);
+        assert_eq!(bridge.snapshot().resume_epoch, first);
+        bridge.running(false);
+        bridge.running(true);
+        assert_ne!(bridge.snapshot().resume_epoch, first);
     }
 }

@@ -2,9 +2,8 @@
 use crate::{network, report::Report};
 use bevy::prelude::*;
 use std::collections::BTreeSet;
-const DURATION_MS: f64 = 450.0;
+const DURATION_MS: f64 = crate::playback::HANDOFF_MS;
 struct Flight {
-    id: u64,
     client: usize,
     direction: [f64; 2],
     start: Vec2,
@@ -42,9 +41,6 @@ impl Transfers {
         self.seen.retain(|id| report.arrivals.iter().any(|a| a.id == *id));
         for flight in &mut self.flights {
             flight.elapsed += elapsed_ms.max(0.0);
-            if let Some(action) = report.arrivals.iter().find(|a| a.id == flight.id) {
-                flight.target = Vec2::from_array(action.position.map(|v| v as f32));
-            }
         }
         self.flights.retain(|f| f.elapsed < DURATION_MS);
         if reduced_motion {
@@ -69,7 +65,6 @@ impl Transfers {
                 continue;
             }
             self.flights.push(Flight {
-                id: event.id,
                 client: event.client,
                 direction: event.direction,
                 start: network::delivery_position(report, event, tracks),
@@ -190,5 +185,67 @@ mod tests {
             false,
         );
         assert!(transfers.flights.is_empty() && transfers.seen.is_empty());
+    }
+    #[test]
+    fn one_delivery_launches_into_both_arenas_with_matching_timing() {
+        let mut report = delivered();
+        report.unreconciled_arrivals = report.arrivals.clone();
+        report.unreconciled_arrivals[0].position = [19.0, -4.0];
+        let (left, right) = crate::comparison::panels(&report);
+        let mut entries = crate::entrance::Entries::default();
+        entries.update(&report, 0.0, false);
+        entries.update(&report, 400.0, false);
+        let tracks = crate::tracks::Tracks::default();
+        let mut a = Transfers::default();
+        let mut b = Transfers::default();
+        for elapsed in [0.0, 125.0] {
+            a.update(&left, &tracks, &entries, elapsed, false);
+            b.update(&right, &tracks, &entries, elapsed, false);
+            assert_eq!((a.flights.len(), b.flights.len()), (1, 1));
+            let (a, b) = (&a.flights[0], &b.flights[0]);
+            assert_eq!((a.client, a.direction, a.start, a.elapsed), (b.client, b.direction, b.start, b.elapsed));
+            assert_eq!(a.target, Vec2::new(8.0 - crate::comparison::OFFSET as f32, 9.0));
+            assert_eq!(b.target, Vec2::new(19.0 + crate::comparison::OFFSET as f32, -4.0));
+        }
+        a.update(&left, &tracks, &entries, 0.0, true);
+        b.update(&right, &tracks, &entries, 0.0, true);
+        assert!(a.flights.is_empty() && b.flights.is_empty());
+        a.reset();
+        b.reset();
+        assert!(a.seen.is_empty() && b.seen.is_empty());
+    }
+    #[test]
+    fn queried_turn_is_revealed_on_the_same_frame_as_flight_completion() {
+        use std::sync::Arc;
+        let mut playback = crate::playback::Playback::default();
+        let mut initial = crate::animation::tests::scene(0.0);
+        initial.updates = 0;
+        playback.update(Arc::new(initial), 0.0, false);
+        let mut query = delivered();
+        query.updates = 1;
+        query.positions[0].direction = [1.0, 0.0];
+        let query = Arc::new(query);
+        let tracks = crate::tracks::Tracks::default();
+        let mut entries = crate::entrance::Entries::default();
+        let mut transfers = Transfers::default();
+        for (elapsed, landed) in [(0.0, false), (449.0, false), (1.0, true)] {
+            let (visible, launch) = playback.update(Arc::clone(&query), elapsed, false);
+            entries.update(&query, elapsed, false);
+            entries.handoff(&launch);
+            transfers.update(&launch, &tracks, &entries, elapsed, false);
+            assert_eq!(visible.positions[0].direction == [1.0, 0.0], landed);
+            assert_eq!(transfers.flights.is_empty(), landed);
+        }
+    }
+    #[test]
+    fn flight_keeps_the_target_of_its_own_queued_query() {
+        let mut report = delivered();
+        let mut transfers = Transfers::default();
+        let tracks = crate::tracks::Tracks::default();
+        let entries = crate::entrance::Entries::default();
+        transfers.update(&report, &tracks, &entries, 0.0, false);
+        report.arrivals[0].position = [99.0, 99.0];
+        transfers.update(&report, &tracks, &entries, 100.0, false);
+        assert_eq!(transfers.flights[0].target, Vec2::new(8.0, 9.0));
     }
 }

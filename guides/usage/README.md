@@ -425,25 +425,36 @@ The example submits event groups in reverse order and queries fully admitted tim
 
 The README recording uses an opt-in, repeatable choreography rather than random
 traffic. Five clients follow compact paths, with bots in four separate quadrants and the
-player near the center, with one action per second and
-staggered sends. Explicit delays from 150 to 1,700 ms regularly deliver newer
-turns before older ones. Bots keep moving; the player's square includes a rest
-to demonstrate Stop. All events still go through the same simulated delivery,
+player moving up, right, left and down from the center, returning along the same
+axis after each outward leg. Inputs are sent once per second with staggered sends.
+The intended player route stays clear of the bot routes, returns exactly to the
+center every two seconds, and finishes with a two-second rest. Explicit delays from 150 to 1,700 ms regularly deliver newer
+turns before older ones. Bots keep moving; the player
+briefly stops at the center to demonstrate Stop. All events still go through the same simulated delivery,
 ConTime processing, validated queries and renderer as the interactive example.
 No queried state or corrections are fabricated.
 
 Each client has a consistent color across the timeline, inputs, delivery animations
-and queried paths. Gray paths show earlier rendering states that now disagree;
+and queried paths. Faint gray dashes show the intended bot squares and the player’s
+central cross in both views, making drift from the planned route easy to see. Fading dashed paths in each client’s color show earlier rendering states that now disagree;
 double delivery ticks mark out-of-order arrivals. The timeline spans six seconds,
 with unlabeled one-second divisions. The browser displays only the shared graphical
-view. The canvas is recorded directly at 60 fps, then a ten-second excerpt is
-converted to a 50 fps GIF for the README, avoiding repeated screenshots during
-simulation.
+view: both arenas share one input timeline, with reconciliation on the left and
+arrival-time movement on the right. The canvas is recorded directly at 60 fps.
+The capture starts at the beginning of the player’s trips and ends after the
+final Stop at eight seconds has been delivered to both views, including the
+450 ms arena handoff and a brief settling interval. The last frame is held to
+make a ten-second, 1,000 × 625, 50 fps GIF. ConTime’s player finishes at the
+center; the arrival-time player stops at its accumulated offset. No new trip
+starts before the recording ends. Capture reads the canvas directly rather than
+taking repeated screenshots during simulation.
 
 To reproduce the choreography, first launch the browser host below, then add
-`showcase=1&client_spacing=18&movement_speed=8` to its URL, replacing any existing
-spacing and speed values. Five clients are required. The scripted inputs ignore
-keyboard movement, and after the initial two-second positioning, the complete sequence repeats every 24 seconds. Omit
+`showcase=1&client_spacing=18&movement_speed=8&average_latency_ms=1000&jitter_ms=1000`
+to its URL, replacing existing spacing, speed, latency and jitter values. These
+recording settings allow the explicit 1,700 ms delays; the interactive defaults
+remain 500 ms average with ±500 ms jitter. Five clients are required. The scripted inputs ignore
+keyboard movement. The complete input-and-delay sequence repeats every 40 seconds. Omit
 `showcase=1` to return to the normal interactive generator.
 
 With the [browser prerequisites](../../examples/environments/browser/README.md#build-directly)
@@ -453,7 +464,7 @@ installed, run from the repository root:
 cargo run --release --example launcher -- \
   --environment browser --execution manual --example client-movement --budget-ms 1 --no-setup -- \
   --clients 5 --client-spacing 16 --movement-speed 12 --input-hz 1 --query-hz 20 \
-  --average-latency-ms 1000 --jitter-ms 1000 --trail-ms 5000 --fade-ms 5000
+  --average-latency-ms 500 --jitter-ms 500 --trail-ms 5000 --fade-ms 5000
 ```
 
 Click the map, then use WASD or the arrow keys to choose a direction. Space stops

@@ -1,6 +1,10 @@
 //! Simulated network timing on one shared action/arrival clock.
-use crate::{entrance::Entries, report::Report};
-use bevy::{math::Isometry2d, prelude::*};
+use crate::{
+    entrance::Entries,
+    labels::{Labels, Style},
+    report::Report,
+};
+use bevy::prelude::*;
 
 struct Axis {
     now: u64,
@@ -22,11 +26,8 @@ impl Axis {
     }
     fn x(&self, time: u64) -> f32 {
         let relative = (i128::from(time) - i128::from(self.now)) as f64;
-        (-44.0 + 88.0 * ((relative + self.past) / (self.past + self.future)).clamp(0.0, 1.0)) as f32
+        (-96.0 + 192.0 * ((relative + self.past) / (self.past + self.future)).clamp(0.0, 1.0)) as f32
     }
-}
-fn text(gizmos: &mut Gizmos, x: f32, y: f32, value: &str, size: f32, color: Color) {
-    gizmos.text_2d(Isometry2d::from_translation(Vec2::new(x, y)), value, size, Vec2::new(-0.5, 0.0), color);
 }
 pub(crate) fn icon(gizmos: &mut Gizmos, p: Vec2, direction: [f64; 2], color: Color, scale: f32) {
     let d = Vec2::from_array(direction.map(|v| v as f32));
@@ -47,37 +48,44 @@ fn reordered_opacity(event: &crate::report::NetworkEvent, now: u64) -> f32 {
     }
     event.arrived_ns.map_or(0.0, |at| ((1_200_000_000.0 - now.saturating_sub(at) as f32) / 500_000_000.0).clamp(0.0, 1.0))
 }
-pub(crate) const RULER: f32 = 41.0;
+pub(crate) const RULER: f32 = 51.0;
 /// Stable rows, top to bottom: player, then the four simulated clients.
 fn client_y(client: usize) -> f32 {
-    65.0 - client.saturating_sub(1) as f32 * 5.0
+    75.0 - client.saturating_sub(1) as f32 * 5.0
 }
 pub(crate) fn delivery_position(report: &Report, event: &crate::report::NetworkEvent, tracks: &crate::tracks::Tracks) -> Vec2 {
     let axis = Axis::new(report.now_ns, report.average_latency_ms, report.jitter_ms);
     Vec2::new(axis.x(event.arrived_ns.unwrap_or(event.delivery_ns)), client_y(event.client) + tracks.offset(event.id))
 }
-pub fn draw(report: &Report, entries: &Entries, tracks: &crate::tracks::Tracks, reduced_motion: bool, gizmos: &mut Gizmos) {
+pub fn draw(
+    report: &Report,
+    entries: &Entries,
+    tracks: &crate::tracks::Tracks,
+    reduced_motion: bool,
+    labels: &mut Labels,
+    gizmos: &mut Gizmos,
+) {
     let axis = Axis::new(report.now_ns, report.average_latency_ms, report.jitter_ms);
     let now = axis.x(report.now_ns);
     let muted = Color::srgb(0.50, 0.60, 0.65);
     let bright = Color::srgb(0.78, 0.87, 0.90);
-    text(gizmos, -48.0, 72.5, "INPUT TIMELINE", 1.3, bright);
-    text(gizmos, now - 3.5, 70.0, "DELIVERY", 1.1, bright);
-    gizmos.line_2d(Vec2::new(now, 68.5), Vec2::new(now, RULER - 0.4), bright);
-    gizmos.line_2d(Vec2::new(-44.0, RULER), Vec2::new(44.0, RULER), muted);
+    labels.push(Vec2::new(-104.0, 82.5), 96.0, "INPUT TIMELINE", Style::Heading, bright);
+    labels.push(Vec2::new(now - 3.5, 80.0), 30.0, "DELIVERY", Style::Legend, bright);
+    gizmos.line_2d(Vec2::new(now, 78.5), Vec2::new(now, RULER - 0.4), bright);
+    gizmos.line_2d(Vec2::new(-96.0, RULER), Vec2::new(96.0, RULER), muted);
     for x in axis.seconds() {
-        gizmos.line_2d(Vec2::new(x, RULER), Vec2::new(x, 67.0), Color::srgba(0.50, 0.60, 0.65, 0.14));
+        gizmos.line_2d(Vec2::new(x, RULER), Vec2::new(x, 77.0), Color::srgba(0.50, 0.60, 0.65, 0.14));
         gizmos.line_2d(Vec2::new(x, RULER - 0.5), Vec2::new(x, RULER), muted);
     }
     // Every client keeps its own row, even when there are no visible inputs.
     for client in 1..=report.clients {
         let y = client_y(client);
-        let swatch = Vec2::new(-47.0, y);
+        let swatch = Vec2::new(-102.0, y);
         gizmos.circle_2d(swatch, 0.42, crate::palette::client(client, 1.0)).resolution(16);
         if client == 1 {
             gizmos.circle_2d(swatch, 0.8, bright).resolution(20);
         }
-        gizmos.line_2d(Vec2::new(-44.0, y), Vec2::new(44.0, y), Color::srgba(0.50, 0.60, 0.65, 0.12));
+        gizmos.line_2d(Vec2::new(-96.0, y), Vec2::new(96.0, y), Color::srgba(0.50, 0.60, 0.65, 0.12));
     }
     // Draw delay lines first, then action icons on top, on the same client row.
     for event in &report.network {
@@ -85,7 +93,7 @@ pub fn draw(report: &Report, entries: &Entries, tracks: &crate::tracks::Tracks, 
         let y = client_y(event.client) + tracks.offset(event.id);
         let entrance = entries.geometry(
             event.id,
-            Vec2::new(-47.0, client_y(event.client)),
+            Vec2::new(-102.0, client_y(event.client)),
             Vec2::new(start, y),
             axis.x(event.arrived_ns.unwrap_or(event.delivery_ns)),
         );
@@ -123,7 +131,7 @@ pub fn draw(report: &Report, entries: &Entries, tracks: &crate::tracks::Tracks, 
             }
             let alpha = reordered_opacity(event, report.now_ns);
             if alpha > 0.0 && entries.complete(event.id) {
-                text(gizmos, (end + 0.7).min(35.0), y + 1.0, "reordered", 0.9, delivery_color.with_alpha(alpha));
+                labels.push(Vec2::new((end + 0.7).min(80.0), y + 1.0), 24.0, "reordered", Style::Status, delivery_color.with_alpha(alpha));
             }
         } else {
             gizmos.line_2d(tip - Vec2::Y * size, tip + Vec2::Y * size, delivery_color);
@@ -137,7 +145,7 @@ pub fn draw(report: &Report, entries: &Entries, tracks: &crate::tracks::Tracks, 
         }
         let action = Vec2::new(axis.x(event.action_ns), client_y(event.client) + tracks.offset(event.id));
         let p = entries
-            .geometry(event.id, Vec2::new(-47.0, client_y(event.client)), action, axis.x(event.arrived_ns.unwrap_or(event.delivery_ns)))
+            .geometry(event.id, Vec2::new(-102.0, client_y(event.client)), action, axis.x(event.arrived_ns.unwrap_or(event.delivery_ns)))
             .position;
         let color = crate::palette::input(event.client, 1.0);
         let (scale, alpha) = entries.appearance(event.id);
@@ -145,10 +153,9 @@ pub fn draw(report: &Report, entries: &Entries, tracks: &crate::tracks::Tracks, 
         icon(gizmos, p, event.direction, color, scale * tracks.icon_scale(event.id));
     }
     if report.network.is_empty() {
-        text(gizmos, -44.0, 58.0, "No inputs waiting or recently delivered", 1.2, muted);
+        labels.push(Vec2::new(-96.0, 68.0), 96.0, "No recent inputs", Style::Caption, muted);
     }
-    text(gizmos, -48.0, 36.0, "Arrow: direction / Dot: Stop / Line: network delay", 1.0, muted);
-    text(gizmos, -48.0, 33.5, "Tick: delivery time / Double tick: out-of-order arrival", 1.0, muted);
+    labels.push(Vec2::new(-104.0, 46.0), 208.0, "Arrow: move / Dot: stop / Line: delay / Double tick: reordered", Style::Hint, muted);
 }
 #[cfg(test)]
 mod tests {
@@ -178,8 +185,8 @@ mod tests {
         let divisions: Vec<_> = axis.seconds().collect();
         assert_eq!(divisions, [9, 10, 11, 12, 13, 14].map(|s| axis.x(s * 1_000_000_000)));
         assert_eq!(axis.past + axis.future, 6_000_000_000.0);
-        assert!((axis.x(axis.now) - (-44.0 + 88.0 * 4.0 / 7.0)).abs() < 0.0001);
-        let second_width = 88.0 / 6.0;
+        assert!((axis.x(axis.now) - (-96.0 + 192.0 * 4.0 / 7.0)).abs() < 0.0001);
+        let second_width = 192.0 / 6.0;
         for pair in divisions.windows(2) {
             assert!((pair[1] - pair[0] - second_width).abs() < 0.0001);
         }

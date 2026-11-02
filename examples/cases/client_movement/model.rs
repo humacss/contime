@@ -119,12 +119,20 @@ impl Character {
             let cell = if index % 2 == 1 { (index + 1) / 2 } else { -(index / 2) };
             cell * spacing
         };
-        Self {
-            client_id,
-            motion,
-            position: [coordinate(index % columns, ARENA_HALF_EXTENT[0]), coordinate(index / columns, ARENA_HALF_EXTENT[1])],
-            ..Self::default()
-        }
+        // Four bot routes occupy separate quadrants; the player stays central.
+        let position = if (2..=5).contains(&client_id) {
+            let x = spacing.min(ARENA_HALF_EXTENT[0] * 2 / 3);
+            let y = (spacing / 2).min(ARENA_HALF_EXTENT[1] / 2);
+            match client_id {
+                2 => [x, -y],
+                3 => [-x, -y],
+                4 => [x, y],
+                _ => [-x, y],
+            }
+        } else {
+            [coordinate(index % columns, ARENA_HALF_EXTENT[0]), coordinate(index / columns, ARENA_HALF_EXTENT[1])]
+        };
+        Self { client_id, motion, position, ..Self::default() }
     }
     /// Position implied by the accepted input history at a requested time.
     pub fn position_at(&self, time: Time) -> [i128; 2] {
@@ -169,7 +177,7 @@ mod tests {
         state.apply_input(&east);
         state.apply_input(&input(2, 1_000_000_000, Direction::North));
         state.apply_input(&input(3, 2_000_000_000, Direction::Stop));
-        assert_eq!(state.position_at(Time(10_000_000_000)), [19 * SECOND, 10 * SECOND]);
+        assert_eq!(state.position_at(Time(10_000_000_000)), [19 * SECOND, 11 * SECOND / 2]);
     }
     #[test]
     fn characters_stop_at_each_wall_and_can_turn_back_inward() {

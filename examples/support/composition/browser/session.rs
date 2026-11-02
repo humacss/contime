@@ -326,7 +326,7 @@ mod movement_tests {
                 break;
             }
         }
-        assert_eq!(initial["movement"]["positions"][1]["position"], serde_json::json!([9.0, 0.0]));
+        assert_eq!(initial["movement"]["positions"][1]["position"], serde_json::json!([9.0, -4.5]));
         assert_eq!(initial["movement"]["positions"][0]["direction"], serde_json::json!([0.0, 0.0]));
         assert_eq!(initial["movement"]["client_spacing"], 9);
         assert_eq!(initial["movement"]["movement_speed"], 10);

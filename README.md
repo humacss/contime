@@ -13,16 +13,19 @@ It handles delayed, duplicated, and out-of-order events, and distributes indepen
 
 ## Reconciliation in action
 
-[![Five color-coded clients, delayed inputs, and reconciled paths.](assets/reconciliation.gif)][browser-demo]
+[![The same delayed inputs with ConTime reconciliation on the left and without reconciliation on the right.](assets/reconciliation.gif)][browser-demo]
 
 **[Play the interactive browser demo][browser-demo]** — click the map, then use WASD or the arrow keys. Space stops your client.
 
-Four simulated clients and one keyboard-controlled client move inside a fixed
-arena with 1,000 ms average input latency and ±1,000 ms jitter. **Each client has
-its own color**; **gray paths** show earlier rendering states that changed when
+The same delayed inputs feed two views: **ConTime repairs past paths on the left**;
+**arrival-time movement keeps its errors on the right**. Four simulated clients
+and one keyboard-controlled client move inside a fixed arena. The interactive demo uses 500 ms average input latency and ±500 ms jitter
+(0–1,000 ms per input). **Each client has
+its own color**. Faint gray dashes show the intended routes; **fading dashed paths in each client’s color** show earlier rendering states that changed when
 late inputs arrived. The timeline shows each action and its delivery delay;
-double delivery ticks mark out-of-order arrivals. The recording uses choreographed
-inputs and delivery delays to make these corrections easy to follow; the
+double delivery ticks mark out-of-order arrivals. The ten-second recording uses choreographed
+inputs and delivery delays, including player trips out from the center and back along both axes,
+to make these corrections easy to follow; the
 interactive demo generates its own traffic.
 
 Markers ease between queried positions. Each update is checked against an
@@ -241,4 +244,4 @@ See the [current constraints](guides/workspace/README.md#current-constraints).
 
 [MIT](LICENSE)
 
-[browser-demo]: https://humacss.github.io/contime/?domain=client-movement&clients=5&client_spacing=16&movement_speed=12&input_hz=1&query_hz=20&average_latency_ms=1000&jitter_ms=1000&trail_ms=5000&fade_ms=5000&retention_ms=10000&checkpoint_interval=128&max_ms=2&max_steps=1000&autostart=1
+[browser-demo]: https://humacss.github.io/contime/?domain=client-movement&clients=5&client_spacing=16&movement_speed=12&input_hz=1&query_hz=20&average_latency_ms=500&jitter_ms=500&trail_ms=5000&fade_ms=5000&retention_ms=10000&checkpoint_interval=128&max_ms=2&max_steps=1000&autostart=1

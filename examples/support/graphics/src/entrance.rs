@@ -21,6 +21,15 @@ impl Entries {
             self.0.values_mut().for_each(|age| *age = 400.0);
         }
     }
+    /// A completed query can hand its arrived inputs to the arena. Finish any
+    /// remaining entrance first so its flight and arena reveal share one clock.
+    pub fn handoff(&mut self, report: &Report) {
+        for event in report.network.iter().filter(|event| event.arrived_ns.is_some()) {
+            if report.arrivals.iter().any(|arrival| arrival.id == event.id) {
+                self.0.insert(event.id, 400.0);
+            }
+        }
+    }
     pub fn complete(&self, id: u64) -> bool {
         self.0.get(&id).copied().unwrap_or(400.0) >= 400.0
     }

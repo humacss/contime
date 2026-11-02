@@ -51,6 +51,6 @@ export function startupSettings(params) {
     const defaults = {showcase:'0',domain:'counter',snapshots:1000,rate:'Maximum',query_hz:20,retention_ms:10000,
         checkpoint_interval:128,max_pending:20000,average_targets:'1.0',max_targets:2,snapshot_skew:0,
         max_ms:2,max_steps:256,clients:5,client_spacing:16,movement_speed:6,input_hz:1,
-        average_latency_ms:1000,jitter_ms:1000,trail_ms:5000,fade_ms:5000};
+        average_latency_ms:500,jitter_ms:500,trail_ms:5000,fade_ms:5000};
     return readSettings(Object.fromEntries(Object.entries(defaults).map(([key,value]) => [key,params.get(key) ?? value])));
 }

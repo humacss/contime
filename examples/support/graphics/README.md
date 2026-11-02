@@ -4,13 +4,41 @@ One Bevy 0.19 renderer displays the queried movement scene for Native, WASI, thr
 WASI and Browser. This is an example-only workspace using Rust 1.95; it does not add
 Bevy or a newer Rust requirement to ConTime's published crates.
 
+## Reconciliation comparison
+
+One network timeline feeds two equal-scale arenas. Faint dashed neutral-gray outlines
+show each bot's intended square in both arenas. During the scripted recording,
+the player also has a cross-shaped guide through the center. Free keyboard
+movement has no prescribed route and therefore no player guide. These static
+guides come from the example's own input patterns and motion rules; they never
+replace queried paths or affect processing.
+
+**With ConTime** on the left
+shows actual queried state: late turns can temporarily overshoot, then repair the
+historical path. Dashed segments in the same client color retain those revisions while fading away. **Without reconciliation**
+on the right changes direction at actual delivery time and keeps earlier movement
+unchanged. Both receive exactly the same delivered inputs, start in the same places,
+and share colors, speed, walls and display smoothing. The right-hand state belongs
+to the example workload, not the renderer, and never affects ConTime or validation.
+
+The four bots start in separate quadrants and repeat square routes with staggered
+turns and client-specific phases. Their alternating loop alignments leave space
+between routes.
+Their corrected square loops remain closed after late inputs arrive; arrival-time
+loops deform. The keyboard-controlled client still appears in both views. Turn rate
+and speed determine side length, so extreme settings can reach the shared walls.
+The README GIF shows ten seconds of both views with scripted delivery delays.
+The player moves out from the center and back along each axis; the four bot loops
+stay separate. The recording ends when the final Stop is visible in both views,
+with a brief hold on the centered player and the unreconciled offset. See the [recording instructions](../../../guides/usage/README.md#reproduce-the-reconciliation-recording).
+
 The renderer knows positions, paths, corrections and arena bounds. It does not generate
 events, process ConTime work or decide whether state is correct. The selected workload
 owns the simulator, worker monitor and independent validation. Markers ease toward
 queried positions without predicting ahead. The icon under each character shows the
 queried heading (an arrow), or a dot for Stop. It does not infer direction from
 positional smoothing or from a newly arrived input. Connected client-colored paths show
-the latest queried trajectory; displaced gray segments fade out only where comparable
+the latest queried trajectory; displaced dashed segments in the same client color fade out only where comparable
 historical samples disagree. Current paths cover revisions at exact overlaps. Both the
 queried trail and revision fade default to five seconds. Duplicate revised segments are
 drawn once. Older segments are dimmer. Lighter arrows in each client’s color mark
@@ -43,13 +71,20 @@ remains. A quiet dot on the delay line preserves scheduled due time when actual 
 occurs later. The display shows the simulated network, not ConTime's internal worker
 queue.
 
-On delivery, a short tracer carries the client-colored direction icon from the
-timeline's delivery point to the input's historical position in the arena. This is a
-presentation effect; query results continue updating normally. A delivery that happens
-during entrance waits for that visual entrance to finish before launching its tracer;
-simulation and queries do not wait. Tracers are bounded, freeze on Pause, clear on
-Reset, and are disabled with reduced motion. Inputs outside the bounded historical
-preview are not animated.
+Completed query updates use a bounded presentation buffer of 450 ms. Two
+synchronized tracers carry the same client-colored direction icon from the shared
+timeline delivery point into both arenas. The left tracer lands at the input's
+historical position; the right lands where that input actually arrived. Both
+arenas reveal the matching query update when those tracers land, so the turn and
+path correction do not precede the arrow. This adds visual latency only: input
+delivery, ConTime processing, queries and validation continue normally.
+
+Each flight keeps the destination of its own queued query; later corrections do
+not move it toward an arena update that is still waiting. Very short deliveries
+finish any remaining timeline entrance before the arena handoff starts. The
+buffer and tracers freeze on Pause and clear on Reset. Reduced motion and final
+completion bypass the buffer and show exact state immediately. Old inputs outside
+the bounded preview do not play stale delivery animations.
 
 The game view focuses on the input timeline, arena and explanatory legends.
 Timeline arrows show direction and dots mean Stop; ticks mark delivery time,
@@ -61,7 +96,19 @@ simulation continue unchanged.
 
 Gold identifies the player; mint, sky blue, coral and lilac identify the bots. A pale
 ring distinguishes the player in both the arena and timeline. Input icons use a lighter
-shade of the same hue, while current paths use a darker shade. Revised paths stay gray.
+shade of the same hue, while current paths use a darker shade. Replaced paths use the client’s hue with reduced opacity and dashes; only the faint intended guides are gray.
+
+## Text
+
+All labels use Bevy UI text with an embedded Inter font, shared by desktop and
+browser builds. Font sizes are in logical screen pixels, independently of the
+camera's world scale and the line width used for paths. Headings use 18–24 px,
+captions 14–16 px, legends 12–14 px and brief arrival notices 12 px. Compact titles below 900 px
+and concise captions below 640 px keep both arenas side by side. Supplementary
+legends and reordered words hide below 640 px; double delivery ticks remain. UI nodes provide
+wrapping and reusable placement anchored to the arena/timeline geometry; no HTML
+labels or network font requests are needed. The Inter font and its SIL Open Font
+License are in `assets/fonts/`.
 
 ## Run
 
@@ -99,14 +146,21 @@ both the final validated report and a successful workload process exit. Errors
 retain a bounded diagnostic tail. The presenter reaps its child on cleanup.
 
 Browser movement starts automatically, with startup settings fixed for the run.
+Press P to pause or resume; a Paused label appears in the game. Hiding the tab
+automatically pauses its simulation clock, work and animations. Returning resumes
+only an automatically paused run; a manual pause stays paused. Pending deliveries
+and operation deadlines retain their remaining simulation time.
 Reload to restart, or close the page to stop. Counter and Chain hash retain their
 browser controls and diagnostics. Reduced-motion preferences disable marker transitions.
 
 ## Code
 
+- `src/comparison.rs`: equal-scale left/right report placement.
+- `src/labels.rs`: regular screen-sized text with embedded Inter and a bounded UI pool.
 - `src/palette.rs`: shared client identity colors and lighter input shades.
 - `src/scene.rs`: shared Bevy camera, walls, paths and markers.
 - `src/tracks.rs`: stable overlap layout within each client row.
+- `src/playback.rs`: bounded query presentation timed to arrow landings.
 - `src/transfer.rs`: bounded delivery-to-arena tracers.
 - `src/network.rs`: shared action/delivery timeline and arrival highlights.
 - `src/paths.rs`: connected paths, directional input markers and arrival pulses.

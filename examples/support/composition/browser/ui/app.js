@@ -6,9 +6,12 @@ const metrics = ['submitted', 'applications', 'queued', 'queries', 'steps', 'ove
 const params = new URLSearchParams(location.search);
 const result = window.contimeExample = { done: false, error: null, report: null, frames: 0 };
 let BudgetDemo, demo, config, movementView, running = false, animationId = null;
+let wantsToRun = false;
 let activeMs = 0, previousTime = null, overruns = 0, duration = null;
 function status(message) { $('state').textContent = message; $('state').hidden = config?.domain === 'client-movement' && message !== 'Failed'; }
 function controls() {
+    result.paused = !!demo && !running && !result.done && !result.error;
+    result.pauseReason = result.paused ? (wantsToRun && document.hidden ? "hidden" : "manual") : null;
     movementView?.running(running);
     $('start').disabled = !BudgetDemo || running || result.done || !!result.error;
     $('start').textContent = demo ? 'Resume' : 'Start';
@@ -16,7 +19,9 @@ function controls() {
     $('reset').disabled = !BudgetDemo;
 }
 function fail(error) {
-    running = false;
+    wantsToRun = running = false;
+    previousTime = null;
+    cancelTick();
     result.error = String(error);
     $('error').textContent = `Run stopped: ${result.error}`;
     $('error').hidden = false;
@@ -73,10 +78,35 @@ function render(report) {
     }));
 }
 
+function cancelTick() {
+    if (animationId !== null) cancelAnimationFrame(animationId);
+    animationId = null;
+}
+function syncRunning() {
+    const next = wantsToRun && !document.hidden && !result.done && !result.error;
+    if (next !== running) {
+        running = next;
+        // Ignore all wall-clock time while suspended. In-flight work keeps its
+        // original simulation deadline and remaining simulated delivery delay.
+        previousTime = running ? performance.now() : null;
+        if (running) schedule(); else cancelTick();
+    }
+    if (demo && !result.done && !result.error) status(running ? 'Running' : 'Paused');
+    controls();
+}
+function pause() { wantsToRun = false; syncRunning(); }
+document.addEventListener('visibilitychange', syncRunning);
+window.addEventListener('keydown', (event) => {
+    if (config?.domain !== 'client-movement' || !demo || (event.key.toLowerCase() !== 'p' && event.code !== 'KeyP')
+        || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault();
+    if (wantsToRun) pause(); else resume();
+}, { capture: true }); // Bevy consumes canvas keyboard events before they bubble.
 function schedule() { if (animationId === null) animationId = requestAnimationFrame(tick); }
 function tick() {
     animationId = null;
     if (!running) return;
+    if (document.hidden) { syncRunning(); return; }
     measure();
     try {
         const stopping = duration !== null && activeMs >= duration * 1000;
@@ -88,7 +118,8 @@ function tick() {
         measure();
         if (report.done) {
             movementView?.finish();
-            running = false;
+            wantsToRun = running = false;
+            previousTime = null;
             result.done = true;
             status('Completed · all work drained');
             controls();
@@ -102,28 +133,21 @@ $('movement-map').addEventListener('keydown', (event) => {
     const direction = ({w:'north',ArrowUp:'north',s:'south',ArrowDown:'south',a:'west',ArrowLeft:'west',d:'east',ArrowRight:'east',' ':'stop'})[event.key];
     if (direction && demo && running && config.domain === 'client-movement') { event.preventDefault(); try { demo.input(direction); } catch(error) { fail(error); } }
 });
-$('start').addEventListener('click', () => {
+function resume() {
     if (running || result.done || result.error || !BudgetDemo) return;
     try {
         if (!demo) {
             demo = new BudgetDemo(JSON.stringify(config), config.domain);
         }
-        running = true;
-        previousTime = performance.now();
-        controls();
-        schedule();
+        wantsToRun = true;
+        syncRunning();
     } catch (error) { fail(error); }
-});
-$('pause').addEventListener('click', () => {
-    measure(); running = false; previousTime = null;
-    if (animationId !== null) cancelAnimationFrame(animationId);
-    animationId = null;
-    status('Paused'); controls();
-});
+}
+$('start').addEventListener('click', resume);
+$('pause').addEventListener('click', pause);
 $('reset').addEventListener('click', () => {
-    running = false;
-    if (animationId !== null) cancelAnimationFrame(animationId);
-    animationId = null;
+    wantsToRun = running = false;
+    cancelTick();
     demo?.free(); demo = null;
     activeMs = overruns = 0; previousTime = null;
     Object.assign(result, { done: false, error: null, report: null, frames: 0 });

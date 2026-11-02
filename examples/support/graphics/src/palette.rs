@@ -25,9 +25,24 @@ pub fn path(client: usize, age: f32) -> Color {
     let [r, g, b] = rgb(client).map(|c| c * (0.65 * age.clamp(0.0, 1.0)));
     Color::srgb(r, g, b)
 }
+/// Replaced paths retain identity while fading independently of the solid path.
+pub fn revision(id: usize, opacity: f32) -> Color {
+    client(id, 0.38 * opacity.clamp(0.0, 1.0))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replaced_paths_keep_the_client_hue_and_fade_to_transparent() {
+        for id in 1..=CLIENTS.len() {
+            let base = client(id, 1.0).to_srgba();
+            let recent = revision(id, 1.0).to_srgba();
+            assert_eq!([base.red, base.green, base.blue], [recent.red, recent.green, recent.blue]);
+            assert_eq!(recent.alpha, 0.38);
+            assert!(revision(id, 0.5).to_srgba().alpha < recent.alpha);
+            assert_eq!(revision(id, 0.0).to_srgba().alpha, 0.0);
+        }
+    }
     #[test]
     fn every_supported_client_has_a_distinct_consistent_palette() {
         assert_eq!(CLIENTS.len(), crate::report::MAX_CLIENTS);
