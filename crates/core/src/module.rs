@@ -16,9 +16,11 @@ pub trait SnapshotId {
 }
 
 mod context;
+mod creation;
+pub use creation::SnapshotCreate;
 mod event_set;
 pub use context::{apply_batch, ApplyContext, SnapshotApply};
-pub use event_set::{EventRef, EventSet, EventSetBuilder, EventSource};
+pub use event_set::{EventRef, EventSet, EventSetBuilder, EventSource, SnapshotEvents};
 
 /// A complete statically dispatched application definition.
 ///

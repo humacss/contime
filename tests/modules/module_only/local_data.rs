@@ -39,13 +39,17 @@ impl SnapshotId for LocalState {
         7
     }
 }
-impl SnapshotApply for LocalState {
+impl contime::SnapshotEvents for LocalState {
     fn define(events: &mut EventSetBuilder<Self>) {
         events.event::<LocalInput>(|_, emit| emit(7));
     }
+}
+impl contime::SnapshotCreate for LocalState {
     fn create(_: u128, _: EventRef<'_>) -> Self {
         Self::default()
     }
+}
+impl SnapshotApply for LocalState {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         for e in batch.events::<LocalInput>() {
             Rc::make_mut(&mut self.values).push((*e.text).clone());

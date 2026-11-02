@@ -76,7 +76,7 @@ mod model {
             Self::id_for(&self.owner)
         }
     }
-    impl contime::SnapshotApply for Total {
+    impl contime::SnapshotEvents for Total {
         fn define(events: &mut contime::EventSetBuilder<Self>) {
             events.event::<MessageAdded>(|event, emit| {
                 emit(Total::id_for(&event.owner));
@@ -85,6 +85,8 @@ mod model {
                 emit(Total::id_for(&event.owner));
             });
         }
+    }
+    impl contime::SnapshotCreate for Total {
         fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
             if let Some(event) = event.get::<MessageAdded>() {
                 let mut snapshot = Self::default();
@@ -106,6 +108,8 @@ mod model {
             }
             panic!("event does not initialize the requested snapshot")
         }
+    }
+    impl contime::SnapshotApply for Total {
         fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
             for event in batch.events::<MessageAdded>() {
                 self.value += event.payload.0.len();

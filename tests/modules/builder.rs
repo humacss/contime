@@ -56,7 +56,7 @@ impl SnapshotId for State {
         self.id
     }
 }
-impl SnapshotApply for State {
+impl contime::SnapshotEvents for State {
     fn define(events: &mut EventSetBuilder<Self>) {
         events
             .event::<Added>(|_event, emit| {
@@ -66,9 +66,13 @@ impl SnapshotApply for State {
                 emit(7);
             });
     }
+}
+impl contime::SnapshotCreate for State {
     fn create(id: u128, _event: EventRef<'_>) -> Self {
         Self { id, ..Self::default() }
     }
+}
+impl SnapshotApply for State {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         self.batches.push((*batch.time(), batch.history_event_count()));
         let additions = batch.events::<Added>().map(|e| e.value).collect::<Vec<_>>();
@@ -137,13 +141,17 @@ impl SnapshotId for Duplicate {
         self.id
     }
 }
-impl SnapshotApply for Duplicate {
+impl contime::SnapshotEvents for Duplicate {
     fn define(events: &mut EventSetBuilder<Self>) {
         events.event::<Added>(|e, emit| emit(e.id)).event::<Added>(|_, emit| emit(99));
     }
+}
+impl contime::SnapshotCreate for Duplicate {
     fn create(id: u128, _: EventRef<'_>) -> Self {
         Self { id, ..Self::default() }
     }
+}
+impl SnapshotApply for Duplicate {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         assert_eq!(batch.events::<Cleared>().count(), 0);
     }
@@ -189,14 +197,18 @@ mod cached {
             self.id
         }
     }
-    impl SnapshotApply for Cached {
+    impl contime::SnapshotEvents for Cached {
         fn define(events: &mut EventSetBuilder<Self>) {
             DEFINITIONS.fetch_add(1, Ordering::SeqCst);
             events.event::<Added>(|e, emit| emit(e.id));
         }
+    }
+    impl contime::SnapshotCreate for Cached {
         fn create(id: u128, _: EventRef<'_>) -> Self {
             Self { id, ..Self::default() }
         }
+    }
+    impl SnapshotApply for Cached {
         fn apply_batch(&mut self, _: impl ApplyContext<Self>) {}
     }
     #[derive(ContimeModule)]

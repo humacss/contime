@@ -1,0 +1,24 @@
+error: automatic registration requires an ID field or a struct-level id selector
+ --> tests/modules/ui/event_attributes.rs:4:1
+  |
+4 | / #[contime(event = Added)]
+5 | | struct MissingId;
+  | |_________________^
+
+error: use one event or one events list per attribute
+ --> tests/modules/ui/event_attributes.rs:8:38
+  |
+8 | #[contime(event = Added, id = route, event = Removed)]
+  |                                      ^^^^^
+
+error: duplicate event registration
+  --> tests/modules/ui/event_attributes.rs:13:19
+   |
+13 | #[contime(event = Added, id = other_route)]
+   |                   ^^^^^
+
+error: event registrations belong on ContimeSnapshot
+  --> tests/modules/ui/event_attributes.rs:17:11
+   |
+17 | #[contime(event = Added, id = route)]
+   |           ^^^^^

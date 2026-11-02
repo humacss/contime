@@ -110,19 +110,24 @@ impl SnapshotId for Character {
     }
 }
 impl SnapshotApply for Character {
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for input in batch.events::<MovementInput>() {
+            self.apply_input(input);
+        }
+    }
+}
+impl contime::SnapshotEvents for Character {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<MovementInput>(|event, emit| {
             emit(event.client_id);
         });
     }
+}
+
+impl contime::SnapshotCreate for Character {
     fn create(snapshot_id: u128, event: EventRef<'_>) -> Self {
         let Some(input) = event.get::<MovementInput>() else { unreachable!("the builder registers MovementInput") };
         Self::spawn(snapshot_id, input.motion)
-    }
-    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
-        for input in batch.events::<MovementInput>() {
-            self.apply_input(input);
-        }
     }
 }
 

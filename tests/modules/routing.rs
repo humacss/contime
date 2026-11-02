@@ -70,7 +70,7 @@ impl contime::SnapshotId for Total {
         Self::id_for(&self.owner, &self.slot)
     }
 }
-impl contime::SnapshotApply for Total {
+impl contime::SnapshotEvents for Total {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Named>(|event, emit| {
             emit(Total::id_for(&event.owner, &event.slot));
@@ -81,6 +81,8 @@ impl contime::SnapshotApply for Total {
             }
         });
     }
+}
+impl contime::SnapshotCreate for Total {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Named>() {
             let mut snapshot = Self::default();
@@ -104,6 +106,8 @@ impl contime::SnapshotApply for Total {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for Total {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         for event in batch.events::<Named>() {
             self.total += event.amount;
@@ -202,7 +206,7 @@ impl contime::SnapshotId for ScalarSlot {
         Self::id_for(&self.slot)
     }
 }
-impl contime::SnapshotApply for ScalarSlot {
+impl contime::SnapshotEvents for ScalarSlot {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Slots>(|event, emit| {
             for slot in &event.slots {
@@ -210,6 +214,8 @@ impl contime::SnapshotApply for ScalarSlot {
             }
         });
     }
+}
+impl contime::SnapshotCreate for ScalarSlot {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Slots>() {
             let mut snapshot = Self::default();
@@ -222,6 +228,8 @@ impl contime::SnapshotApply for ScalarSlot {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for ScalarSlot {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         for _event in batch.events::<Slots>() {}
     }
@@ -254,7 +262,7 @@ impl contime::SnapshotId for OwnedSlot {
         Self::id_for(&self.owner, &self.slot)
     }
 }
-impl contime::SnapshotApply for OwnedSlot {
+impl contime::SnapshotEvents for OwnedSlot {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Slots>(|event, emit| {
             for slot in &event.slots {
@@ -262,6 +270,8 @@ impl contime::SnapshotApply for OwnedSlot {
             }
         });
     }
+}
+impl contime::SnapshotCreate for OwnedSlot {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Slots>() {
             let mut snapshot = Self::default();
@@ -275,6 +285,8 @@ impl contime::SnapshotApply for OwnedSlot {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for OwnedSlot {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         for _event in batch.events::<Slots>() {}
     }

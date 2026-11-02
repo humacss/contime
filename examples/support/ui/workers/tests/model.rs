@@ -70,16 +70,21 @@ impl contime::SnapshotId for Counter {
     }
 }
 impl contime::SnapshotApply for Counter {
+    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+        self.count += batch.events::<Increment>().count() as u64;
+    }
+}
+impl contime::SnapshotEvents for Counter {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Increment>(|event, emit| {
             emit(<Counter>::id_for(&(event.id % 4096)));
         });
     }
+}
+
+impl contime::SnapshotCreate for Counter {
     fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
         Self { id: snapshot_id, ..Self::default() }
-    }
-    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
-        self.count += batch.events::<Increment>().count() as u64;
     }
 }
 

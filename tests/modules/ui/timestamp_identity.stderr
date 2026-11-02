@@ -1,0 +1,15 @@
+error[E0277]: the trait bound `E: EventId` is not satisfied
+ --> tests/modules/ui/timestamp_identity.rs:7:26
+  |
+7 |  let _=EventId::event_id(&E{at:0});
+  |        ----------------- ^^^^^^^^ the trait `EventId` is not implemented for `E`
+  |        |
+  |        required by a bound introduced by this call
+
+error[E0277]: the trait bound `S: SnapshotId` is not satisfied
+ --> tests/modules/ui/timestamp_identity.rs:8:32
+  |
+8 |  let _=SnapshotId::snapshot_id(&S{at:0});
+  |        ----------------------- ^^^^^^^^ the trait `SnapshotId` is not implemented for `S`
+  |        |
+  |        required by a bound introduced by this call

@@ -91,7 +91,7 @@ where
         Self::id_for(&self.counter_id)
     }
 }
-impl<T> contime::SnapshotApply for GenericSnapshot<T>
+impl<T> contime::SnapshotEvents for GenericSnapshot<T>
 where
     T: Clone + Default + Hash + AddAssign + 'static,
 {
@@ -100,6 +100,11 @@ where
             emit(<GenericSnapshot<T>>::id_for(&event.counter_id));
         });
     }
+}
+impl<T> contime::SnapshotCreate for GenericSnapshot<T>
+where
+    T: Clone + Default + Hash + AddAssign + 'static,
+{
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<GenericEvent<T>>() {
             let mut snapshot = Self::default();
@@ -112,6 +117,11 @@ where
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl<T> contime::SnapshotApply for GenericSnapshot<T>
+where
+    T: Clone + Default + Hash + AddAssign + 'static,
+{
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         for event in batch.events::<GenericEvent<T>>() {
             self.value += event.amount.clone();

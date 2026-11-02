@@ -1,0 +1,38 @@
+error[E0308]: mismatched types
+ --> tests/modules/ui/identity_field_types.rs:8:26
+  |
+8 | #[derive(Clone, Default, ContimeSnapshot)]
+  |                          ^^^^^^^^^^^^^^^
+  |                          |
+  |                          expected `&u128`, found `&String`
+  |                          arguments to this function are incorrect
+  |
+  = note: expected reference `&u128`
+             found reference `&String`
+note: method defined here
+ --> $RUST/core/src/clone.rs
+  = note: this error originates in the derive macro `ContimeSnapshot` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0609]: no field `owner` on type `&Added`
+  --> tests/modules/ui/identity_field_types.rs:16:22
+   |
+16 | #[contime(id = |v| v.owner)]
+   |                      ^^^^^ unknown field
+   |
+   = note: available fields are: `id`, `at`, `destination`
+
+error[E0308]: mismatched types
+  --> tests/modules/ui/identity_field_types.rs:24:10
+   |
+24 | #[derive(ContimeSnapshot)]
+   |          ^^^^^^^^^^^^^^^ expected `u128`, found `u64`
+   |
+   = note: this error originates in the derive macro `ContimeSnapshot` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0507]: cannot move out of a shared reference
+ --> tests/modules/ui/identity_field_types.rs:8:26
+  |
+8 | #[derive(Clone, Default, ContimeSnapshot)]
+  |                          ^^^^^^^^^^^^^^^ move occurs because value has type `String`, which does not implement the `Copy` trait
+  |
+  = note: this error originates in the derive macro `ContimeSnapshot` (in Nightly builds, run with -Z macro-backtrace for more info)

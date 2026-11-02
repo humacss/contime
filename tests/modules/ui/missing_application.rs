@@ -11,7 +11,8 @@ impl EventId for Added {
         self.id
     }
 }
-#[derive(Clone, Default)]
+#[derive(Clone, Default, ContimeSnapshot)]
+#[contime(event = Added, id = |event, emit| emit(event.id))]
 struct State {
     time: i64,
     id: u128,

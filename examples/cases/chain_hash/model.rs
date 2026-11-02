@@ -82,6 +82,13 @@ impl SnapshotId for Counter {
     }
 }
 impl SnapshotApply for Counter {
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for change in batch.events::<CounterChanged>() {
+            self.apply_change(change);
+        }
+    }
+}
+impl contime::SnapshotEvents for Counter {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<CounterChanged>(|event, emit| {
             for id in &event.counter_ids {
@@ -89,13 +96,11 @@ impl SnapshotApply for Counter {
             }
         });
     }
+}
+
+impl contime::SnapshotCreate for Counter {
     fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
         Self { counter_id: snapshot_id, ..Self::default() }
-    }
-    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
-        for change in batch.events::<CounterChanged>() {
-            self.apply_change(change);
-        }
     }
 }
 

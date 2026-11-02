@@ -3,9 +3,9 @@
 pub use crate::checkpoints::{CheckpointConfig, Timestamp};
 #[cfg(feature = "manual")]
 pub use crate::manual::{ManualConTime, ManualConfig};
-#[cfg(feature = "macros")]
-pub use crate::ContimeModule;
 pub use crate::{AdvanceTime, Input};
-pub use crate::{ApplyContext, EventId, EventRef, EventSetBuilder, Module, SnapshotApply, SnapshotId};
+pub use crate::{ApplyContext, EventId, EventRef, EventSetBuilder, Module, SnapshotApply, SnapshotCreate, SnapshotEvents, SnapshotId};
 #[cfg(feature = "runtime")]
 pub use crate::{ConTime, ConTimeConfig, Placement};
+#[cfg(feature = "macros")]
+pub use crate::{ContimeEvent, ContimeModule, ContimeSnapshot};

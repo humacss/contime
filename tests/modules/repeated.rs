@@ -54,12 +54,14 @@ macro_rules! domain {
                     Self::id_for(&self.owner)
                 }
             }
-            impl contime::SnapshotApply for Total {
+            impl contime::SnapshotEvents for Total {
                 fn define(events: &mut contime::EventSetBuilder<Self>) {
                     events.event::<Added>(|event, emit| {
                         emit(<Total>::id_for(&(event.owner)));
                     });
                 }
+            }
+            impl contime::SnapshotCreate for Total {
                 fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
                     if let Some(event) = event.get::<Added>() {
                         let mut snapshot = Self::default();
@@ -72,6 +74,8 @@ macro_rules! domain {
                     }
                     panic!("event does not initialize the requested snapshot")
                 }
+            }
+            impl contime::SnapshotApply for Total {
                 fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
                     {
                         for event in batch.events::<Added>() {

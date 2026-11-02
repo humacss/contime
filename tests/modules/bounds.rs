@@ -57,12 +57,15 @@ impl<T: Copy + Into<u128>> SnapshotId for BoundedState<T> {
     }
 }
 
-impl<T: Copy + Into<u128> + 'static> SnapshotApply for BoundedState<T> {
+impl<T: Copy + Into<u128> + 'static> contime::SnapshotEvents for BoundedState<T> {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<BoundedEvent<T>>(|event, emit| {
             emit(event.owner);
         });
     }
+}
+
+impl<T: Copy + Into<u128> + 'static> contime::SnapshotCreate for BoundedState<T> {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<BoundedEvent<T>>() {
             let mut snapshot = Self::default();
@@ -75,6 +78,8 @@ impl<T: Copy + Into<u128> + 'static> SnapshotApply for BoundedState<T> {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl<T: Copy + Into<u128> + 'static> SnapshotApply for BoundedState<T> {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         for event in batch.events::<BoundedEvent<T>>() {
             self.values.push(event.value.into());

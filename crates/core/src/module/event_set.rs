@@ -1,5 +1,5 @@
 //! Registration and borrowed runtime event views; payloads stay in their lanes.
-use super::{EventId, SnapshotApply};
+use super::{checkpoints, EventId, SnapshotApply, SnapshotId};
 use std::{
     any::{type_name, Any, TypeId},
     marker::PhantomData,
@@ -48,12 +48,21 @@ struct Registration {
     name: &'static str,
     route: Box<Routing>,
 }
+/// Accepted event types and destination IDs, independently of snapshot application.
+///
+/// Implement manually with the builder, or generate this trait with
+/// `ContimeSnapshot` and one `#[contime(event = Type, id = function)]` per event.
+pub trait SnapshotEvents: checkpoints::Snapshot + SnapshotId + 'static {
+    /// Registers event types and callbacks once when the module is initialized.
+    fn define(events: &mut EventSetBuilder<Self>);
+}
+
 /// Defines the accepted event types once, independently of application logic.
 pub struct EventSetBuilder<S> {
     entries: Vec<Registration>,
     marker: PhantomData<fn() -> S>,
 }
-impl<S: SnapshotApply> EventSetBuilder<S> {
+impl<S: SnapshotEvents> EventSetBuilder<S> {
     /// Registers an event and the IDs it targets. Repeated registrations keep the first route.
     /// The callback emits zero, one or multiple snapshot IDs without creating state.
     pub fn event<E: EventId<Time = S::Time> + 'static>(
@@ -87,11 +96,23 @@ impl<S: SnapshotApply> Default for EventSet<S> {
     }
 }
 impl<S: SnapshotApply> EventSet<S> {
-    /// Builds a definition by calling `SnapshotApply::define` once.
+    /// Builds a definition by calling `SnapshotEvents::define` once.
     pub fn new() -> Self {
         let mut builder = EventSetBuilder { entries: Vec::new(), marker: PhantomData };
         S::define(&mut builder);
         Self { entries: builder.entries, marker: PhantomData }
+    }
+    /// Restricts this definition to supported event types for one module registration.
+    /// Filtering happens at startup; routing and creation then see only these entries.
+    /// Panics if any requested type is not supported by the snapshot.
+    pub fn with_event_types(mut self, allowed: &[TypeId]) -> Self {
+        assert!(
+            allowed.iter().all(|id| self.entries.iter().any(|entry| &entry.id == id)),
+            "module requests an event not supported by snapshot {}",
+            type_name::<S>()
+        );
+        self.entries.retain(|entry| allowed.contains(&entry.id));
+        self
     }
     /// Checks that every accepted event is available in the aggregate input lane.
     pub fn validate<I: EventSource>(&self) {

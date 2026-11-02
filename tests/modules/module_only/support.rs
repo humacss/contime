@@ -60,7 +60,7 @@ impl SnapshotId for OrderedList {
         self.id
     }
 }
-impl SnapshotApply for OrderedList {
+impl contime::SnapshotEvents for OrderedList {
     fn define(events: &mut EventSetBuilder<Self>) {
         events
             .event::<Added>(|event, emit| {
@@ -70,9 +70,13 @@ impl SnapshotApply for OrderedList {
             })
             .event::<Cleared>(|event, emit| emit(event.list));
     }
+}
+impl contime::SnapshotCreate for OrderedList {
     fn create(id: u128, _: EventRef<'_>) -> Self {
         Self { id, ..Self::default() }
     }
+}
+impl SnapshotApply for OrderedList {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         assert_eq!(batch.snapshot_id(), self.id);
         assert_eq!(batch.events::<Added>().count(), batch.events::<Added>().count());
@@ -104,7 +108,7 @@ impl SnapshotId for Counter {
         self.id
     }
 }
-impl SnapshotApply for Counter {
+impl contime::SnapshotEvents for Counter {
     fn define(events: &mut EventSetBuilder<Self>) {
         events.event::<Added>(|event, emit| {
             for &id in &event.lists {
@@ -112,9 +116,13 @@ impl SnapshotApply for Counter {
             }
         });
     }
+}
+impl contime::SnapshotCreate for Counter {
     fn create(id: u128, _: EventRef<'_>) -> Self {
         Self { id, ..Self::default() }
     }
+}
+impl SnapshotApply for Counter {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         self.count += batch.events::<Added>().count() as u64;
     }

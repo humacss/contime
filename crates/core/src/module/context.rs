@@ -1,20 +1,18 @@
 //! Repeatable typed views over one effective timestamp bucket.
-use super::{EventId, EventRef, EventSetBuilder, EventSource, SnapshotId};
+use super::{EventId, EventSource, SnapshotCreate};
 use crate::contime_core::checkpoints;
 use std::marker::PhantomData;
 
-/// Application-owned event registration, initialization and timestamp-batch logic.
+/// Application-owned timestamp-batch logic.
+/// Registration and initialization belong to `SnapshotEvents` and `SnapshotCreate`.
 ///
 /// Handle event types in an explicit phase order inside `apply_batch`. Each typed
 /// view preserves canonical ordering within that type and can be read repeatedly.
 /// ConTime never groups distinct effective timestamps into the same batch.
-pub trait SnapshotApply: checkpoints::Snapshot + SnapshotId + 'static {
-    /// Registers accepted event types once when the module is initialized.
-    fn define(events: &mut EventSetBuilder<Self>);
-    /// Initializes a targeted identity from its first event, before application.
-    fn create(snapshot_id: u128, event: EventRef<'_>) -> Self;
+pub trait SnapshotApply: SnapshotCreate {
     /// Applies one complete effective timestamp batch in application-defined phases.
-    fn apply_batch(&mut self, batch: impl ApplyContext<Self>);
+    /// The default leaves application state unchanged; ConTime still maintains time/history.
+    fn apply_batch(&mut self, _batch: impl ApplyContext<Self>) {}
 }
 /// Metadata and non-consuming event views for one snapshot's timestamp batch.
 pub trait ApplyContext<S: SnapshotApply> {
@@ -90,7 +88,7 @@ pub fn apply_batch<S: SnapshotApply, I: EventSource>(snapshot: &mut S, raw: chec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contime_core::module::EventSet;
+    use crate::contime_core::module::{EventRef, EventSet, EventSetBuilder, SnapshotEvents, SnapshotId};
     use std::rc::Rc;
     struct Changed {
         value: Rc<u64>,
@@ -126,13 +124,17 @@ mod tests {
             7
         }
     }
-    impl SnapshotApply for State {
+    impl SnapshotEvents for State {
         fn define(events: &mut EventSetBuilder<Self>) {
             events.event::<Changed>(|_, emit| emit(7));
         }
+    }
+    impl crate::contime_core::module::SnapshotCreate for State {
         fn create(_: u128, _: EventRef<'_>) -> Self {
             Self::default()
         }
+    }
+    impl SnapshotApply for State {
         fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
             assert_eq!((batch.snapshot_id(), *batch.time(), batch.history_event_count()), (7, -5, 42));
             let first = batch.events::<Changed>().collect::<Vec<_>>();

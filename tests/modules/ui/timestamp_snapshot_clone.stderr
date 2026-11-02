@@ -1,0 +1,13 @@
+error[E0277]: the trait bound `MissingClone: Clone` is not satisfied
+ --> tests/modules/ui/timestamp_snapshot_clone.rs:2:10
+  |
+2 | #[derive(ContimeSnapshot)]
+  |          ^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `MissingClone`
+  |
+  = help: see issue #48214
+  = note: this error originates in the derive macro `ContimeSnapshot` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider annotating `MissingClone` with `#[derive(Clone)]`
+  |
+3 + #[derive(Clone)]
+4 | struct MissingClone { #[contime(time)] at:i64 }
+  |

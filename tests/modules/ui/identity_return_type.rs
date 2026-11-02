@@ -31,12 +31,13 @@ impl contime::SnapshotId for WrongSnapshot {
         Self::id_for(&self.owner)
     }
 }
-impl SnapshotApply for WrongSnapshot {
-    fn define(events: &mut contime::EventSetBuilder<Self>) {
+impl contime::SnapshotEvents for WrongSnapshot {    fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<WrongEvent>(|event, emit| {
             emit(<WrongSnapshot>::id_for(&(event.owner)));
         });
     }
+}
+impl contime::SnapshotCreate for WrongSnapshot {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<WrongEvent>() {
             let mut snapshot = Self::default();
@@ -49,6 +50,10 @@ impl SnapshotApply for WrongSnapshot {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl SnapshotApply for WrongSnapshot {
+
+
     fn apply_batch(&mut self, _batch: impl contime::ApplyContext<Self>) {}
 }
 fn main() {}

@@ -1,7 +1,7 @@
 error[E0271]: type mismatch resolving `<Added as Event>::Time == u64`
-  --> tests/modules/ui/snapshot_time.rs:37:24
+  --> tests/modules/ui/snapshot_time.rs:36:24
    |
-37 |         events.event::<Added>(|event, emit| {
+36 |         events.event::<Added>(|event, emit| {
    |                        ^^^^^ type mismatch resolving `<Added as Event>::Time == u64`
    |
 note: expected this to be `u64`
@@ -16,9 +16,9 @@ note: required by a bound in `EventSetBuilder::<S>::event`
    |                             ^^^^^^^^^^^^^^ required by this bound in `EventSetBuilder::<S>::event`
 
 error[E0271]: type mismatch resolving `<Added as Event>::Time == u64`
-  --> tests/modules/ui/snapshot_time.rs:54:33
+  --> tests/modules/ui/snapshot_time.rs:59:33
    |
-54 |         for _ in batch.events::<Added>() {}
+59 |         for _ in batch.events::<Added>() {}
    |                                 ^^^^^ type mismatch resolving `<Added as Event>::Time == u64`
    |
 note: expected this to be `u64`
@@ -33,9 +33,9 @@ note: required by a bound in `events`
    |                          ^^^^^^^^^^^^^^ required by this bound in `ApplyContext::events`
 
 error[E0271]: type mismatch resolving `<Added as Event>::Time == u64`
-  --> tests/modules/ui/snapshot_time.rs:54:18
+  --> tests/modules/ui/snapshot_time.rs:59:18
    |
-54 |         for _ in batch.events::<Added>() {}
+59 |         for _ in batch.events::<Added>() {}
    |                  ^^^^^^^^^^^^^^^^^^^^^^^ type mismatch resolving `<Added as Event>::Time == u64`
    |
 note: expected this to be `u64`
@@ -50,9 +50,9 @@ note: required by a bound in `contime::ApplyContext::events::{anon_assoc#0}`
    |                          ^^^^^^^^^^^^^^ required by this bound in `ApplyContext::events::{anon_assoc#0}`
 
 error[E0308]: mismatched types
-  --> tests/modules/ui/snapshot_time.rs:58:10
+  --> tests/modules/ui/snapshot_time.rs:63:10
    |
-58 | #[derive(ContimeModule)]
+63 | #[derive(ContimeModule)]
    |          ^^^^^^^^^^^^^
    |          |
    |          expected `&i64`, found `&u64`
@@ -63,9 +63,9 @@ error[E0308]: mismatched types
    = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0308]: mismatched types
-  --> tests/modules/ui/snapshot_time.rs:58:10
+  --> tests/modules/ui/snapshot_time.rs:63:10
    |
-58 | #[derive(ContimeModule)]
+63 | #[derive(ContimeModule)]
    |          ^^^^^^^^^^^^^
    |          |
    |          expected `u64`, found `i64`
@@ -79,13 +79,13 @@ note: method defined here
    = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
 help: you can convert an `i64` to a `u64` and panic if the converted value doesn't fit
    |
-58 | #[derive(ContimeModule.try_into().unwrap())]
+63 | #[derive(ContimeModule.try_into().unwrap())]
    |                       ++++++++++++++++++++
 
 error[E0308]: mismatched types
-  --> tests/modules/ui/snapshot_time.rs:58:10
+  --> tests/modules/ui/snapshot_time.rs:63:10
    |
-58 | #[derive(ContimeModule)]
+63 | #[derive(ContimeModule)]
    |          ^^^^^^^^^^^^^
    |          |
    |          expected `ApplyBatch<'_, '_, u64, _>`, found `ApplyBatch<'_, '_, i64, AppEventLanes>`

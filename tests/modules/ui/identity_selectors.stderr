@@ -1,0 +1,63 @@
+error: only one field may be marked #[contime(id)]
+ --> tests/modules/ui/identity_selectors.rs:6:15
+  |
+6 |     #[contime(id)] second: u128,
+  |               ^^
+
+error: use either one ID field or a struct-level id selector; map requires the struct-level form
+  --> tests/modules/ui/identity_selectors.rs:9:1
+   |
+ 9 | / #[contime(id = |v| v.id)]
+10 | | struct Ambiguous { #[contime(id)] id: u128 }
+   | |____________________________________________^
+
+error: map requires a struct-level id selector
+  --> tests/modules/ui/identity_selectors.rs:12:1
+   |
+12 | / #[contime(map = |id| id)]
+13 | | struct FieldMap { #[contime(id)] id: u128 }
+   | |___________________________________________^
+
+error: select direct fields or a tuple of fields; put identity calculations in map
+  --> tests/modules/ui/identity_selectors.rs:15:20
+   |
+15 | #[contime(id = |v| v.id + 1, map = |id| id)]
+   |                    ^^^^^^^^
+
+error: customize events individually with event = Type
+  --> tests/modules/ui/identity_selectors.rs:19:1
+   |
+19 | #[contime(events = [Added], map = |id| id)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: event and snapshot identity selectors must have the same field count and tuple shape
+  --> tests/modules/ui/identity_selectors.rs:23:19
+   |
+23 | #[contime(event = Added, id = |v| v.id)]
+   |                   ^^^^^
+
+error: duplicate event registration
+  --> tests/modules/ui/identity_selectors.rs:28:19
+   |
+28 | #[contime(event = Added)]
+   |                   ^^^^^
+
+error: only one field may be marked #[contime(id)]
+  --> tests/modules/ui/identity_selectors.rs:35:15
+   |
+35 |     #[contime(id)] second: u128,
+   |               ^^
+
+error: use either one ID field or a struct-level id selector; map requires the struct-level form
+  --> tests/modules/ui/identity_selectors.rs:38:1
+   |
+38 | / #[contime(id = |v| v.id)]
+39 | | struct AmbiguousSnapshotId { #[contime(id)] id: u128 }
+   | |______________________________________________________^
+
+error: map requires a struct-level id selector
+  --> tests/modules/ui/identity_selectors.rs:41:1
+   |
+41 | / #[contime(map = |id| id)]
+42 | | struct SnapshotFieldMap { #[contime(id)] id: u128 }
+   | |___________________________________________________^

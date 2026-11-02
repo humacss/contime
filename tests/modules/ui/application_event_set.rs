@@ -37,13 +37,18 @@ impl EventId for OtherTime {
         self.id
     }
 }
-impl SnapshotApply for Total {
-    fn define(events: &mut EventSetBuilder<Self>) {
+impl contime::SnapshotEvents for Total {    fn define(events: &mut EventSetBuilder<Self>) {
         events.event::<Added>(|e, emit| emit(e.id));
     }
+}
+impl contime::SnapshotCreate for Total {
     fn create(id: u128, _: EventRef<'_>) -> Self {
         Self { id, ..Self::default() }
     }
+}
+impl SnapshotApply for Total {
+
+
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         for _ in batch.events::<OtherTime>() {}
     }

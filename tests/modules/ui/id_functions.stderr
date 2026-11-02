@@ -1,0 +1,27 @@
+error: duplicate identity option
+  --> tests/modules/ui/id_functions.rs:14:23
+   |
+14 | #[contime(id = first, id = second)]
+   |                       ^^
+
+error[E0308]: mismatched types
+ --> tests/modules/ui/id_functions.rs:4:16
+  |
+3 | #[derive(ContimeEvent)]
+  |          ------------ expected due to this
+4 | #[contime(id = wrong_argument)]
+  |                ^^^^^^^^^^^^^^ expected fn pointer, found fn item
+  |
+  = note: expected fn pointer `for<'a> fn(&'a WrongArgument) -> u128`
+                found fn item `fn(u64) -> u128 {wrong_argument}`
+
+error[E0308]: mismatched types
+ --> tests/modules/ui/id_functions.rs:9:16
+  |
+8 | #[derive(Clone, ContimeSnapshot)]
+  |                 --------------- expected due to this
+9 | #[contime(id = wrong_result)]
+  |                ^^^^^^^^^^^^ expected fn pointer, found fn item
+  |
+  = note: expected fn pointer `for<'a> fn(&'a WrongResult) -> u128`
+                found fn item `for<'a> fn(&'a WrongResult) -> u64 {wrong_result}`

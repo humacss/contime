@@ -32,12 +32,13 @@ impl contime::SnapshotId for Counter {
         Self::id_for(&self.counter_id)
     }
 }
-impl contime::SnapshotApply for Counter {
-    fn define(events: &mut contime::EventSetBuilder<Self>) {
+impl contime::SnapshotEvents for Counter {    fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Added>(|event, emit| {
             emit(<Counter>::id_for(&(event.counter_id)));
         });
     }
+}
+impl contime::SnapshotCreate for Counter {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Added>() {
             let mut snapshot = Self::default();
@@ -50,6 +51,10 @@ impl contime::SnapshotApply for Counter {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for Counter {
+
+
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         for _ in batch.events::<Added>() {}
     }

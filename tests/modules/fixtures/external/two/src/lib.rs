@@ -32,7 +32,15 @@ impl contime::SnapshotId for SecondState {
         Self::id_for(&self.id)
     }
 }
-impl contime :: SnapshotApply for SecondState { fn define (events : & mut contime :: EventSetBuilder < Self >) { events . event :: < Second > (| event , emit | { emit (SecondState :: id_for (& event . id)) ; }) ; } fn create (snapshot_id : u128 , event : contime :: EventRef < '_ >) -> Self { if let Some (event) = event . get :: < Second > () { let mut snapshot = Self :: default () ; { snapshot . id = (event . id) . clone () ; if contime :: SnapshotId :: snapshot_id (& snapshot) == snapshot_id { return snapshot ; } } } panic ! ("event does not initialize the requested snapshot") } fn apply_batch (& mut self , batch : impl contime :: ApplyContext < Self >) { for _ in batch . events :: < Second > () { } } }
+impl contime :: SnapshotApply for SecondState { fn apply_batch (& mut self , batch : impl contime :: ApplyContext < Self >) { for _ in batch . events :: < Second > () { } } }
+impl contime::SnapshotEvents for SecondState {
+ fn define (events : & mut contime :: EventSetBuilder < Self >) { events . event :: < Second > (| event , emit | { emit (SecondState :: id_for (& event . id)) ; }) ; }
+}
+
+impl contime::SnapshotCreate for SecondState {
+ fn create (snapshot_id : u128 , event : contime :: EventRef < '_ >) -> Self { if let Some (event) = event . get :: < Second > () { let mut snapshot = Self :: default () ; { snapshot . id = (event . id) . clone () ; if contime :: SnapshotId :: snapshot_id (& snapshot) == snapshot_id { return snapshot ; } } } panic ! ("event does not initialize the requested snapshot") }
+}
+
 
 #[derive(ContimeModule)]
 #[contime_module(time=i64,events=[Second],snapshots=[SecondState])]

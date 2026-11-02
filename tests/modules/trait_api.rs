@@ -47,12 +47,14 @@ impl contime::SnapshotId for Document {
         Self::id_for(&self.tenant, &self.list)
     }
 }
-impl SnapshotApply for Document {
+impl contime::SnapshotEvents for Document {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Written>(|event, emit| {
             emit(Document::id_for(&event.tenant, &event.list));
         });
     }
+}
+impl contime::SnapshotCreate for Document {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Written>() {
             let mut snapshot = Self::default();
@@ -66,6 +68,8 @@ impl SnapshotApply for Document {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl SnapshotApply for Document {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         assert_eq!(batch.snapshot_id(), self.snapshot_id());
         self.counts.push(batch.history_event_count());
@@ -138,12 +142,14 @@ impl contime::SnapshotId for GlobalState {
         Self::id_for()
     }
 }
-impl SnapshotApply for GlobalState {
+impl contime::SnapshotEvents for GlobalState {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<GlobalChange>(|_event, emit| {
             emit(GlobalState::id_for());
         });
     }
+}
+impl contime::SnapshotCreate for GlobalState {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if event.get::<GlobalChange>().is_some() {
             let snapshot = Self::default();
@@ -155,6 +161,8 @@ impl SnapshotApply for GlobalState {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl SnapshotApply for GlobalState {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         self.count += batch.events::<GlobalChange>().count();
     }

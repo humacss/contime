@@ -43,7 +43,7 @@ impl SnapshotId for List {
         self.id
     }
 }
-impl SnapshotApply for List {
+impl contime::SnapshotEvents for List {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Changed>(|event, emit| {
             for &id in &event.targets {
@@ -51,6 +51,8 @@ impl SnapshotApply for List {
             }
         });
     }
+}
+impl contime::SnapshotCreate for List {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Changed>() {
             let mut snapshot = {
@@ -69,6 +71,8 @@ impl SnapshotApply for List {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl SnapshotApply for List {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         assert_eq!(batch.snapshot_id(), self.snapshot_id());
         let time = *batch.time();
@@ -144,7 +148,7 @@ impl SnapshotId for StoredIdentity {
     }
 }
 
-impl SnapshotApply for StoredIdentity {
+impl contime::SnapshotEvents for StoredIdentity {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Changed>(|event, emit| {
             for &id in &event.targets {
@@ -152,6 +156,9 @@ impl SnapshotApply for StoredIdentity {
             }
         });
     }
+}
+
+impl contime::SnapshotCreate for StoredIdentity {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Changed>() {
             let snapshot = {
@@ -166,6 +173,8 @@ impl SnapshotApply for StoredIdentity {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl SnapshotApply for StoredIdentity {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         self.count += batch.events::<Changed>().count();
     }

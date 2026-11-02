@@ -60,19 +60,24 @@ impl SnapshotId for OrderedList {
     }
 }
 impl SnapshotApply for OrderedList {
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for event in batch.events::<OrderedValue>() {
+            self.values.push((event.time, event.value));
+        }
+    }
+}
+impl contime::SnapshotEvents for OrderedList {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<OrderedValue>(|event, emit| {
             emit(OrderedList::id_for(&event.list_id));
         });
     }
+}
+
+impl contime::SnapshotCreate for OrderedList {
     fn create(_snapshot_id: u128, event: EventRef<'_>) -> Self {
         let Some(event) = event.get::<OrderedValue>() else { unreachable!("the builder registers OrderedValue") };
         Self { list_id: event.list_id, ..Self::default() }
-    }
-    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
-        for event in batch.events::<OrderedValue>() {
-            self.values.push((event.time, event.value));
-        }
     }
 }
 
@@ -103,19 +108,24 @@ impl SnapshotId for ValueStatistics {
     }
 }
 impl SnapshotApply for ValueStatistics {
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        for _ in batch.events::<OrderedValue>() {
+            self.count += 1;
+        }
+    }
+}
+impl contime::SnapshotEvents for ValueStatistics {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<OrderedValue>(|event, emit| {
             emit(ValueStatistics::id_for(&event.list_id));
         });
     }
+}
+
+impl contime::SnapshotCreate for ValueStatistics {
     fn create(_snapshot_id: u128, event: EventRef<'_>) -> Self {
         let Some(event) = event.get::<OrderedValue>() else { unreachable!("the builder registers OrderedValue") };
         Self { list_id: event.list_id, ..Self::default() }
-    }
-    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
-        for _ in batch.events::<OrderedValue>() {
-            self.count += 1;
-        }
     }
 }
 

@@ -2,12 +2,16 @@ use contime::EventId;
 mod bounds;
 mod builder;
 mod context_api;
+mod event_helpers;
 mod external;
+mod field_ids;
 mod generic;
+mod id_helpers;
 mod identity;
 mod module_only;
 mod repeated;
 mod routing;
+mod time_helpers;
 mod trait_api;
 mod traits;
 
@@ -62,12 +66,14 @@ impl contime::SnapshotId for Counter {
         Self::id_for(&self.counter_id)
     }
 }
-impl contime::SnapshotApply for Counter {
+impl contime::SnapshotEvents for Counter {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Added>(|event, emit| {
             emit(Counter::id_for(&event.counter_id));
         });
     }
+}
+impl contime::SnapshotCreate for Counter {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Added>() {
             let mut snapshot = Self::default();
@@ -80,6 +86,8 @@ impl contime::SnapshotApply for Counter {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for Counter {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         for event in batch.events::<Added>() {
             self.value += event.amount;
@@ -114,12 +122,14 @@ impl contime::SnapshotId for CounterStatistics {
         Self::id_for(&self.counter_id)
     }
 }
-impl contime::SnapshotApply for CounterStatistics {
+impl contime::SnapshotEvents for CounterStatistics {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Added>(|event, emit| {
             emit(CounterStatistics::id_for(&event.counter_id));
         });
     }
+}
+impl contime::SnapshotCreate for CounterStatistics {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Added>() {
             let mut snapshot = Self::default();
@@ -132,6 +142,8 @@ impl contime::SnapshotApply for CounterStatistics {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for CounterStatistics {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         for _ in batch.events::<Added>() {
             self.count += 1;

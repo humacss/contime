@@ -13,13 +13,20 @@ struct MissingSnapshot {
 }
 impl :: contime :: checkpoints :: Snapshot for MissingSnapshot { type Time = i64 ; fn time (& self) -> & Self :: Time { & self . time } fn set_time (& mut self , time : Self :: Time) { self . time = time ; } }
 
-impl SnapshotApply for MissingSnapshot {
-    fn define(events: &mut EventSetBuilder<Self>) {
+impl contime::SnapshotEvents for MissingSnapshot {    fn define(events: &mut EventSetBuilder<Self>) {
         events.event::<MissingEvent>(|e, emit| emit(e.id));
     }
+
+}
+
+impl contime::SnapshotCreate for MissingSnapshot {
     fn create(id: u128, _: EventRef<'_>) -> Self {
         Self { id, ..Self::default() }
     }
+}
+impl SnapshotApply for MissingSnapshot {
+
+
     fn apply_batch(&mut self, _: impl ApplyContext<Self>) {}
 }
 #[derive(ContimeModule)]

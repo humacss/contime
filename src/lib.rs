@@ -19,8 +19,8 @@ With `macros`, derive [`ContimeModule`] on an empty module struct with explicit
 [`checkpoints::Event`] and [`EventId`]; snapshots implement
 [`checkpoints::Snapshot`], [`SnapshotId`] and [`SnapshotApply`] in ordinary Rust.
 Import common types with `use contime::prelude::*;`. Implement [`EventId`] and [`SnapshotId::snapshot_id`] to choose identity.
-[`SnapshotApply::define`] registers accepted event types and their destination-ID
-callbacks through [`EventSetBuilder`]. [`SnapshotApply::create`] initializes a
+[`SnapshotEvents::define`] registers accepted event types and their destination-ID
+callbacks through [`EventSetBuilder`]. [`SnapshotCreate::create`] initializes a
 selected history from its first [`EventRef`]. Its instance ID must match the
 selected route.
 
@@ -98,17 +98,19 @@ Run this example with `cargo run -p contime --example readme --features macros`.
 pub use crate::contime_core as core;
 pub mod module;
 pub mod prelude;
-pub use crate::contime_core::module::{ApplyContext, EventId, EventRef, EventSetBuilder, Module, SnapshotApply, SnapshotId};
+pub use crate::contime_core::module::{
+    ApplyContext, EventId, EventRef, EventSetBuilder, Module, SnapshotApply, SnapshotCreate, SnapshotEvents, SnapshotId,
+};
 pub use crate::contime_core::{checkpoints, lanes, AdvanceTime, Input, RejectionReason};
 #[cfg(feature = "runtime")]
 pub use crate::contime_runtime::ConTime as RawConTime;
 #[cfg(feature = "runtime")]
 pub use crate::contime_runtime::ModuleConTime as ConTime;
 #[cfg(feature = "macros")]
-pub use contime_macros::ContimeModule;
-#[cfg(feature = "macros")]
 #[doc(hidden)]
 pub use contime_macros::__contime_collect_module;
+#[cfg(feature = "macros")]
+pub use contime_macros::{ContimeEvent, ContimeModule, ContimeSnapshot};
 /// Caller-driven processing; creating an instance starts no background threads.
 #[cfg(feature = "manual")]
 pub mod manual;

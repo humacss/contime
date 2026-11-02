@@ -1,0 +1,34 @@
+error[E0271]: type mismatch resolving `<Changed as Event>::Time == i32`
+  --> tests/modules/ui/event_routing_types.rs:13:17
+   |
+13 | #[derive(Clone, ContimeSnapshot)]
+   |                 ^^^^^^^^^^^^^^^ type mismatch resolving `<Changed as Event>::Time == i32`
+   |
+note: expected this to be `i32`
+  --> tests/modules/ui/event_routing_types.rs:5:39
+   |
+ 5 | struct Changed { #[contime(time)] at: i64 }
+   |                                       ^^^
+   = help: see issue #48214
+   = note: this error originates in the derive macro `ContimeSnapshot` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0593]: function is expected to take 2 arguments, but it takes 1 argument
+  --> tests/modules/ui/event_routing_types.rs:9:33
+   |
+ 7 | #[derive(Clone, ContimeSnapshot)]
+   |                 --------------- required by a bound introduced by this call
+ 8 | #[contime(id = |_| 7)]
+ 9 | #[contime(event = Changed, id = wrong_route)]
+   |                                 ^^^^^^^^^^^ expected function that takes 2 arguments
+10 | struct BadRoute { #[contime(time)] at: i64 }
+11 | fn wrong_route(_: &Changed) -> u128 { 7 }
+   | ----------------------------------- takes 1 argument
+   |
+note: required by a bound in `EventSetBuilder::<S>::event`
+  --> src/_symlinks/core/src/module/event_set.rs
+   |
+   |     pub fn event<E: EventId<Time = S::Time> + 'static>(
+   |            ----- required by a bound in this associated function
+   |         &mut self,
+   |         route: impl Fn(&E, &mut dyn FnMut(u128)) + Send + Sync + 'static,
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `EventSetBuilder::<S>::event`

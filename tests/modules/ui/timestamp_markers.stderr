@@ -1,0 +1,23 @@
+error: mark a timestamp field with #[contime(time)] or supply #[contime(id = function)]
+ --> tests/modules/ui/timestamp_markers.rs:3:8
+  |
+3 | struct Missing { at:i64 }
+  |        ^^^^^^^
+
+error: only one field may be marked #[contime(time)]
+ --> tests/modules/ui/timestamp_markers.rs:5:48
+  |
+5 | struct Duplicate { #[contime(time)] first:i64, #[contime(time)] second:i64 }
+  |                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: expected #[contime(time)] or the field marker #[contime(id)]
+ --> tests/modules/ui/timestamp_markers.rs:7:28
+  |
+7 | struct Unknown { #[contime(unknown)] at:i64 }
+  |                            ^^^^^^^
+
+error: timestamp helpers require a struct
+ --> tests/modules/ui/timestamp_markers.rs:9:1
+  |
+9 | enum NotAStruct { A }
+  | ^^^^^^^^^^^^^^^^^^^^^

@@ -104,12 +104,14 @@ impl contime::SnapshotId for KeyState {
         Self::id_for(&self.key)
     }
 }
-impl contime::SnapshotApply for KeyState {
+impl contime::SnapshotEvents for KeyState {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<KeyEvent>(|event, emit| {
             emit(KeyState::id_for(&event.key));
         });
     }
+}
+impl contime::SnapshotCreate for KeyState {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<KeyEvent>() {
             let mut snapshot = Self::default();
@@ -122,6 +124,8 @@ impl contime::SnapshotApply for KeyState {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for KeyState {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         self.count += batch.events::<KeyEvent>().count();
     }
@@ -189,12 +193,14 @@ impl contime::SnapshotId for PositionedState {
         Self::id_for(&self.key)
     }
 }
-impl contime::SnapshotApply for PositionedState {
+impl contime::SnapshotEvents for PositionedState {
     fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<PositionedInput>(|event, emit| {
             emit(PositionedState::id_for(&event.key));
         });
     }
+}
+impl contime::SnapshotCreate for PositionedState {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<PositionedInput>() {
             let mut snapshot = {
@@ -210,6 +216,8 @@ impl contime::SnapshotApply for PositionedState {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for PositionedState {
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
         for input in batch.events::<PositionedInput>() {
             self.position += input.delta;

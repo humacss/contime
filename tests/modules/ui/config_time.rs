@@ -31,12 +31,13 @@ impl contime::SnapshotId for State {
         Self::id_for(&self.id)
     }
 }
-impl contime::SnapshotApply for State {
-    fn define(events: &mut contime::EventSetBuilder<Self>) {
+impl contime::SnapshotEvents for State {    fn define(events: &mut contime::EventSetBuilder<Self>) {
         events.event::<Changed>(|event, emit| {
             emit(<State>::id_for(&(event.id)));
         });
     }
+}
+impl contime::SnapshotCreate for State {
     fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
         if let Some(event) = event.get::<Changed>() {
             let mut snapshot = Self::default();
@@ -49,6 +50,10 @@ impl contime::SnapshotApply for State {
         }
         panic!("event does not initialize the requested snapshot")
     }
+}
+impl contime::SnapshotApply for State {
+
+
     fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {}
 }
 
