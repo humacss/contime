@@ -63,9 +63,9 @@ establish correct event ordering; the chain-hash case checks that separately.
 
 ## Run
 
-For a small public-API walkthrough, start with [`readme.rs`](readme.rs), the program
-included in the Rust API documentation. It runs two counters for five seconds and queries them
-at 20 Hz. Its small random changes and printing are self-contained.
+For a small public-API walkthrough, start with [`readme.rs`](../../readme.rs), the program
+included in the Rust API documentation. It inserts ordered-list events individually, checks late replay, and verifies
+that retrying an event does not apply it twice.
 
 ```sh
 cargo run --example readme --features macros

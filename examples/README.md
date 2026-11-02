@@ -6,9 +6,12 @@ repository root. Use `--release` when comparing performance.
 
 | Example | Command | Read first |
 | --- | --- | --- |
-| Ordered list with trait-based data | `cargo run --example ordered_list --features macros` | [`ordered_list.rs`](ordered_list.rs), step-by-step late insertion assertions |
+| README ordered list | `cargo run --example readme --features macros` | [`readme.rs`](readme.rs), simple IDs and intermediate late-insertion assertions |
+| Composite Content IDs | `cargo run --example composite_ids --features macros` | [`composite_ids.rs`](composite_ids.rs), field selection and mapping |
+| Event registration | `cargo run --example event_registration --features macros` | [`event_registration.rs`](event_registration.rs), defaults and overrides |
+| Module-local event subsets | `cargo run --example module_subsets --features macros` | [`module_subsets.rs`](module_subsets.rs), nested composition and snapshot-specific filtering |
+| Explicit traits | `cargo run --example explicit_traits` | [`explicit_traits.rs`](explicit_traits.rs), the same ordered list without ConTime macros |
 | Dependent modules | `cargo run --example modules --features macros` | [`modules.rs`](modules.rs), shared dependencies and multiple snapshot types |
-| Finite counter walkthrough | `cargo run --example readme --features macros` | [`cases/counter/readme.rs`](cases/counter/readme.rs), a complete counter program |
 | Live counters | `cargo run --release --all-features --example counter` | [`cases/counter/model.rs`](cases/counter/model.rs), then [`cases/counter/setup.rs`](cases/counter/setup.rs) |
 | Order-sensitive hash chains | `cargo run --release --all-features --example chain_hash` | [`cases/chain_hash/model.rs`](cases/chain_hash/model.rs), then [`cases/chain_hash/setup.rs`](cases/chain_hash/setup.rs) |
 | Client movement | `cargo run --release --all-features --example client_movement` | [`cases/client_movement/model.rs`](cases/client_movement/model.rs), then [`cases/client_movement/setup.rs`](cases/client_movement/setup.rs) |
@@ -21,7 +24,7 @@ together. If running one directly, use `--all-features`, then choose
 `--execution runtime|manual` for live cases. Ordinary library consumers still get
 only Runtime by default.
 
-The `readme` walkthrough stays intentionally small and uses Runtime. It is run
+The `readme` ordered-list walkthrough stays intentionally small and uses Runtime. It is run
 directly with `cargo run --example readme --features macros` and is not offered by the launcher. The separate
 [Manual code sample](cases/counter/manual.rs) is included in the Rust documentation;
 it is not another Cargo example target. Use `counter --execution manual`
@@ -29,13 +32,31 @@ to run the live counter with Manual processing.
 
 ## Folder layout
 
-Small, self-contained walkthroughs live directly under `examples/`:
-[`ordered_list.rs`](ordered_list.rs) introduces event application and queries;
-[`modules.rs`](modules.rs) builds on that with dependent modules. Run them directly;
-they do not use the launcher. The folders below organize the live diagnostic examples.
+Small, self-contained walkthroughs live directly under `examples/`. Each one
+includes its own definitions, startup, assertions and shutdown, and runs without
+the launcher or shared UI. Read them in the order that matches what you need:
+
+1. [`readme.rs`](readme.rs): field IDs, timestamps, late insertion and retries.
+2. [`event_registration.rs`](event_registration.rs): default event registration
+   and a singular override for renamed identity fields.
+3. [`composite_ids.rs`](composite_ids.rs): select multiple identity fields and
+   map them with Content ID; use the same mapping for queries.
+4. [`modules.rs`](modules.rs): combine snapshot types and nested modules while
+   deduplicating a shared dependency.
+5. [`module_subsets.rs`](module_subsets.rs): restrict one snapshot's accepted
+   events while another snapshot keeps its full event set.
+6. [`explicit_traits.rs`](explicit_traits.rs): implement the small README model
+   without any ConTime macros, using the lower-level execution contracts.
+
+These finite demonstrations use idle waits only while submissions are paused so
+that their assertions are easy to follow. They are not live synchronization or
+throughput examples. Configuration and shutdown code is repeated intentionally:
+each file can be read and copied without following support modules.
+
+The folders below organize the live diagnostic examples:
 
 - [`cases/`](cases/README.md): application models, lane setup, simulator callbacks,
-  correctness checks and self-contained walkthroughs.
+  correctness checks.
 - [`environments/`](environments/README.md): generic ConTime startup, native
   process lifetime, WASI hosting and browser clock/frame scheduling.
 - [`support/`](support/README.md): case selection and composition, shared
@@ -63,7 +84,7 @@ The counter, movement, and hash folders define application behavior: events,
 snapshots, destination IDs, and how an event changes a snapshot. Start with a
 folder's `model.rs`. Its small `setup.rs` adapts that definition to the shared
 example drivers; it contains no worker loop, pacing, backpressure, or UI.
-Walkthroughs stay in their case folders; live entry points under
+Live entry points under
 `support/entrypoints/` select the native composition. Portable compositions and
 case selection live in `support/composition/`; environments supply generic host
 capabilities and execution resources.
@@ -101,9 +122,8 @@ launcher's terminal presenter. Browser hosts use the same controller and Manual
 backend through a frame-budgeted adapter. Counter definitions and hash delivery
 rules are shared across environments.
 
-The small README counter walkthrough and historical-query walkthroughs remain
-self-contained programs. They are intended for learning the public API without
-having to read the live diagnostic harness.
+The single-file walkthroughs above teach the public API independently of this
+live diagnostic harness.
 
 Client movement runs in every environment with its own client/input/network
 settings group and live map. Native and threaded WASI support Runtime and Manual;

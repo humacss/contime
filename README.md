@@ -106,130 +106,94 @@ composable modules with `ContimeModule`:
 ```toml
 [dependencies]
 contime = { version = "0.1.2", features = ["macros"] }
-contentid = "1.0.0"
 ```
 
-An **event** describes a timestamped change. A **snapshot** defines the state,
-its stable identity fields, and how it applies those changes. A **module**
-registers the types together and selects their shared time type.
-
-The [ordered-list walkthrough](examples/ordered_list.rs) defines all
-three. Its snapshot only appends values; ConTime supplies timestamp order even
-when events arrive late. The core application rule is:
+An **event** describes a timestamped change. A **snapshot** defines state and how
+it applies those changes. A **module** combines snapshots, inferring their events and shared time.
+The [README walkthrough](examples/readme.rs) builds an ordered list:
 
 ```rust
 use contime::prelude::*;
 
-// Choose the ID function explicitly. Content ID hashes these event values;
-// repeating the same values produces the same ID and is treated as a retry.
-struct OrderedValue {
-    time: i64,
+// This ID uniquely identifies the event; duplicate submissions are ignored.
+#[derive(ContimeEvent)]
+struct Value {
+    #[contime(id)]
+    event_id: u128,
     list_id: u128,
+    #[contime(time)]
+    time: i64,
     value: char,
 }
-impl contime::checkpoints::Event for OrderedValue {
-    type Time = i64;
-    fn time(&self) -> Self::Time {
-        self.time
-    }
-}
 
-impl EventId for OrderedValue {
-    fn event_id(&self) -> u128 {
-        contentid::typed_content_id_u128("OrderedValue.v1", &(self.time, self.list_id, u32::from(self.value)))
-    }
-}
-
-// The builder routes each event to its list; create initializes the list identity.
-// Its explicit namespace keeps this snapshot identity separate from other types.
-// The update rule only appends: ConTime handles ordering and late-event replay.
-#[derive(Clone, Default)]
-struct OrderedList {
-    time: i64,
+// Register Value events. Their list_id selects the snapshot
+// with the same list_id.
+#[derive(Clone, Default, ContimeSnapshot)]
+#[contime(events = [Value])]
+struct List {
+    #[contime(id)]
     list_id: u128,
-    values: Vec<(i64, char)>,
-}
-impl contime::checkpoints::Snapshot for OrderedList {
-    type Time = i64;
-    fn time(&self) -> &Self::Time {
-        &self.time
-    }
-    fn set_time(&mut self, time: Self::Time) {
-        self.time = time;
-    }
+    #[contime(time)]
+    time: i64,
+    values: Vec<char>,
 }
 
-impl OrderedList {
-    fn id_for(list_id: &u128) -> u128 {
-        contentid::typed_content_id_u128("OrderedList.v1", list_id)
-    }
-}
-impl SnapshotId for OrderedList {
-    fn snapshot_id(&self) -> u128 {
-        Self::id_for(&self.list_id)
-    }
-}
-impl SnapshotApply for OrderedList {
-    fn define(events: &mut EventSetBuilder<Self>) {
-        events.event::<OrderedValue>(|event, emit| emit(Self::id_for(&event.list_id)));
-    }
-
-    fn create(_snapshot_id: u128, event: EventRef<'_>) -> Self {
-        let Some(event) = event.get::<OrderedValue>() else { unreachable!("the builder registers OrderedValue") };
-        Self { list_id: event.list_id, ..Self::default() }
-    }
-
+// Append each value to its list.
+impl SnapshotApply for List {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
-        for event in batch.events::<OrderedValue>() {
-            self.values.push((event.time, event.value));
+        for event in batch.events::<Value>() {
+            self.values.push(event.value);
         }
     }
 }
-```
 
-`define` registers each accepted event type and a callback that emits its destination
-snapshot IDs. `create` initializes a selected history from its first event;
-`snapshot_id(&self)` must return that same ID. This example uses Content ID
-explicitly; ConTime does not choose an ID algorithm.
-
-`apply_batch` handles one effective timestamp at a time. Typed views such as
-`batch.events::<OrderedValue>()` borrow payloads and can be read repeatedly.
-For several event types, write one loop per type in the phase order your
-application requires. ConTime preserves canonical order within each view.
-See the [identity and application guide](guides/modules/README.md#define-data-and-application-rules).
-
-Register the event and snapshot together with their common time type:
-
-```rust
 #[derive(ContimeModule)]
-#[contime_module(time = i64, events = [OrderedValue], snapshots = [OrderedList])]
-struct Values;
+#[contime(snapshots = [List])]
+struct Lists;
 ```
 
-With configuration supplied by your application, the basic flow is to start,
-submit an event, advance the processing target, and query state:
+ConTime initializes each list from the event's `list_id` and uses `Default`
+for the remaining fields. It replays state when earlier events arrive late.
+With configuration supplied by your application, the basic flow is:
 
 ```rust
-let contime = ConTime::<Values>::start(config)?;
-contime.apply([OrderedValue { time: 30, list_id: 7, value: 'c' }.into()])?;
-contime.advance_to(30)?;
-let snapshots = contime.query_at(30, [OrderedList::id_for(&7)])?;
+let contime = ConTime::<Lists>::start(config)?;
+// Submission order is c, a, b; timestamps put them in a, b, c order.
+contime.apply([
+    Value { event_id: 1, list_id: 7, time: 30, value: 'c' }.into(),
+    Value { event_id: 2, list_id: 7, time: -10, value: 'a' }.into(),
+    Value { event_id: 3, list_id: 7, time: 10, value: 'b' }.into(),
+]).map_err(api_error)?;
+contime.advance_to(30).map_err(api_error)?;
+// A controlled demonstration: finish processing before checking the result.
+contime.wait_until_idle(std::time::Duration::from_secs(5))?;
+let snapshots = contime.query_at(30, [7]).map_err(api_error)?;
+let ListsSnapshotLanes::List(list) = &*snapshots[0];
+assert_eq!(list.values, ['a', 'b', 'c']);
+
+fn api_error(error: contime::ApiError) -> std::io::Error {
+    std::io::Error::other(format!("ConTime request failed: {error:?}"))
+}
 ```
 
 `apply` queues work; queries observe available admitted history. The complete
-example is a controlled demonstration: it inserts `c`, `a`, then `b` individually,
-waits for replay between insertions, and asserts each queried result before printing
-`[(-10, 'a'), (10, 'b'), (30, 'c')]`. Idle waits are test/benchmark helpers;
-live applications should observe operation-specific responses or progress.
+walkthrough inserts `c`, `a`, then `b` individually, waits for replay between
+insertions, and asserts each queried result. It also retries an event to verify
+that the final list remains `['a', 'b', 'c']`. Idle waits are test/benchmark
+helpers; live applications should use operation-specific responses or progress.
 
 ```sh
-cargo run --example ordered_list --features macros
+cargo run --example readme --features macros
 ```
 
-The [complete source](examples/ordered_list.rs) explains event identity,
-snapshot routing, configuration, every intermediate assertion, and shutdown.
-See also [dependent modules](examples/modules.rs) and the
-[live counter, hash-chain and movement examples](examples/README.md).
+The [complete single-file example](examples/readme.rs) includes configuration,
+error handling, intermediate assertions, and shutdown. Then explore
+[composite Content IDs](examples/composite_ids.rs),
+[event registration overrides](examples/event_registration.rs),
+[handwritten traits without macros](examples/explicit_traits.rs), or
+[module composition](examples/modules.rs), or
+[module-local event subsets](examples/module_subsets.rs). These teaching examples are separate
+from the [live counter, hash-chain and movement cases](examples/README.md).
 
 Runtime and built-in integer time support are enabled by default. The
 [module walkthrough](guides/modules/README.md) explains module dependencies,

@@ -49,40 +49,31 @@ impl Direction {
     }
 }
 /// One client changes direction at its original input timestamp.
-#[derive(Clone, Debug)]
-
+#[derive(Clone, Debug, ContimeEvent)]
 pub struct MovementInput {
     /// Stable event identity; retained retransmissions reuse it.
+    #[contime(id)]
     pub id: u128,
     /// Destination snapshot ID, one per client. Client 1 belongs to the keyboard.
     pub client_id: u128,
     /// Original input time, preserved through simulated network delivery.
+    #[contime(time)]
     pub time: Time,
     /// Direction selected at this time.
     pub direction: Direction,
     /// Identical for all inputs in this run; used when creating or replaying a snapshot.
     pub motion: Motion,
 }
-impl contime::checkpoints::Event for MovementInput {
-    type Time = Time;
-    fn time(&self) -> Self::Time {
-        self.time
-    }
-}
-
-impl EventId for MovementInput {
-    fn event_id(&self) -> u128 {
-        self.id
-    }
-}
 
 /// Position is stored in billionths of a terminal world unit, without float drift.
-#[derive(Debug, Clone, Default)]
-
+#[derive(Debug, Clone, Default, ContimeSnapshot)]
+#[contime(event = MovementInput, id = character_event_ids)]
 pub struct Character {
     /// Destination snapshot ID, one per client. Client 1 belongs to the keyboard.
+    #[contime(id)]
     pub client_id: u128,
     /// ConTime snapshot metadata; independent of the movement integration anchor.
+    #[contime(time)]
     pub time: Time,
     /// Position at `integrated_at`, in fixed-point world coordinates.
     pub position: [i128; 2],
@@ -94,19 +85,16 @@ pub struct Character {
     /// Input applications represented by this snapshot, used for validation.
     pub events: u64,
 }
-impl contime::checkpoints::Snapshot for Character {
-    type Time = Time;
-    fn time(&self) -> &Self::Time {
-        &self.time
-    }
-    fn set_time(&mut self, time: Self::Time) {
-        self.time = time;
-    }
+
+fn character_event_ids(event: &MovementInput, emit: &mut dyn FnMut(u128)) {
+    emit(event.client_id);
 }
 
-impl SnapshotId for Character {
-    fn snapshot_id(&self) -> u128 {
-        self.client_id
+// Initial position depends on motion settings as well as identity.
+impl contime::SnapshotCreate for Character {
+    fn create(snapshot_id: u128, event: EventRef<'_>) -> Self {
+        let Some(input) = event.get::<MovementInput>() else { unreachable!("the builder registers MovementInput") };
+        Self::spawn(snapshot_id, input.motion)
     }
 }
 impl SnapshotApply for Character {
@@ -114,20 +102,6 @@ impl SnapshotApply for Character {
         for input in batch.events::<MovementInput>() {
             self.apply_input(input);
         }
-    }
-}
-impl contime::SnapshotEvents for Character {
-    fn define(events: &mut contime::EventSetBuilder<Self>) {
-        events.event::<MovementInput>(|event, emit| {
-            emit(event.client_id);
-        });
-    }
-}
-
-impl contime::SnapshotCreate for Character {
-    fn create(snapshot_id: u128, event: EventRef<'_>) -> Self {
-        let Some(input) = event.get::<MovementInput>() else { unreachable!("the builder registers MovementInput") };
-        Self::spawn(snapshot_id, input.motion)
     }
 }
 

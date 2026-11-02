@@ -28,59 +28,52 @@ impl AdvanceTime for Time {
     }
 }
 
+#[derive(ContimeEvent)]
 struct Count {
+    #[contime(id)]
     id: u128,
+    #[contime(time)]
     time: Time,
     counters: Vec<u128>,
 }
-impl :: contime :: checkpoints :: Event for Count { type Time = Time ; fn time (& self) -> Self :: Time { self . time } }
 
-impl EventId for Count {
-    fn event_id(&self) -> u128 {
-        self.id
-    }
-}
-
-#[derive(Clone, Default)]
+#[derive(Clone, Default, ContimeSnapshot)]
+#[contime(id = |counter| counter.id, map = counter_key)]
+#[contime(event = Count, id = counter_event_ids)]
 struct Counter {
     id: u128,
+    #[contime(time)]
     time: Time,
     value: u64,
 }
-impl :: contime :: checkpoints :: Snapshot for Counter { type Time = Time ; fn time (& self) -> & Self :: Time { & self . time } fn set_time (& mut self , time : Self :: Time) { self . time = time ; } }
 
-
-impl SnapshotId for Counter {
-    fn snapshot_id(&self) -> u128 {
-        self.id
-    }
+fn counter_key(id: u128) -> u128 {
+    contentid::typed_content_id_u128(std::any::type_name::<Counter>(), &id)
 }
-impl SnapshotApply for Counter {
 
-
-    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
-        self.value += batch.events::<Count>().count() as u64;
-    }
-}
-impl contime::SnapshotEvents for Counter {
-    fn define(events: &mut contime::EventSetBuilder<Self>) {
-        events.event::<Count>(|event, emit| {
-            for id in &event.counters {
-                emit(*id);
-            }
-        });
+fn counter_event_ids(event: &Count, emit: &mut dyn FnMut(u128)) {
+    for id in &event.counters {
+        emit(counter_key(*id));
     }
 }
 
 impl contime::SnapshotCreate for Counter {
-    fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
-        Self { id: snapshot_id, ..Self::default() }
+    fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
+        let Some(event) = event.get::<Count>() else { unreachable!("the builder registers Count") };
+        let Some(id) = event.counters.iter().copied().find(|id| counter_key(*id) == snapshot_id) else {
+            unreachable!("routing selected one of these counters")
+        };
+        Self { id, ..Self::default() }
+    }
+}
+impl SnapshotApply for Counter {
+    fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
+        self.value += batch.events::<Count>().count() as u64;
     }
 }
 
-
 #[derive(ContimeModule)]
-#[contime_module(time = Time, events = [Count], snapshots = [Counter])]
+#[contime(snapshots = [Counter])]
 struct Counters;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             contime.apply([Count { id: frame, time, counters: if frame % 2 == 0 { vec![1, 2] } else { vec![1] } }.into()])?;
             contime.advance_to(time)?;
             let rendered = rendered.clone();
-            contime.query_at(time, [1, 2], move |states| {
+            contime.query_at(time, [counter_key(1), counter_key(2)], move |states| {
                 let mut values = states
                     .into_iter()
                     .map(|state| {

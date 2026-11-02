@@ -8,29 +8,18 @@ use contime::prelude::*;
 pub use crate::definition::Time;
 
 /// Add an increment and extend the hash chain of every selected counter.
-#[derive(Clone, Debug, PartialEq, Eq)]
-
+#[derive(Clone, Debug, PartialEq, Eq, ContimeEvent)]
 pub struct CounterChanged {
     /// Stable source-event identity; also breaks equal-timestamp ordering ties.
+    #[contime(id)]
     pub event_id: u128,
     /// Distinct snapshot IDs receiving this same event.
     pub counter_ids: Vec<u128>,
     /// Application time; arrival order may differ from timestamp order.
+    #[contime(time)]
     pub time: Time,
     /// Signed increment included in both the total and the hashed contents.
     pub delta: i64,
-}
-impl contime::checkpoints::Event for CounterChanged {
-    type Time = Time;
-    fn time(&self) -> Self::Time {
-        self.time
-    }
-}
-
-impl EventId for CounterChanged {
-    fn event_id(&self) -> u128 {
-        self.event_id
-    }
 }
 
 /// Extend the full previous digest with the complete event contents.
@@ -52,12 +41,14 @@ pub fn chain_hash(previous: &[u8; 32], event: &CounterChanged) -> [u8; 32] {
 }
 
 /// One snapshot's numeric total, application count and complete ordered digest.
-#[derive(Debug, PartialEq, Eq, Clone, Default)]
-
+#[derive(Debug, PartialEq, Eq, Clone, Default, ContimeSnapshot)]
+#[contime(event = CounterChanged, id = counter_event_ids)]
 pub struct Counter {
     /// Stable identity of the counter receiving events.
+    #[contime(id)]
     pub counter_id: u128,
     /// State time, maintained by ConTime.
+    #[contime(time)]
     pub time: Time,
     /// Sum of the applied increments; addition alone cannot prove event order.
     pub value: i64,
@@ -66,19 +57,17 @@ pub struct Counter {
     /// BLAKE3 chain digest; the initial state contains 32 zero bytes.
     pub hash: [u8; 32],
 }
-impl contime::checkpoints::Snapshot for Counter {
-    type Time = Time;
-    fn time(&self) -> &Self::Time {
-        &self.time
-    }
-    fn set_time(&mut self, time: Self::Time) {
-        self.time = time;
+
+fn counter_event_ids(event: &CounterChanged, emit: &mut dyn FnMut(u128)) {
+    for id in &event.counter_ids {
+        emit(*id);
     }
 }
 
-impl SnapshotId for Counter {
-    fn snapshot_id(&self) -> u128 {
-        self.counter_id
+// Fanout selects a destination from a collection, so initialization stays explicit.
+impl contime::SnapshotCreate for Counter {
+    fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
+        Self { counter_id: snapshot_id, ..Self::default() }
     }
 }
 impl SnapshotApply for Counter {
@@ -86,21 +75,6 @@ impl SnapshotApply for Counter {
         for change in batch.events::<CounterChanged>() {
             self.apply_change(change);
         }
-    }
-}
-impl contime::SnapshotEvents for Counter {
-    fn define(events: &mut contime::EventSetBuilder<Self>) {
-        events.event::<CounterChanged>(|event, emit| {
-            for id in &event.counter_ids {
-                emit(*id);
-            }
-        });
-    }
-}
-
-impl contime::SnapshotCreate for Counter {
-    fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
-        Self { counter_id: snapshot_id, ..Self::default() }
     }
 }
 

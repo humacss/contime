@@ -14,28 +14,48 @@
     doc = r###"
 # Declarative modules
 
-With `macros`, derive [`ContimeModule`] on an empty module struct with explicit
-`events`, `snapshots` and child `modules` lists. Events implement
-[`checkpoints::Event`] and [`EventId`]; snapshots implement
-[`checkpoints::Snapshot`], [`SnapshotId`] and [`SnapshotApply`] in ordinary Rust.
-Import common types with `use contime::prelude::*;`. Implement [`EventId`] and [`SnapshotId::snapshot_id`] to choose identity.
-[`SnapshotEvents::define`] registers accepted event types and their destination-ID
-callbacks through [`EventSetBuilder`]. [`SnapshotCreate::create`] initializes a
-selected history from its first [`EventRef`]. Its instance ID must match the
-selected route.
+With `macros`, derive [`ContimeModule`] on an empty struct with
+`#[contime(snapshots = [OrderedList])]` and optional
+`#[contime(modules = [Shared])]` dependencies. Snapshot metadata supplies event
+lanes and the common time type; compile-time checks enforce agreement. Optional [`ContimeEvent`] and [`ContimeSnapshot`]
+helpers adapt ordinary application types; all underlying traits remain available.
+Import common types through `contime::prelude::*`.
 
-[`SnapshotApply::apply_batch`] receives `impl ApplyContext<Self>` for one effective
-timestamp. Read repeatable borrowed views with `events::<EventType>()`, applying
-each type in an explicit phase order. Use ordinary `Clone` and, when useful, `Default` implementations for snapshots.
-Only module composition needs a ConTime-specific derive.
+Mark one timestamp field with `#[contime(time)]`. Events and snapshots can mark one stored
+`u128` ID field with `#[contime(id)]`. Both can instead use
+`#[contime(id = |value| value.list_id)]`, selecting one field or a tuple. Optional
+`map = |fields| ...` transforms that selection into a `u128`. Non-Copy fields can
+be selected by reference. A field-ID shorthand cannot be combined with a map.
 
-A module selects the time type and combines its events, snapshots and dependencies
+On snapshots, `#[contime(events = [Added, Removed])]` registers default event
+sources. Singular `#[contime(event = Forwarded, id = |v| v.destination)]` can
+override the source selector and optional map. The same ID rule determines event
+destinations and initialized snapshot identity. Generated [`SnapshotCreate`]
+copies source identity fields and defaults other state; routing creates no snapshot.
+Supply Clone and Default separately when using inferred creation.
+
+[`SnapshotEvents::define`] and [`SnapshotCreate::create`] remain manually
+implementable for custom routing or initialization. [`SnapshotApply::apply_batch`]
+has an empty default and can be overridden in an ordinary trait implementation.
+Its [`ApplyContext`] exposes repeatable borrowed event views for one effective
+timestamp. Handle each event type in an explicit application-defined phase order.
+The helpers choose no hashing algorithm and add no payload Send/Sync bounds.
+
+A module infers the time type and combines its snapshots, inferred events and dependencies
 into flat enums. Shared registrations use consistent names; aliases can use
 `events = [Added = Incoming]` or the equivalent `snapshots` syntax. Registering
 one concrete type under different names produces conflicting conversion
 implementations at compile time.
 Start managed processing with `ConTime::<App>::start(config)` or drive the same
 module through `manual::ManualConTime::<App>::new(config)` with `manual` enabled.
+Use `#[contime(snapshot = Counter, events = [Added])]` to restrict one snapshot
+registration. Other snapshots can still receive omitted event types. Repeated
+contributions of the same snapshot union their subsets; a default/full registration
+includes all supported events. Filtering is cached at module initialization.
+Handwritten snapshots without derive metadata can provide an explicit
+`#[contime(events = [Added])]` list alongside snapshots; time is still inferred.
+The previous `contime_module(time = ..., events = ..., snapshots = ...)` form
+remains supported for existing code.
 All nested declarations must agree on the time type. Generated event and snapshot
 lanes remain available for typed submission and query results.
 
@@ -58,11 +78,9 @@ distributed across workers; a history is reconstructed in canonical event order.
 
 # Getting started
 
-With `macros` enabled, the complete example defines counter events and snapshots
-with ordinary traits and a module derive, starts four workers, and queries two counters at 20 Hz
-while a producer submits changes.
-Some events affect both counters. It runs for five seconds; `fastrand` only
-varies its example traffic and is not required by ConTime.
+With `macros` enabled, the complete example defines a numeric-ID ordered list,
+inserts events out of order, and verifies every intermediate query and a retry.
+It is finite and uses idle waits as a controlled testing aid.
 The module facade supplies the ordinary application wrapper. Use
 `start_with_wrapper` for custom [`checkpoints::ApplyWrapper`] hooks.
 No application framework or transport is required.
@@ -92,7 +110,7 @@ submissions; inspect its [`ShutdownReport`] for router and worker outcomes.
 
 Run this example with `cargo run -p contime --example readme --features macros`."###
 )]
-#![cfg_attr(all(feature = "runtime", feature = "macros"), doc = concat!("```rust\n", include_str!("../examples/cases/counter/readme.rs"), "\n```\n"))]
+#![cfg_attr(all(feature = "runtime", feature = "macros"), doc = concat!("```rust\n", include_str!("../examples/readme.rs"), "\n```\n"))]
 
 /// Shared application contracts and storage adapters for either execution mode.
 pub use crate::contime_core as core;

@@ -139,7 +139,7 @@ path = "examples/support/launcher/main.rs"
 
 [[example]]
 name = "readme"
-path = "examples/cases/counter/readme.rs"
+path = "examples/readme.rs"
 required-features = ["runtime", "macros"]
 
 [[example]]
@@ -168,9 +168,24 @@ path = "examples/modules.rs"
 required-features = ["macros", "runtime", "time"]
 
 [[example]]
-name = "ordered_list"
-path = "examples/ordered_list.rs"
+name = "composite_ids"
+path = "examples/composite_ids.rs"
 required-features = ["macros", "runtime", "time"]
+
+[[example]]
+name = "event_registration"
+path = "examples/event_registration.rs"
+required-features = ["macros", "runtime", "time"]
+
+[[example]]
+name = "module_subsets"
+path = "examples/module_subsets.rs"
+required-features = ["macros", "runtime", "time"]
+
+[[example]]
+name = "explicit_traits"
+path = "examples/explicit_traits.rs"
+required-features = ["runtime", "time"]
 
 [[bench]]
 name = "module_application"

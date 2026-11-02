@@ -62,6 +62,16 @@ impl SnapshotId for Total {
         self.owner
     }
 }
+impl contime::SnapshotEvents for Total {
+    fn define(events: &mut EventSetBuilder<Self>) {
+        events.event::<Added>(|e, emit| emit(e.owner)).event::<Bonus>(|e, emit| emit(e.owner));
+    }
+}
+impl contime::SnapshotCreate for Total {
+    fn create(owner: u128, _: EventRef<'_>) -> Self {
+        Self { owner, ..Self::default() }
+    }
+}
 impl SnapshotApply for Total {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
         for event in batch.events::<Added>() {
@@ -72,18 +82,6 @@ impl SnapshotApply for Total {
         }
     }
 }
-impl contime::SnapshotEvents for Total {
-    fn define(events: &mut EventSetBuilder<Self>) {
-        events.event::<Added>(|e, emit| emit(e.owner)).event::<Bonus>(|e, emit| emit(e.owner));
-    }
-}
-
-impl contime::SnapshotCreate for Total {
-    fn create(owner: u128, _: EventRef<'_>) -> Self {
-        Self { owner, ..Self::default() }
-    }
-}
-
 #[derive(ContimeModule)]
 #[contime_module(time=i64,events=[Added,Bonus],snapshots=[Total])]
 struct App;

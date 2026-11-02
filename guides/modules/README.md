@@ -2,179 +2,232 @@
 
 [Overview](../../README.md) · [Explicit traits](../usage/README.md) · [Time](../../crates/time/README.md)
 
-The `macros` feature re-exports `ContimeModule` from `contime-macros` in
-ConTime 0.1.2. Events and snapshots use ordinary trait implementations. Enable it with
-`contime = { version = "0.1.2", features = ["macros"] }`.
+ConTime 0.1.2 provides optional helpers through `features = ["macros"]`.
+Start with [`examples/readme.rs`](../../examples/readme.rs); each teaching
+example is one standalone file, separate from the launcher workloads.
 
-Start with the [step-by-step ordered-list walkthrough](../../examples/ordered_list.rs)
-for individual late insertions and intermediate assertions. Then run the complete
-[dependent-module example](../../examples/modules.rs):
+## Identity and timestamps
 
-```sh
-cargo run --example modules --features macros
-```
-
-## Define data and application rules
-
-IDs, destinations, initialization and application rules are ordinary Rust.
-Import common types with `use contime::prelude::*;`. Implement timestamp access
-through `checkpoints::Event` and `checkpoints::Snapshot`, and use ordinary Rust
-`Clone` and optional `Default` for snapshots. ConTime chooses no identity
-algorithm or namespace.
+Events and snapshots can mark one directly stored `u128` identity field:
 
 ```rust,ignore
-use contime::prelude::*;
-
-struct Added {
+#[derive(ContimeEvent)]
+struct OrderedValue {
+    #[contime(id)]
+    event_id: u128,
+    list_id: u128,
+    #[contime(time)]
     time: i64,
-    id: u128,
-    counter_id: u128,
-    amount: i64,
+    value: char,
 }
-impl contime::checkpoints::Event for Added {
-    type Time = i64;
-    fn time(&self) -> Self::Time {
-        self.time
-    }
-}
+```
 
-impl EventId for Added {
-    fn event_id(&self) -> u128 {
-        self.id
-    }
-}
+The field shorthand accepts exactly one ID field, on either an event or snapshot. It cannot be combined with a
+struct-level selector or `map`. For more complex event or snapshot identities,
+select a field or tuple of fields on the struct and optionally map that selection:
 
-#[derive(Clone, Default)]
-struct Counter {
+```rust,ignore
+#[contime(
+    id = |value| (value.owner_id, value.list_id),
+    map = |fields| make_content_id(fields),
+)]
+```
+
+The selector is declarative: one direct field or a nonempty tuple of direct
+fields. Use `&value.name` for non-Copy fields that a mapper should borrow. Mapping
+receives the selected value/tuple and must return `u128`; without `map`, the
+selection must already be `u128`. All computation belongs in the mapper.
+`map` requires an explicit struct-level selector. A standalone function receiving
+`&Self` is also supported for an opaque identity implementation without mapping;
+it cannot supply the source fields needed for inferred registration.
+
+The [composite-ID example](../../examples/composite_ids.rs) uses Content ID 1.0
+explicitly. The macro never chooses a hash algorithm or namespace. Ensure IDs
+are unique across event types and snapshot types. Type-name namespaces work for
+local examples; use stable application namespaces when IDs must survive renames.
+
+Time access is independent. `#[contime(time)]` selects one named or tuple field.
+Events clone its value; snapshots borrow it and assign it through `set_time`.
+The field type becomes `Time`, and modules infer it from snapshots and check all included types for agreement. Supply snapshot `Clone` yourself. No payload Send/Sync bounds are added.
+
+## Event registration and initialization
+
+```rust,ignore
+#[derive(Clone, Default, ContimeSnapshot)]
+#[contime(events = [OrderedValue, ValueRemoved])]
+#[contime(event = ForwardedValue, id = |value| value.destination)]
+struct OrderedList {
+    #[contime(id)]
+    list_id: u128,
+    #[contime(time)]
     time: i64,
-    counter_id: u128,
-    value: i64,
+    values: Vec<char>,
 }
-impl contime::checkpoints::Snapshot for Counter {
-    type Time = i64;
-    fn time(&self) -> &Self::Time {
-        &self.time
-    }
-    fn set_time(&mut self, time: Self::Time) {
-        self.time = time;
-    }
-}
+```
 
-impl SnapshotId for Counter {
-    fn snapshot_id(&self) -> u128 {
-        self.counter_id
-    }
-}
-impl SnapshotApply for Counter {
-    fn define(events: &mut EventSetBuilder<Self>) {
-        events.event::<Added>(|event, emit| emit(event.counter_id));
-    }
-    fn create(snapshot_id: u128, _event: EventRef<'_>) -> Self {
-        Self { counter_id: snapshot_id, ..Self::default() }
-    }
+`events = [...]` is a bracketed list of event types using the snapshot's defaults.
+`event = Type` registers one event, optionally overriding its `id` field selector,
+`map`, or both. An omitted option inherits the snapshot's option, including the
+absence of mapping. A registration-only `map` can use the inherited selector.
+Customization inside a plural registration is rejected; use singular attributes.
+Both forms may be mixed, and repeated spellings of an event type are errors.
+Aliases of the same concrete type cannot be resolved syntactically; the builder
+keeps the first registration. Use consistent names and spellings.
+
+Default registrations read the same named fields from the event. Overrides select
+source fields in the same order and tuple shape as the snapshot's identity fields.
+Their types must match. On first creation, those source fields are cloned into
+the snapshot's identity fields; other fields come from `Default`. Routing never
+constructs a temporary snapshot. Borrowed selectors do not clone identity fields
+while routing or mapping; creation clones them once into owned state.
+
+Overrides must produce the ID of the initialized snapshot. ConTime checks that
+invariant before accepting created state. The
+[registration walkthrough](../../examples/event_registration.rs) demonstrates defaults,
+renamed source fields and equivalent alternative mapping.
+
+The derive implements `SnapshotEvents` and `SnapshotCreate` independently from
+application. Automatic initialization requires snapshot `Default` and clonable
+identity fields. The macros do not implement Clone or Default themselves.
+
+## Application
+
+```rust,ignore
+impl SnapshotApply for OrderedList {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
-        for event in batch.events::<Added>() {
-            self.value += event.amount;
+        for event in batch.events::<OrderedValue>() {
+            self.values.push(event.value);
         }
     }
 }
 ```
 
-`EventId::event_id(&self)` returns an event ID unchanged. Use a field, a custom
-function, or an identity library. Payloads need no `Hash` or serialization unless
-your algorithm requires them. Use the standard `#[derive(Hash)]` when needed. You own uniqueness and stability across types.
-The [ordered-list example](../../examples/ordered_list.rs) chooses Content ID 1.0;
-the live counter uses supplied numeric IDs.
+`apply_batch` has an empty default: `impl SnapshotApply for OrderedList {}` opts
+into recording history and maintaining time without application-specific state
+updates. Add the method later to supply application logic. No application method
+attribute is needed.
 
-### Routing and snapshot identity
+Each call handles one complete effective timestamp bucket. Typed views borrow
+events and can be read repeatedly. Handle different event types in an explicit
+phase order chosen by your application. Each view preserves canonical ordering;
+ConTime never merges distinct effective timestamps into the same application.
+`ApplyContext` also exposes the snapshot ID, effective time and raw canonical
+history event count preceding this batch. Query and retention reconstruction use
+the same deterministic application logic.
 
-`SnapshotApply::define` registers accepted event types and destination-ID
-callbacks. The callback receives a borrowed event and an ID emitter, and can
-emit zero, one or many IDs. For example:
+## Handwritten implementations
+
+Every helper is optional. Omit generated identity/time implementations when you
+provide their traits manually. Without registration attributes, implement
+`SnapshotEvents::define` using `EventSetBuilder` and `SnapshotCreate::create`
+using the first `EventRef`; keep application on `SnapshotApply`.
 
 ```rust,ignore
-events.event::<SharedChange>(|event, emit| {
-    for &id in &event.counter_ids {
-        emit(id);
+impl SnapshotEvents for Counter {
+    fn define(events: &mut EventSetBuilder<Self>) {
+        events.event::<Changed>(|event, emit| {
+            for id in &event.targets { emit(*id); }
+        });
     }
-});
+}
+impl SnapshotCreate for Counter {
+    fn create(id: u128, _: EventRef<'_>) -> Self {
+        Self { id, ..Self::default() }
+    }
+}
 ```
 
-One event may be registered by several snapshot types, with different routing
-callbacks. The module's event lanes must contain every event registered by its
-snapshots. Definitions are cached and validated before Runtime starts threads
-or Manual starts processing. Duplicate registrations keep the first callback.
-Callbacks are shared for the lifetime of the definition. Any captured values
-must be `Send + Sync + 'static`; this does not add those bounds to events. Keep
-routing deterministic, using event fields or immutable configuration.
-
-`create(snapshot_id, event)` initializes the selected history once from its
-first input, before applying that input. Its `snapshot_id(&self)` must match the
-selected destination. Store the ID directly, or initialize identifying fields
-from the event via `event.get::<EventType>()`. Composite identities and hashing
-are application choices. Routing never initializes candidate snapshots.
-
-### Typed timestamp batches
-
-`apply_batch` receives one complete effective timestamp bucket. Use
-`events::<Added>()`, `events::<Cleared>()`, and other typed views in a deliberate
-phase order; do not depend on cross-type event interleaving. For example, handle
-all clears first, then additions. Views preserve canonical ordering within each
-type and can be read repeatedly without consuming each other. ConTime keeps
-distinct timestamps separate during live replay, historical queries and pruning.
-Late insertion reconstructs state using the same phase rules.
-
-The context also exposes `snapshot_id()`, `time()`, and `history_event_count()`.
-The count is the number of raw canonical events preceding this timestamp batch,
-not the count of any particular type. Views borrow payloads without cloning or
-boxing them. Up to eight event references stay inline; larger buckets allocate
-reference storage. Registration allocates metadata once per definition.
-
-Runtime type identification requires `'static` event types, but event values
-are only borrowed for the batch. This adds no `Clone`, `Send` or `Sync` bound;
-thread-local values remain supported in Manual. For payload types borrowing
-non-static data, the lower-level `checkpoints::ApplyEvents` contract remains
-available with its original iterator interface.
-
-The old snapshot `key`, `events`, `create` and `apply` attributes are rejected.
-Put these rules in the builder and trait methods instead. Multi-target application
-shares payloads across histories; it is not a cross-worker transaction.
+This path supports zero/many destinations, specialized initialization, and state
+without Default. The earlier explicit emitter form
+`#[contime(event = Changed, id = emit_counter_ids)]` remains available for custom
+routing with manual `SnapshotCreate`; it cannot be mixed with inferred registrations.
+For new custom models, handwritten registration keeps the contract explicit.
+The [explicit-traits example](../../examples/explicit_traits.rs) also shows the
+lower-level Input/ApplyEvents and Module contracts with no macros at all.
 
 ## Compose once and start one instance
 
 ```rust,ignore
 #[derive(ContimeModule)]
-#[contime_module(time = i64, events = [Added], snapshots = [Counter])]
+#[contime(snapshots = [Counter])]
 struct Counters;
 
 #[derive(ContimeModule)]
-#[contime_module(time = i64, modules = [Counters], snapshots = [CounterStatistics])]
+#[contime(snapshots = [CounterStatistics])]
+#[contime(modules = [Counters])]
 struct Statistics;
 
 #[derive(ContimeModule)]
-#[contime_module(time = i64, modules = [Counters, Statistics])]
+#[contime(modules = [Counters, Statistics])]
 struct App;
 
-let contime = contime::ConTime::<App>::start(config)?;
+let contime = ConTime::<App>::start(config)?;
 ```
 
-Each module explicitly declares its time type. Its events, snapshots and nested
-modules must use that same Rust type. Composition checks this during compilation,
-flattens transitive definitions, and deduplicates shared registrations. Cyclic module
-dependencies are compilation errors.
+The module infers its time from its first snapshot or child module. Events are
+collected from each snapshot's registration metadata, flattened and deduplicated.
+All snapshots, events and child modules must agree on time; mismatches and cyclic
+dependencies are compile errors. A source-free module needs an explicit
+`#[contime(time = i64)]` because there is no type from which to infer time.
 
-The generated `AppEventLanes` accepts `.into()` conversions from registered events.
-Queries return `AppSnapshotLanes`, whose variants contain the registered states.
-These types belong to the module; they are not separate construction parameters.
+Snapshot derives export hidden definition-site metadata, supporting paths across
+crates, renamed ConTime dependencies, generic snapshots and default generic
+arguments. No source scanning or runtime registration registry is used. The
+[composition walkthrough](../../examples/modules.rs) shows a shared dependency
+included once through multiple paths.
 
-With `manual` enabled, use `manual::ManualConTime::<App>::new(config)` and call
-`process()` from the host loop. Both execution modes use the same module and
-application contracts. Low-level adapters can use `RawConTime<I, S, W>` and
-`manual::RawManualConTime<I, S, W>` directly when adapting existing lane-level implementations.
+### Snapshot-specific event subsets
+
+```rust,ignore
+#[derive(ContimeModule)]
+#[contime(snapshot = Counter, events = [Added, Removed])]
+#[contime(snapshots = [AuditLog])]
+#[contime(modules = [Shared])]
+struct App;
+```
+
+Plural snapshots use defaults. Singular `snapshot = Type` also uses defaults
+unless `events = [...]` selects a subset of that snapshot's supported types.
+The subset is checked against the snapshot metadata and is local to this module
+registration. An event included for AuditLog does not reach Counter if Counter
+excludes it. An empty subset is valid and routes no events to that snapshot.
+
+When the same snapshot type/name appears through several modules, its subsets
+are unioned. A full/default contribution includes all supported events. Combining
+modules merges one shared history definition; it does not create separate copies
+with competing policies. See [`module_subsets.rs`](../../examples/module_subsets.rs)
+for a runnable demonstration of filtering while another snapshot receives the
+excluded event.
+
+Generated `AppEventLanes` accepts `.into()` conversions from included events.
+Queries return `AppSnapshotLanes`, with one variant per included snapshot type.
+Use `ManualConTime::<App>` with `manual` enabled for caller-driven processing;
+these definitions work with both execution modes.
+
+### Explicit metadata for handwritten snapshots
+
+If registration is handwritten and not declared on a snapshot derive, list the
+event types explicitly:
+
+```rust,ignore
+#[derive(ContimeModule)]
+#[contime(events = [Added, Removed])]
+#[contime(snapshots = [HandwrittenCounter])]
+struct App;
+```
+
+This escape hatch builds event lanes without snapshot metadata callbacks. At
+startup, the actual handwritten EventSet validates its supported event types and
+any requested subset. For large applications, wrap handwritten definitions in
+such a module and compose it with inferred modules. Supplying explicit event
+metadata is distinct from restricting a singular snapshot registration.
+The previous `#[contime_module(time = ..., events = ..., snapshots = ...)]`
+syntax remains compatible. The fully handwritten
+[`explicit_traits.rs`](../../examples/explicit_traits.rs) uses no derives at all.
 
 ## Registration names and aliases
 
-A module lists its own event and snapshot types and its child modules. Child
+A module lists snapshots and child modules, inferring event types by default. Child
 registrations are included automatically; ConTime accepts one final module.
 The macro generates flat enums and deduplicates repeated registration names,
 including shared dependencies reached through several modules. It emits Rust
@@ -187,11 +240,12 @@ retain the shared registration name explicitly:
 ```rust,ignore
 use Added as Incoming;
 #[derive(ContimeModule)]
-#[contime_module(time = i64, events = [Added = Incoming], modules = [Counters])]
+#[contime(events = [Added = Incoming])]
+#[contime(snapshots = [HandwrittenCounter])]
 struct App;
 ```
 
-The same `Name = Type` syntax works in `snapshots`. Distinct types with the same
+The same `Name = Type` syntax works in `snapshots` and singular event subsets. Distinct types with the same
 short name, or distinct generic specializations, need different names, for example
 `events = [Small = Number<u32>, Large = Number<u64>]`.
 
@@ -199,6 +253,12 @@ short name, or distinct generic specializations, need different names, for examp
 same Rust type. Registering it under different names prevents deduplication and
 causes conflicting generated `From` implementations at compile time. Use one
 registration name per concrete type; no duplicate lanes run silently.
+
+Inferred snapshot lookup uses its definition path to find the companion metadata.
+If you rename/import a snapshot under another name, use its qualified definition
+path for inference, or use explicit event metadata. Opaque type aliases do not
+carry an independently discoverable companion macro. Snapshot event aliases must
+also use consistent registration names across the application.
 
 ## Time and observations
 

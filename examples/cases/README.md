@@ -1,6 +1,6 @@
 # Launcher cases
 
-For self-contained walkthroughs, see [`ordered_list.rs`](../ordered_list.rs) and
+For self-contained walkthroughs, see [`readme.rs`](../readme.rs) and
 [`modules.rs`](../modules.rs). This folder contains the cases used by the launcher.
 
 Start here to understand the application being modelled. Each case owns its
