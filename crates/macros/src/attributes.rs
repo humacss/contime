@@ -1,4 +1,4 @@
-//! Explicit registration names are checked against actual Rust type equality.
+//! Module registrations and optional explicit metadata for handwritten snapshots.
 use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
@@ -10,59 +10,116 @@ pub struct Options {
     pub events: Vec<Lane>,
     pub snapshots: Vec<Lane>,
     pub modules: Vec<Path>,
+    pub infer_events: bool,
 }
+#[derive(Clone)]
 pub struct Lane {
     pub name: Ident,
     pub path: Path,
+    pub subset: Option<Vec<Lane>>,
 }
 impl Parse for Lane {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        if input.peek(Ident) && input.peek2(Token![=]) {
+        let (name, path) = if input.peek(Ident) && input.peek2(Token![=]) {
             let name = input.parse()?;
             input.parse::<Token![=]>()?;
-            Ok(Self { name, path: input.parse()? })
+            (name, input.parse()?)
         } else {
             let path: Path = input.parse()?;
-            Ok(Self { name: path.segments.last().unwrap().ident.clone(), path })
-        }
+            (path.segments.last().unwrap().ident.clone(), path)
+        };
+        Ok(Self { name, path, subset: None })
     }
+}
+fn lanes(input: ParseStream<'_>) -> syn::Result<Vec<Lane>> {
+    let list;
+    syn::bracketed!(list in input);
+    Ok(Punctuated::<Lane, Token![,]>::parse_terminated(&list)?.into_iter().collect())
+}
+fn paths(input: ParseStream<'_>) -> syn::Result<Vec<Path>> {
+    let list;
+    syn::bracketed!(list in input);
+    Ok(Punctuated::<Path, Token![,]>::parse_terminated(&list)?.into_iter().collect())
 }
 impl Options {
     pub fn read(input: &DeriveInput) -> syn::Result<Self> {
         let mut out = Self::default();
         let mut seen = std::collections::HashSet::new();
+        let mut modern = false;
+        let mut explicit_events = false;
+        let mut legacy = false;
         for attr in &input.attrs {
-            if !attr.path().is_ident("contime_module") {
-                continue;
-            }
-            attr.parse_nested_meta(|meta| {
-                let name = meta.path.get_ident().ok_or_else(|| meta.error("expected an option name"))?.to_string();
-                if !seen.insert(name.clone()) {
-                    return Err(meta.error("duplicate module option"));
-                }
-                let value = meta.value()?;
-                match name.as_str() {
-                    "time" => out.time_type = Some(value.parse()?),
-                    "events" | "snapshots" => {
-                        let list;
-                        syn::bracketed!(list in value);
-                        let lanes = Punctuated::<Lane, Token![,]>::parse_terminated(&list)?.into_iter().collect();
-                        if name == "events" {
-                            out.events = lanes;
-                        } else {
-                            out.snapshots = lanes;
+            if attr.path().is_ident("contime_module") {
+                legacy = true;
+                attr.parse_nested_meta(|meta| {
+                    let name = meta.path.get_ident().ok_or_else(|| meta.error("expected an option name"))?.to_string();
+                    if !seen.insert(name.clone()) {
+                        return Err(meta.error("duplicate module option"));
+                    }
+                    let value = meta.value()?;
+                    match name.as_str() {
+                        "time" => out.time_type = Some(value.parse()?),
+                        "events" => {
+                            out.events = lanes(value)?;
+                            explicit_events = true;
                         }
+                        "snapshots" => out.snapshots = lanes(value)?,
+                        "modules" => out.modules = paths(value)?,
+                        _ => return Err(meta.error("expected time, events, snapshots or modules")),
                     }
-                    "modules" => {
-                        let list;
-                        syn::bracketed!(list in value);
-                        out.modules = Punctuated::<Path, Token![,]>::parse_terminated(&list)?.into_iter().collect();
+                    Ok(())
+                })?;
+            } else if attr.path().is_ident("contime") {
+                modern = true;
+                let mut kind = None;
+                let mut snapshot = None;
+                attr.parse_nested_meta(|meta| {
+                    let key = meta.path.get_ident().ok_or_else(|| meta.error("expected a registration name"))?.to_string();
+                    if kind.is_none() {
+                        kind = Some(key.clone());
+                        match key.as_str() {
+                            "snapshot" => snapshot = Some(meta.value()?.parse::<Lane>()?),
+                            "snapshots" => out.snapshots.extend(lanes(meta.value()?)?),
+                            "modules" => out.modules.extend(paths(meta.value()?)?),
+                            "events" => {
+                                if explicit_events {
+                                    return Err(meta.error("duplicate explicit event list"));
+                                }
+                                out.events = lanes(meta.value()?)?;
+                                explicit_events = true;
+                            }
+                            "time" => {
+                                if out.time_type.is_some() {
+                                    return Err(meta.error("duplicate module time"));
+                                }
+                                out.time_type = Some(meta.value()?.parse()?);
+                            }
+                            _ => {
+                                return Err(meta.error(
+                                    "expected snapshot, snapshots or modules; explicit events/time are available for handwritten metadata",
+                                ))
+                            }
+                        }
+                    } else if kind.as_deref() == Some("snapshot") && key == "events" {
+                        let snapshot = snapshot.as_mut().unwrap();
+                        if snapshot.subset.is_some() {
+                            return Err(meta.error("duplicate snapshot event subset"));
+                        }
+                        snapshot.subset = Some(lanes(meta.value()?)?);
+                    } else {
+                        return Err(meta.error("customize one snapshot with snapshot = Type, events = [...]"));
                     }
-                    _ => return Err(meta.error("expected time, events, snapshots or modules")),
+                    Ok(())
+                })?;
+                if let Some(snapshot) = snapshot {
+                    out.snapshots.push(snapshot);
                 }
-                Ok(())
-            })?;
+            }
         }
+        if modern && legacy {
+            return Err(syn::Error::new_spanned(input, "use contime or contime_module consistently on a module"));
+        }
+        out.infer_events = modern && !explicit_events;
         Ok(out)
     }
 }

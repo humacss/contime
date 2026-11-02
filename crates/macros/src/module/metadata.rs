@@ -1,24 +1,24 @@
 //! Definition-site aliases and the cross-crate metadata callback protocol.
-use crate::attributes::Options;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
     parse::{Parse, ParseStream},
-    DeriveInput, Ident, Path, Token, Type, Visibility,
+    Ident, Path, Token, Type, Visibility,
 };
-fn sibling(path: &Path, prefix: &str) -> Path {
+pub(crate) fn sibling(path: &Path, prefix: &str) -> Path {
     let mut path = path.clone();
     let leaf = path.segments.last_mut().unwrap();
     leaf.ident = format_ident!("{}{}", prefix, leaf.ident);
+    leaf.arguments = syn::PathArguments::None;
     path
 }
-fn definition_path(path: &Path) -> Path {
+pub(crate) fn definition_path(path: &Path) -> Path {
     if path.leading_colon.is_some() || path.segments.first().is_some_and(|segment| segment.ident == "crate") {
         return path.clone();
     }
     let mut path = path.clone();
     if path.segments.first().is_some_and(|segment| segment.ident == "self") {
-        path.segments.first_mut().unwrap().ident = syn::parse_quote!(super);
+        path.segments.first_mut().unwrap().ident = Ident::new("super", path.segments.first().unwrap().ident.span());
         return path;
     }
     if path.segments.len() == 1 || path.segments.first().is_some_and(|segment| segment.ident == "super") {
@@ -31,25 +31,34 @@ fn list<T: Parse>(input: ParseStream<'_>) -> syn::Result<Vec<T>> {
     syn::bracketed!(content in input);
     Ok(content.parse_terminated(T::parse, Token![,])?.into_iter().collect())
 }
+#[derive(Clone)]
 pub(super) struct Lane {
     pub(super) name: Ident,
     pub(super) path: Path,
+    pub(super) subset: Option<Vec<Lane>>,
 }
 impl Parse for Lane {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        Ok(Self {
-            name: input.parse()?,
-            path: {
-                input.parse::<Token![=]>()?;
-                input.parse()?
-            },
-        })
+        let name = input.parse()?;
+        input.parse::<Token![=]>()?;
+        let path = input.parse()?;
+        let subset = if input.peek(Ident) {
+            let tag: Ident = input.parse()?;
+            if tag != "only" {
+                return Err(syn::Error::new_spanned(tag, "expected only"));
+            }
+            Some(list(input)?)
+        } else {
+            None
+        };
+        Ok(Self { name, path, subset })
     }
 }
 pub(super) struct Pending {
     pub(super) callback: Path,
     pub(super) prefix: Path,
     pub(super) ancestors: Vec<Ident>,
+    pub(super) snapshot: Option<Lane>,
 }
 impl Parse for Pending {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -64,6 +73,12 @@ impl Parse for Pending {
             ancestors: {
                 content.parse::<Token![,]>()?;
                 list(&content)?
+            },
+            snapshot: if content.peek(Token![;]) {
+                content.parse::<Token![;]>()?;
+                Some(content.parse()?)
+            } else {
+                None
             },
         })
     }
@@ -85,6 +100,8 @@ pub(super) struct Current {
     pub(super) snapshots: Vec<Lane>,
     pub(super) pending: Vec<Pending>,
     pub(super) time: Type,
+    pub(super) snapshot: bool,
+    pub(super) subset: Option<Vec<Lane>>,
 }
 impl Parse for State {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -107,6 +124,29 @@ impl Parse for State {
                 events: list(input)?,
                 snapshots: list(input)?,
                 pending: list(input)?,
+                snapshot: if input.peek(Ident) {
+                    let tag: Ident = input.parse()?;
+                    if tag != "snapshot" {
+                        return Err(syn::Error::new_spanned(tag, "expected snapshot"));
+                    }
+                    true
+                } else {
+                    false
+                },
+                subset: if input.peek(syn::token::Bracket) {
+                    let selection;
+                    syn::bracketed!(selection in input);
+                    let tag: Ident = selection.parse()?;
+                    if tag == "all" {
+                        None
+                    } else if tag == "only" {
+                        Some(list(&selection)?)
+                    } else {
+                        return Err(syn::Error::new_spanned(tag, "expected all or only"));
+                    }
+                } else {
+                    None
+                },
             })
         };
         Ok(Self { vis, name, time, events, snapshots, pending, seen, current })
@@ -118,7 +158,12 @@ pub(super) fn lane_tokens(lanes: &[Lane]) -> Vec<TokenStream> {
         .map(|l| {
             let n = &l.name;
             let p = &l.path;
-            quote!(#n=#p)
+            if let Some(subset) = &l.subset {
+                let events = lane_tokens(subset);
+                quote!(#n=#p only [#(#events),*])
+            } else {
+                quote!(#n=#p)
+            }
         })
         .collect()
 }
@@ -129,70 +174,22 @@ pub(super) fn pending_tokens(pending: &[Pending]) -> Vec<TokenStream> {
             let c = &p.callback;
             let r = &p.prefix;
             let a = &p.ancestors;
-            quote!((#c,#r,[#(#a),*]))
+            if let Some(snapshot) = &p.snapshot {
+                let snapshot = lane_tokens(std::slice::from_ref(snapshot));
+                {
+                    quote!((#c,#r,[#(#a),*];#(#snapshot)*))
+                }
+            } else {
+                quote!((#c,#r,[#(#a),*]))
+            }
         })
         .collect()
-}
-
-pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
-    if !input.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(&input.generics, "module markers currently require concrete types"));
-    }
-    if !matches!(&input.data, syn::Data::Struct(data) if matches!(data.fields,syn::Fields::Unit)) {
-        return Err(syn::Error::new_spanned(&input, "module markers must be empty unit structs"));
-    }
-    let options = Options::read(&input)?;
-    let root = crate::expansion::root();
-    let name = &input.ident;
-    let vis = &input.vis;
-    let time = options.time_type.ok_or_else(|| syn::Error::new_spanned(name, "module requires time = TimestampType"))?;
-    let key = format_ident!("__contime_key_{}_{}", name, crate::registration::suffix(&crate::registration::key(name)));
-    let exported = format_ident!("__contime_metadata_{}", key);
-    let callback = format_ident!("__contime_module_{}", name);
-    let types = format_ident!("__contime_types_{}", name);
-    let mut aliases = Vec::new();
-    let mut events = Vec::new();
-    let mut snapshots = Vec::new();
-    let mut deps = Vec::new();
-    for (index, event) in options.events.iter().enumerate() {
-        let alias = format_ident!("Event{}", index);
-        let n = &event.name;
-        let path = definition_path(&event.path);
-        aliases.push(quote!(pub type #alias=#path;));
-        events.push(quote!(#n=$($prefix)*::#alias));
-    }
-    for (index, lane) in options.snapshots.iter().enumerate() {
-        let path = &lane.path;
-        let alias = format_ident!("Snapshot{}", index);
-        let n = &lane.name;
-        let path = definition_path(path);
-        aliases.push(quote!(pub type #alias=#path;));
-        snapshots.push(quote!(#n=$($prefix)*::#alias));
-    }
-    for (index, path) in options.modules.iter().enumerate() {
-        let alias = format_ident!("Module{}", index);
-        let type_alias = format_ident!("Dependency{}", index);
-        let dep_callback = definition_path(&sibling(path, "__contime_module_"));
-        let dep_types = definition_path(&sibling(path, "__contime_types_"));
-        aliases.push(quote!(pub use #dep_callback as #alias;pub use #dep_types as #type_alias;));
-        deps.push(quote!(($($prefix)*::#alias,$($prefix)*::#type_alias,[$($ancestors,)* #key])));
-    }
-    // Public aliases retain definition-site resolution when metadata is expanded elsewhere.
-    Ok(quote! {
-        #[doc(hidden)] #[allow(non_snake_case,non_camel_case_types)] pub mod #types {use super::*;pub type __ContimeTime=#time;#(#aliases)*}
-        #[doc(hidden)] #[macro_export] macro_rules! #exported {
-            ($collector:path,[$($prefix:tt)*],[$($ancestors:ident),*],[$($state:tt)*])=>{
-                $collector!{$($state)* #key [$($ancestors),*] $($prefix)*::__ContimeTime [#(#events),*] [#(#snapshots),*] [#(#deps),*]}
-            }
-        }
-        #[doc(hidden)] pub use #exported as #callback;
-         #callback!(#root::__contime_collect_module,[#types],[],[#vis #name;#time; [] [] [] []]);
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::module::derive;
     #[test]
     fn leaf_paths_require_no_definition_metadata_macro() {
         let input = syn::parse_quote!(

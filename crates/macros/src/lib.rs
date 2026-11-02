@@ -1,4 +1,4 @@
-//! Static ConTime module composition over ordinary event and snapshot traits.
+//! Static module composition and optional time and ID helpers over ordinary traits.
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
 mod attributes;
@@ -6,19 +6,27 @@ mod expansion;
 mod helpers;
 mod module;
 mod registration;
-/// Assembles explicit event, snapshot and child-module lists into flat lanes.
+/// Assembles snapshots and nested modules into flat event and snapshot lanes.
 ///
-/// Registrations are deduplicated by registration name, with Rust type-equality
-/// checks guarding merges. A bare type uses its final path identifier as its name.
-/// Use `events = [Added = Incoming]` to retain the name `Added` when the type is
-/// imported as `Incoming`; the same syntax is supported in `snapshots`.
+/// Use `#[contime(snapshots = [Counter])]` for default registrations and
+/// `#[contime(snapshot = Audit, events = [Added])]` for a supported event subset.
+/// Add dependencies with `#[contime(modules = [Shared])]`. Snapshot metadata
+/// supplies event types; time is inferred from the first snapshot or child module,
+/// with compile-time checks that all included types agree.
 ///
-/// # Alias limitation
+/// Event subsets are local to one snapshot's cached registration. Contributions
+/// of the same snapshot union their subsets, with a full registration dominating.
+/// Shared module dependencies are included once and cycles are rejected.
+/// Handwritten snapshots can supply explicit `#[contime(events = [...])]` module
+/// metadata. The earlier `contime_module` syntax remains supported.
 ///
-/// Registering the same concrete type under different names is not automatically
-/// deduplicated and causes conflicting generated `From` implementations at compile
-/// time. Use one consistent registration name per type across composed modules.
-#[proc_macro_derive(ContimeModule, attributes(contime_module))]
+/// # Names and aliases
+/// Registrations deduplicate by name with Rust type-equality checks. Use consistent
+/// event names across snapshots. Different aliases for the same type are not
+/// discovered automatically. Inferred snapshots use their definition path to
+/// locate metadata; use the original qualified path or explicit event metadata
+/// for opaque snapshot aliases.
+#[proc_macro_derive(ContimeModule, attributes(contime, contime_module))]
 pub fn module(input: TokenStream) -> TokenStream {
     expansion::result(module::derive(parse_macro_input!(input as DeriveInput)))
 }

@@ -1,0 +1,31 @@
+error: customize one snapshot with snapshot = Type, events = [...]
+  --> tests/modules/ui/inferred_module_options.rs:14:29
+   |
+14 | #[contime(snapshots=[State],events=[Added])]
+   |                             ^^^^^^
+
+error: cannot infer time from an empty module; provide snapshots, child modules, or explicit time
+  --> tests/modules/ui/inferred_module_options.rs:21:8
+   |
+21 | struct Empty;
+   |        ^^^^^
+
+error: duplicate event in snapshot subset
+  --> tests/modules/ui/inferred_module_options.rs:17:40
+   |
+16 | #[derive(ContimeModule)]
+   |          ------------- in this derive macro expansion
+17 | #[contime(snapshot=State,events=[Added,Added])]
+   |                                        ^^^^^
+   |
+   = note: this error originates in the macro `__contime_module_Repeated` which comes from the expansion of the derive macro `ContimeModule` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: event is not registered by this snapshot
+  --> tests/modules/ui/inferred_module_options.rs:11:35
+   |
+10 | #[derive(ContimeModule)]
+   |          ------------- in this derive macro expansion
+11 | #[contime(snapshot=State, events=[Other])]
+   |                                   ^^^^^
+   |
+   = note: this error originates in the macro `__contime_module_Unsupported` which comes from the expansion of the derive macro `ContimeModule` (in Nightly builds, run with -Z macro-backtrace for more info)

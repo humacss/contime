@@ -1,10 +1,15 @@
-use contime::{ContimeModule };
+use contime::ContimeModule;
 
 pub struct Second {
     pub time: i64,
     pub id: u64,
 }
-impl :: contime :: checkpoints :: Event for Second { type Time = i64 ; fn time (& self) -> Self :: Time { self . time } }
+impl ::contime::checkpoints::Event for Second {
+    type Time = i64;
+    fn time(&self) -> Self::Time {
+        self.time
+    }
+}
 
 impl contime::EventId for Second {
     fn event_id(&self) -> u128 {
@@ -18,9 +23,15 @@ pub struct SecondState {
     pub time: i64,
     pub id: u64,
 }
-impl :: contime :: checkpoints :: Snapshot for SecondState { type Time = i64 ; fn time (& self) -> & Self :: Time { & self . time } fn set_time (& mut self , time : Self :: Time) { self . time = time ; } }
-
-
+impl ::contime::checkpoints::Snapshot for SecondState {
+    type Time = i64;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
+}
 
 impl SecondState {
     pub fn id_for(id: &u64) -> u128 {
@@ -32,16 +43,34 @@ impl contime::SnapshotId for SecondState {
         Self::id_for(&self.id)
     }
 }
-impl contime :: SnapshotApply for SecondState { fn apply_batch (& mut self , batch : impl contime :: ApplyContext < Self >) { for _ in batch . events :: < Second > () { } } }
 impl contime::SnapshotEvents for SecondState {
- fn define (events : & mut contime :: EventSetBuilder < Self >) { events . event :: < Second > (| event , emit | { emit (SecondState :: id_for (& event . id)) ; }) ; }
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<Second>(|event, emit| {
+            emit(SecondState::id_for(&event.id));
+        });
+    }
 }
-
 impl contime::SnapshotCreate for SecondState {
- fn create (snapshot_id : u128 , event : contime :: EventRef < '_ >) -> Self { if let Some (event) = event . get :: < Second > () { let mut snapshot = Self :: default () ; { snapshot . id = (event . id) . clone () ; if contime :: SnapshotId :: snapshot_id (& snapshot) == snapshot_id { return snapshot ; } } } panic ! ("event does not initialize the requested snapshot") }
+    fn create(snapshot_id: u128, event: contime::EventRef<'_>) -> Self {
+        if let Some(event) = event.get::<Second>() {
+            let mut snapshot = Self::default();
+            {
+                snapshot.id = (event.id).clone();
+                if contime::SnapshotId::snapshot_id(&snapshot) == snapshot_id {
+                    return snapshot;
+                }
+            }
+        }
+        panic!("event does not initialize the requested snapshot")
+    }
 }
-
+impl contime::SnapshotApply for SecondState {
+    fn apply_batch(&mut self, batch: impl contime::ApplyContext<Self>) {
+        for _ in batch.events::<Second>() {}
+    }
+}
 
 #[derive(ContimeModule)]
-#[contime_module(time=i64,events=[Second],snapshots=[SecondState])]
+#[contime(events = [Second])]
+#[contime(snapshots = [SecondState])]
 pub struct Module;

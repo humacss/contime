@@ -1,0 +1,23 @@
+error[E0308]: mismatched types
+  --> tests/modules/ui/inferred_module_event_alias.rs:6:24
+   |
+ 6 | #[derive(Clone,Default,ContimeSnapshot)]
+   |                        ^^^^^^^^^^^^^^^
+   |                        |
+   |                        expected `*mut Added`, found `*mut Other`
+   |                        arguments to this function are incorrect
+...
+10 | #[derive(ContimeModule)]
+   |          ------------- in this macro invocation
+   |
+   = note: expected raw pointer `*mut Added`
+              found raw pointer `*mut Other`
+note: function defined here
+  --> tests/modules/ui/inferred_module_event_alias.rs:6:24
+   |
+ 6 | #[derive(Clone,Default,ContimeSnapshot)]
+   |                        ^^^^^^^^^^^^^^^
+...
+10 | #[derive(ContimeModule)]
+   |          ------------- in this macro invocation
+   = note: this error originates in the macro `::contime::__contime_collect_module` which comes from the expansion of the macro `__contime_module_WrongAlias` (in Nightly builds, run with -Z macro-backtrace for more info)

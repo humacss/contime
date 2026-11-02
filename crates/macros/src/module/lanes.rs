@@ -2,7 +2,6 @@
 use super::metadata::State;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::Path;
 pub(super) fn generate(mut state: State) -> syn::Result<TokenStream> {
     let root = crate::expansion::root();
     let vis = &state.vis;
@@ -11,22 +10,31 @@ pub(super) fn generate(mut state: State) -> syn::Result<TokenStream> {
     let mut identity_checks = quote!();
     // Registration names select candidates; Rust proves type equality before deduplication.
     for lanes in [&mut state.events, &mut state.snapshots] {
-        let mut identities = std::collections::HashMap::<String, Path>::new();
-        lanes.retain(|lane| {
-            if let Some(previous) = identities.get(&lane.name.to_string()) {
-                let candidate = &lane.path;
-                identity_checks.extend(quote! {
-                    const _: fn() = || {
-                        fn __contime_same_lane<T>(_: *mut T, _: *mut T) {}
-                        __contime_same_lane(::core::ptr::null_mut::<#previous>(), ::core::ptr::null_mut::<#candidate>());
-                    };
-                });
-                false
+        let mut unique: Vec<super::metadata::Lane> = Vec::new();
+        for lane in lanes.drain(..) {
+            if let Some(previous) = unique.iter_mut().find(|entry| entry.name == lane.name) {
+                let a = &previous.path;
+                let b = &lane.path;
+                identity_checks.extend(quote!(const _:fn()=||{fn same<T>(_:*mut T,_:*mut T){} same(::core::ptr::null_mut::<#a>(),::core::ptr::null_mut::<#b>());};));
+                match (&mut previous.subset, lane.subset) {
+                    (Some(existing), Some(additional)) => {
+                        for event in additional {
+                            if let Some(old) = existing.iter().find(|old| old.name == event.name) {
+                                let a = &old.path;
+                                let b = &event.path;
+                                identity_checks.extend(quote!(const _:fn()=||{fn same<T>(_:*mut T,_:*mut T){} same(::core::ptr::null_mut::<#a>(),::core::ptr::null_mut::<#b>());};));
+                            } else {
+                                existing.push(event);
+                            }
+                        }
+                    }
+                    _ => previous.subset = None,
+                }
             } else {
-                identities.insert(lane.name.to_string(), lane.path.clone());
-                true
+                unique.push(lane);
             }
-        });
+        }
+        *lanes = unique;
     }
     let en = format_ident!("{}EventLanes", name);
     let sn = format_ident!("{}SnapshotLanes", name);
@@ -34,6 +42,20 @@ pub(super) fn generate(mut state: State) -> syn::Result<TokenStream> {
     let et = state.events.iter().map(|l| &l.path).collect::<Vec<_>>();
     let sv = state.snapshots.iter().map(|l| &l.name).collect::<Vec<_>>();
     let st = state.snapshots.iter().map(|l| &l.path).collect::<Vec<_>>();
+    let set_initializers = state
+        .snapshots
+        .iter()
+        .map(|lane| {
+            let snapshot = &lane.path;
+            let base = quote!(#root::module::EventSet::<#snapshot>::new());
+            if let Some(subset) = &lane.subset {
+                let events = subset.iter().map(|event| &event.path);
+                quote!(#base.with_event_types(&[#(::std::any::TypeId::of::<#events>()),*]))
+            } else {
+                base
+            }
+        })
+        .collect::<Vec<_>>();
     let sets = (0..st.len()).map(|index| format_ident!("__contime_events_{}", index)).collect::<Vec<_>>();
     let event_match = if ev.is_empty() { quote!(*self) } else { quote!(self) };
     let snapshot_match = if sv.is_empty() { quote!(*self) } else { quote!(self) };
@@ -49,7 +71,7 @@ pub(super) fn generate(mut state: State) -> syn::Result<TokenStream> {
             #(fn #sets() -> &'static #root::module::EventSet<#st> {
                 static SET: ::std::sync::OnceLock<#root::module::EventSet<#st>> = ::std::sync::OnceLock::new();
                 SET.get_or_init(|| {
-                    let set = #root::module::EventSet::<#st>::new();
+                    let set = #set_initializers;
                     set.validate::<Self>();
                     set
                 })

@@ -1,0 +1,75 @@
+error: cycle in ConTime module dependencies
+ --> tests/modules/ui/inferred_module_cycle.rs:7:8
+  |
+5 | #[derive(ContimeModule)]
+  |          ------------- in this macro invocation
+6 | #[contime(modules=[First])]
+7 | struct Second;
+  |        ^^^^^^
+  |
+  = note: this error originates in the macro `__contime_types_Second::Dependency0::Module0` which comes from the expansion of the macro `__contime_module_Second` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: cycle in ConTime module dependencies
+ --> tests/modules/ui/inferred_module_cycle.rs:4:8
+  |
+2 | #[derive(ContimeModule)]
+  |          ------------- in this macro invocation
+3 | #[contime(modules=[Second])]
+4 | struct First;
+  |        ^^^^^
+  |
+  = note: this error originates in the macro `__contime_types_First::Dependency0::Module0` which comes from the expansion of the macro `__contime_module_First` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Second: Module` is not satisfied
+ --> tests/modules/ui/inferred_module_cycle.rs:2:10
+  |
+2 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^ the trait `Module` is not implemented for `Second`
+  |
+  = note: this error originates in the macro `__contime_module_First` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `First: Module` is not satisfied
+ --> tests/modules/ui/inferred_module_cycle.rs:5:10
+  |
+2 | #[derive(ContimeModule)]
+  |          ------------- in this macro invocation
+...
+5 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^ the trait `Module` is not implemented for `First`
+  |
+  = note: this error originates in the macro `__contime_types_First::Module0` which comes from the expansion of the macro `__contime_module_First` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Second: Module` is not satisfied
+ --> tests/modules/ui/inferred_module_cycle.rs:2:10
+  |
+2 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^ the trait `Module` is not implemented for `Second`
+  |
+  = note: this error originates in the derive macro `ContimeModule` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `First: Module` is not satisfied
+ --> tests/modules/ui/inferred_module_cycle.rs:5:10
+  |
+5 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^ the trait `Module` is not implemented for `First`
+  |
+  = note: this error originates in the macro `__contime_module_Second` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `Second: Module` is not satisfied
+ --> tests/modules/ui/inferred_module_cycle.rs:2:10
+  |
+2 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^ the trait `Module` is not implemented for `Second`
+...
+5 | #[derive(ContimeModule)]
+  |          ------------- in this macro invocation
+  |
+  = note: this error originates in the macro `__contime_types_Second::Module0` which comes from the expansion of the macro `__contime_module_Second` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `First: Module` is not satisfied
+ --> tests/modules/ui/inferred_module_cycle.rs:5:10
+  |
+5 | #[derive(ContimeModule)]
+  |          ^^^^^^^^^^^^^ the trait `Module` is not implemented for `First`
+  |
+  = note: this error originates in the derive macro `ContimeModule` (in Nightly builds, run with -Z macro-backtrace for more info)

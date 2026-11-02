@@ -8,6 +8,7 @@ mod field_ids;
 mod generic;
 mod id_helpers;
 mod identity;
+mod inferred;
 mod module_only;
 mod repeated;
 mod routing;

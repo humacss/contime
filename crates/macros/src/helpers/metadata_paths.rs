@@ -34,6 +34,18 @@ pub(super) fn source_generics(mut generics: syn::Generics, levels: usize) -> syn
 pub(super) fn at_definition(_: &DeriveInput, ty: Type) -> Type {
     source_type(ty, 1)
 }
+/// Snapshot type arguments must retain their own definition-site relative paths.
+pub(crate) fn module_type(path: &syn::Path) -> Type {
+    let ty = source_type(syn::parse_quote!(#path), 1);
+    let Type::Path(mut ty) = ty else {
+        unreachable!("a path produces a type path");
+    };
+    if ty.path.leading_colon.is_none() && ty.path.segments.len() == 1 {
+        ty.path.segments.insert(0, syn::parse_quote!(super));
+    }
+    Type::Path(ty)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

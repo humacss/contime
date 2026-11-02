@@ -10,3 +10,5 @@ mod metadata_paths;
 mod options;
 mod selector;
 pub(crate) use expand::{event, snapshot};
+
+pub(crate) use metadata_paths::module_type;
