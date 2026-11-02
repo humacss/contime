@@ -9,3 +9,6 @@ pub use definition::{Definition, ValueKind};
 pub use movement::definitions as movement;
 #[cfg(test)]
 mod tests;
+
+mod uptime;
+pub use uptime::definitions as uptime;

@@ -2,13 +2,12 @@
 //! These guides are computed at startup, never from delivered or queried state.
 use super::{generation, showcase, Config};
 use crate::{
-    movement_example::model::{Character, Motion, Time, SECOND},
+    movement_example::model::{Character, Motion, SECOND},
     support::movement_report::IntendedPath,
 };
 
 pub(super) fn paths(config: &Config, scripted: bool) -> Vec<IntendedPath> {
     let motion = Motion { client_spacing: config.client_spacing, movement_speed: config.movement_speed };
-    let period = 1_000_000_000 / config.input_hz;
     (1..=config.clients)
         // Free keyboard movement has no predetermined path.
         .filter(|&client| scripted || client != 1)
@@ -20,7 +19,10 @@ pub(super) fn paths(config: &Config, scripted: bool) -> Vec<IntendedPath> {
                     let event = if scripted {
                         showcase::input(turn * 5 + client as u64 - 1, motion).0
                     } else {
-                        let time = Time(turn * period + (client as u64 - 1) * period / config.clients as u64 + 1);
+                        let time =
+                            generation::scheduled(config.clients, config.input_hz, turn * (config.clients - 1) as u64 + client as u64 - 2)
+                                .expect("bot guide has a configured client and frequency")
+                                .1;
                         generation::event(client, turn + 1, time, motion, turn)
                     };
                     state.apply_input(&event);

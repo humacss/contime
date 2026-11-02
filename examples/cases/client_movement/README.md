@@ -12,9 +12,11 @@ cargo run --release --all-features --example client_movement -- --execution manu
 ```
 
 The direct commands above retain the terminal view. For the shared Bevy graphics,
-choose **Client movement** in the central launcher with Native, WASI, WASI
-Threads or Browser. The browser uses Manual and its processing budget per frame;
-WASI Threads also supports Runtime. The startup form shows
+choose **Visualizer** in the central launcher with Native, WASI, WASI
+Threads or Browser, then **Client movement** in the graphical window. To configure
+all movement-specific settings before starting, use the launcher's
+`--example client-movement` option to open this case directly. The browser uses Manual and its processing budget per frame;
+WASI Threads also supports Runtime. The direct-case startup form shows
 client count, workers, input/query frequencies, delivery latency/jitter and trail
 and fade durations, with retention and checkpoint spacing in the ConTime group.
 The launcher collects these settings before starting the example; direct launches
@@ -53,6 +55,12 @@ Native, WASI and browser hosts share these defaults. At the default one-second
 bot cadence, late turns still cause corrections, but the 0–1,000 ms delay range
 does not normally reorder a bot's inputs. To demonstrate that too, use 1,000 ms
 average latency with ±1,000 ms jitter, or increase the input frequency. Delivery is simulated in support; ConTime is unchanged.
+
+Upcoming bot inputs are generated ahead within the timeline's visible future window.
+Their action timestamps stay on the shared ticks; each delivery is scheduled from
+that action time, not from preview generation. Only due inputs enter ConTime.
+Stopping discards future actions and drains inputs whose action time has passed.
+The scripted recording keeps its original schedule.
 
 The whole arena stays in view, with walls around its boundary. Faint, static
 dashed neutral-gray outlines mark the bots' intended squares in both comparison views.
@@ -149,9 +157,10 @@ The same flags work in Native, WASI and WASI Threads. Values are fixed at startu
 Each movement input carries the run's motion settings so snapshot creation and
 late-event replay use the same origin and speed without global configuration.
 
-Bots send one input per second by default. Each period is split into evenly
-spaced client slots; the player’s slot stays reserved while keyboard input
-remains immediate. Random network delay can still reorder delivery.
+Bots send one input per second by default, all on the same source ticks starting
+at one second. Their action times line up; independent random delays spread out
+their deliveries. Keyboard actions keep the time of the actual key press.
+A configured input frequency changes the shared tick interval.
 
 Bot generation repeats North/East/South/West square cycles with a distinct phase
 per client; it never sends Stop. Each side lasts one input period. The shared

@@ -40,7 +40,7 @@ Three application contracts define the relationship:
 
 [`setup.rs`](setup.rs) selects `CounterChanged` and `Counter` for the shared
 example tools through `CounterExample`. The environment uses those types to
-construct `ConTime<CounterChanged, Counter, ()>` or its Manual equivalent.
+construct `RawConTime<CounterChanged, Counter, ()>` or its Manual equivalent.
 There is no additional lane-registration step in this example.
 
 The `Example` trait is part of the diagnostic harness, not a ConTime requirement.

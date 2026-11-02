@@ -34,3 +34,21 @@ pub mod movement_host;
 
 #[path = "../../../environments/wasi/src/input.rs"]
 pub mod input;
+
+#[path = "../../../support/uptime/mod.rs"]
+pub mod uptime;
+#[path = "../../../cases/service_uptime/mod.rs"]
+pub mod uptime_example;
+pub mod uptime_host;
+
+#[path = "../../../support/accounts/mod.rs"]
+pub mod accounts;
+#[path = "../../../cases/account_balances/mod.rs"]
+pub mod accounts_example;
+pub mod accounts_host;
+
+#[path = "../../../support/robotics/mod.rs"]
+pub mod robotics;
+#[path = "../../../cases/robotics/mod.rs"]
+pub mod robotics_example;
+pub mod robotics_host;

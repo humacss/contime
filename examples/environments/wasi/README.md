@@ -115,7 +115,7 @@ repeatable selection, independent of timing and backpressure.
 
 ## Client movement
 
-Every live case is available here: `counter`, `chain-hash`, and `client-movement`.
+Every live case is available here: `counter`, `chain-hash`, `client-movement`, and `service-uptime`.
 The launcher opens the same Bevy movement window as Native, while the guest runs
 the simulator, delayed network, monitor and query validation. WASD/arrows choose
 a persistent direction; Space stops; q/Esc drains and validates before exit.
@@ -139,4 +139,15 @@ node --test tests/movement.mjs
 Client movement presentation uses the isolated
 [Bevy example](../../support/graphics/README.md), requiring Rust 1.95 for the
 native graphics window. ConTime still runs inside the selected WASI guest with
-its existing Rust 1.90 baseline. Other cases retain the terminal dashboard.
+its existing Rust 1.90 baseline. Service uptime uses this viewer too; counter and chain hash retain the terminal dashboard.
+
+## Service uptime
+
+The launcher supports Service uptime for both WASI targets, with Manual on
+standard WASI and Manual or Runtime on WASI Threads. Its simulation, ConTime
+queries and full reference validation stay in the WebAssembly guest; the shared
+Bevy desktop viewer receives bounded presentation reports. Use
+`--domain service-uptime` when starting the guest directly.
+See [the case guide](../../cases/service_uptime/README.md) for settings and
+headless examples. Closing the viewer flushes simulated reports in their scheduled
+delivery order, then validates and drains ConTime before the child exits.

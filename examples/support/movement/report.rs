@@ -100,6 +100,7 @@ impl Driver {
         let (unreconciled_positions, mut unreconciled_trails) = self.arrival_state.view(displayed, self.config.trail_ms);
         limited |= limit_trails(&mut trails, &mut unreconciled_trails);
         Report {
+            bot_hz: (!self.showcase).then_some(self.config.input_hz),
             clients: self.config.clients,
             client_spacing: self.config.client_spacing,
             movement_speed: self.config.movement_speed,
@@ -126,7 +127,7 @@ impl Driver {
                 now,
                 crate::support::movement_report::timeline_window(self.config.average_latency_ms, self.config.jitter_ms).0 as u64,
             ),
-            preview_limited: limited,
+            preview_limited: limited || self.delivery.len() > crate::support::movement_report::MAX_NETWORK_EVENTS / 2,
         }
     }
 }

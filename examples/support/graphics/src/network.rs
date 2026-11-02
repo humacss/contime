@@ -25,8 +25,7 @@ impl Axis {
         (start..=end).take(if visible { 90 } else { 0 }).map(|second| self.x(second * 1_000_000_000))
     }
     fn x(&self, time: u64) -> f32 {
-        let relative = (i128::from(time) - i128::from(self.now)) as f64;
-        (-96.0 + 192.0 * ((relative + self.past) / (self.past + self.future)).clamp(0.0, 1.0)) as f32
+        crate::timeline::time_x(time, self.now, self.past, self.future, -96.0, 192.0)
     }
 }
 pub(crate) fn icon(gizmos: &mut Gizmos, p: Vec2, direction: [f64; 2], color: Color, scale: f32) {
@@ -124,17 +123,12 @@ pub fn draw(
         let tip = Vec2::new(end, y);
         let delivery_color = crate::palette::input(event.client, 1.0);
         // The action carries direction; its delivery end is just a time boundary.
+        crate::timeline::delivery_tick(gizmos, tip, size, event.reordered, delivery_color);
         if event.reordered {
-            for offset in [-0.20, 0.20] {
-                let tick = tip + Vec2::X * offset;
-                gizmos.line_2d(tick - Vec2::Y * size, tick + Vec2::Y * size, delivery_color);
-            }
             let alpha = reordered_opacity(event, report.now_ns);
             if alpha > 0.0 && entries.complete(event.id) {
                 labels.push(Vec2::new((end + 0.7).min(80.0), y + 1.0), 24.0, "reordered", Style::Status, delivery_color.with_alpha(alpha));
             }
-        } else {
-            gizmos.line_2d(tip - Vec2::Y * size, tip + Vec2::Y * size, delivery_color);
         }
     }
     for event in &report.network {

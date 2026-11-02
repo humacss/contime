@@ -55,7 +55,7 @@ pub fn definitions(c: &Config) -> Vec<Definition> {
         "--input-hz",
         "Client movement",
         "Inputs / bot / second",
-        "Direction changes per bot, evenly staggered across client slots. Keyboard inputs use the same simulated delivery queue.",
+        "Direction changes per bot on shared source ticks. Independent delays spread delivery times; keyboard inputs use the same simulated delivery queue.",
         "inputs/s",
         1,
         60,

@@ -58,7 +58,7 @@ impl Delivery {
         let mut rows: Vec<_> = self
             .waiting
             .iter()
-            .take(4)
+            .take(MAX_NETWORK_EVENTS / 2)
             .map(|(&(due, _), event)| NetworkEvent {
                 id: event.id as u64,
                 client: event.client_id as usize,
@@ -80,6 +80,10 @@ impl Delivery {
         rows.sort_by_key(|e| (e.action_ns, e.id));
         rows
     }
+    /// Future previews are not actions that occurred before the run stopped.
+    pub fn discard_after(&mut self, stop: Time) {
+        self.waiting.retain(|_, input| input.time <= stop);
+    }
     pub fn len(&self) -> usize {
         self.waiting.len()
     }
@@ -96,6 +100,19 @@ mod tests {
     use super::*;
     use crate::movement_example::model::{Direction, Motion};
     #[test]
+    fn future_zero_delay_inputs_wait_for_action_time_and_stop_preserves_in_flight_actions() {
+        let mut queue = Delivery::new();
+        let input = |id, time| MovementInput { id, client_id: 2, time: Time(time), direction: Direction::East, motion: Motion::default() };
+        queue.schedule(input(1, 1_000_000_001), 1_000_000_001, 0, 0);
+        queue.schedule(input(2, 2_000_000_001), 2_000_000_001, 0, 0);
+        queue.schedule(input(3, 500_000_001), 500_000_001, 1000, 0);
+        assert!(queue.take_ready(1_000_000_000).is_empty());
+        queue.discard_after(Time(1_000_000_001));
+        assert_eq!(queue.take_ready(1_000_000_001).iter().map(|input| input.id).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(queue.take_ready(3_000_000_000).iter().map(|input| input.id).collect::<Vec<_>>(), vec![3]);
+        assert_eq!(queue.len(), 0);
+    }
+    #[test]
     fn wider_delay_range_regularly_reorders_inputs_for_every_bot() {
         let mut queue = Delivery::new();
         // A 0–2 second delay can reorder the one-second bot cadence.
@@ -105,9 +122,9 @@ mod tests {
                 .unwrap();
         let mut id = 0;
         for second in 0..80 {
-            for client in 2..=5 {
+            for client in 2u64..=5 {
                 id += 1;
-                let at = second * 1_000_000_000 + (client - 1) * 200_000_000;
+                let at = (second + 1) * 1_000_000_000 + 1;
                 queue.schedule(
                     MovementInput { id, client_id: client.into(), time: Time(at), direction: Direction::East, motion: Motion::default() },
                     at,
@@ -177,6 +194,28 @@ mod tests {
         assert!(!queue.timeline(delivered + past + 1, past).iter().any(|e| e.id == 1));
     }
     #[test]
+    fn pending_preview_includes_two_overlapping_bot_ticks_before_delivery() {
+        let mut queue = Delivery::new();
+        for id in 1u64..=8 {
+            let at = ((id - 1) / 4 + 1) * 1_000_000_000;
+            queue.schedule(
+                MovementInput {
+                    id: id.into(),
+                    client_id: ((id - 1) % 4 + 2).into(),
+                    time: Time(at),
+                    direction: Direction::East,
+                    motion: Motion::default(),
+                },
+                at,
+                2000,
+                0,
+            );
+        }
+        let preview = queue.timeline(2_000_000_000, 6_000_000_000);
+        assert_eq!(preview.len(), 8);
+        assert!(preview.iter().all(|event| event.arrived_ns.is_none()));
+    }
+    #[test]
     fn timeline_stays_bounded_with_a_large_queue_and_delivery_burst() {
         let mut queue = Delivery::new();
         for id in 1..=200 {
@@ -187,7 +226,7 @@ mod tests {
                 0,
             );
         }
-        assert_eq!(queue.timeline(100, 3_428_571_428).len(), 4);
+        assert_eq!(queue.timeline(100, 3_428_571_428).len(), MAX_NETWORK_EVENTS / 2);
         queue.take_ready(2_000_000_000);
         assert_eq!(queue.recent.len(), MAX_NETWORK_EVENTS);
         let rows = queue.timeline(2_000_000_000, 3_428_571_428);

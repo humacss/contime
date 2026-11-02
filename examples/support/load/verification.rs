@@ -2,7 +2,7 @@
 use crate::definition::{Example, Time};
 use contime::checkpoints::CheckpointConfig;
 use contime::checkpoints::{ApplyEvents, Event, Snapshot};
-use contime::manual::{FrameReport, RawManualConTime, ManualConfig, StopReason};
+use contime::manual::{FrameReport, ManualConfig, RawManualConTime, StopReason};
 use serde::Serialize;
 use std::{cell::RefCell, collections::VecDeque, num::NonZeroUsize, rc::Rc};
 

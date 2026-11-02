@@ -40,7 +40,7 @@ pub struct Driver {
     stop: Option<Time>,
     stopped_at: Option<Duration>,
     next_inputs: u64,
-    showcase: bool,
+    pub(super) showcase: bool,
     pub(super) intended_paths: Vec<crate::support::movement_report::IntendedPath>,
     next_query: u64,
     last_target: Time,
@@ -161,6 +161,7 @@ impl Driver {
         if stop || self.config.duration.is_some_and(|d| elapsed >= d) {
             self.stop.get_or_insert(Time(now));
             self.stopped_at.get_or_insert(elapsed);
+            self.delivery.discard_after(self.stop.expect("stop was set"));
         }
         for direction in self.pending_input.drain(..) {
             self.sequence += 1;
@@ -172,7 +173,10 @@ impl Driver {
             );
         }
         if self.stop.is_none() {
-            // Bound catch-up after a long host pause; each input keeps its own action time.
+            // Preview the visible future, while keeping generation bounded per host turn.
+            // Scripted recordings retain their original generation schedule.
+            let future = crate::support::movement_report::timeline_window(self.config.average_latency_ms, self.config.jitter_ms).1;
+            let horizon = now.saturating_add(future as u64);
             for _ in 0..1024 {
                 if self.showcase {
                     let (input, delay_ms) = showcase::input(self.next_inputs, self.motion);
@@ -188,13 +192,13 @@ impl Driver {
                 let Some((client, time)) = generation::scheduled(self.config.clients, self.config.input_hz, self.next_inputs) else {
                     break;
                 };
-                if time.0 > now {
+                if time.0 > horizon {
                     break;
                 }
                 self.sequence += 1;
                 let input =
                     generation::event(client, self.sequence, time, self.motion, self.next_inputs / (self.config.clients - 1) as u64);
-                self.delivery.schedule(input, now, self.config.average_latency_ms, self.config.jitter_ms);
+                self.delivery.schedule(input, time.0, self.config.average_latency_ms, self.config.jitter_ms);
                 self.next_inputs += 1;
             }
         }
@@ -277,6 +281,39 @@ mod comparison_tests {
     use super::*;
     use crate::support::monitored::{backend, Options};
 
+    #[test]
+    fn bots_generate_on_shared_ticks_but_keep_independent_network_delays() {
+        let config = Config::parse(["--execution", "manual"].map(str::to_owned)).unwrap().unwrap();
+        let backend = backend::Manual::<MovementExample>::new(&Options { snapshots: 5, ..Default::default() }).unwrap();
+        let mut driver = Driver::new(&backend, config).unwrap();
+        let mut monitor = WorkerMonitor::attach(&backend);
+        let initialized = driver.submitted;
+        driver.step(&backend, &mut monitor, Duration::ZERO, false).unwrap();
+        let preview = driver.report();
+        assert!(!preview.network.is_empty(), "preview upcoming bot inputs at startup");
+        assert!(preview.network.iter().all(|input| input.action_ns > preview.now_ns && input.arrived_ns.is_none()));
+        assert_eq!(preview.submitted, initialized, "previewing an input must not submit it");
+        preview.validate().unwrap();
+        for ms in 1..=1000 {
+            driver.step(&backend, &mut monitor, Duration::from_millis(ms), false).unwrap();
+        }
+        let report = driver.report();
+        assert_eq!(report.bot_hz, Some(1));
+        let tick: Vec<_> = report.network.iter().filter(|input| input.action_ns == 1_000_000_001).collect();
+        assert_eq!(tick.len(), 4);
+        assert!(report.network.iter().any(|input| input.action_ns > report.now_ns));
+        let deliveries: std::collections::BTreeSet<_> = tick.iter().map(|input| input.delivery_ns).collect();
+        assert!(deliveries.len() > 1, "delivery jitter must remain independent across bots");
+        for ms in 1001..8000 {
+            if driver.step(&backend, &mut monitor, Duration::from_millis(ms), true).unwrap() {
+                break;
+            }
+        }
+        assert!(driver.done);
+        assert_eq!(driver.submitted, initialized + 4, "stop must discard actions that have not occurred");
+        drop(monitor);
+        backend.shutdown().unwrap();
+    }
     #[test]
     fn late_out_of_order_input_repairs_only_the_reconciled_view_on_the_same_query_clock() {
         let config = Config::parse(["--headless", "--clients", "1"].map(str::to_owned)).unwrap().unwrap();

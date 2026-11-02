@@ -21,8 +21,12 @@ impl SettingsForm {
     pub fn new(selection: Selection, options: &Options) -> Result<Self, String> {
         options.validate(selection)?;
         let mut result = Self { definitions: Vec::new(), form: Form::new(Vec::new(), true), selection, options: options.clone() };
-        result.definitions = if selection.domain == Domain::Movement {
+        result.definitions = if selection.domain == Domain::Visualizer {
+            super::visualizer::definitions(selection, &options.example_args)?
+        } else if selection.domain == Domain::Movement {
             schema::movement(&result.parse_movement(&options.example_args)?)
+        } else if selection.domain == Domain::Uptime {
+            schema::uptime(&result.parse_uptime(&options.example_args)?)
         } else {
             schema::common(&result.parse_common(&options.example_args)?, selection.execution == Execution::Manual)
         };
@@ -62,6 +66,15 @@ impl SettingsForm {
     fn parse_movement(&self, args: &[String]) -> Result<Config, String> {
         Config::parse(args.iter().cloned().chain(["--execution".into(), self.selection.execution.slug().into()]))?
             .ok_or_else(|| "Use launcher --help for usage".into())
+    }
+    fn parse_uptime(&self, args: &[String]) -> Result<crate::support::uptime_config::Config, String> {
+        crate::support::uptime_config::Config::parse(
+            args.iter().cloned().chain(["--execution".into(), self.selection.execution.slug().into()]),
+        )?
+        .ok_or_else(|| "Use launcher --help for usage".into())
+    }
+    pub fn uptime(&self) -> Result<crate::support::uptime_config::Config, String> {
+        self.parse_uptime(&self.arguments()?)
     }
     fn arguments_from(&self, form: &Form) -> Result<Vec<String>, String> {
         let mut args = self.options.example_args.clone();
@@ -124,8 +137,12 @@ impl SettingsForm {
     }
     fn validate_values(&self, form: &Form) -> Result<(), String> {
         let args = self.arguments_from(form)?;
-        if self.selection.domain == Domain::Movement {
+        if self.selection.domain == Domain::Visualizer {
+            super::visualizer::configs(self.selection, &args)?;
+        } else if self.selection.domain == Domain::Movement {
             self.parse_movement(&args)?;
+        } else if self.selection.domain == Domain::Uptime {
+            self.parse_uptime(&args)?;
         } else {
             self.parse_common(&args)?;
         }
@@ -149,8 +166,12 @@ impl SettingsForm {
         let Ok(args) = self.arguments_from(form) else {
             return;
         };
-        let definitions = if self.selection.domain == Domain::Movement {
+        let definitions = if self.selection.domain == Domain::Visualizer {
+            super::visualizer::definitions(self.selection, &args)
+        } else if self.selection.domain == Domain::Movement {
             self.parse_movement(&args).map(|c| schema::movement(&c))
+        } else if self.selection.domain == Domain::Uptime {
+            self.parse_uptime(&args).map(|c| schema::uptime(&c))
         } else {
             self.parse_common(&args).map(|s| schema::common(&s, self.selection.execution == Execution::Manual))
         };
@@ -192,6 +213,39 @@ mod tests {
         let selection = Selection::new(environment, execution, domain).unwrap();
         let options = Options { example_args: args.iter().map(|s| s.to_string()).collect(), ..Options::default() };
         SettingsForm::new(selection, &options).unwrap()
+    }
+    #[test]
+    fn visualizer_settings_show_only_shared_configuration() {
+        for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads, Environment::Browser] {
+            let mut form = session(environment, Execution::Manual, Domain::Visualizer, &[]);
+            for id in ["--services", "--clients", "--events-per-second", "--snapshots", "--workers"] {
+                assert!(form.field(id).is_none());
+            }
+            form.edit("--query-hz", "5");
+            let (movement, uptime) = super::super::visualizer::configs(form.selection, &form.arguments().unwrap()).unwrap();
+            assert_eq!((movement.query_hz, uptime.query_hz), (5, 5));
+            assert_eq!((movement.jitter_ms, uptime.jitter_ms), (500, 800));
+        }
+    }
+    #[test]
+    fn uptime_settings_are_startup_only_and_round_trip_for_every_host() {
+        for host in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads, Environment::Browser] {
+            let mut form = session(host, Execution::Manual, Domain::Uptime, &[]);
+            for id in ["--clients", "--input-hz", "--movement-speed", "--events-per-second", "--snapshots", "--workers"] {
+                assert!(form.field(id).is_none(), "{id}");
+            }
+            assert_eq!(form.field("--services").unwrap().group, Some("Service uptime"));
+            form.edit("--services", "3");
+            form.edit("--cadence-ms", "250");
+            form.edit("--latency-ms", "1200");
+            let config = form.uptime().unwrap();
+            assert_eq!((config.services, config.cadence_ms, config.latency_ms), (3, 250, 1200));
+            let url = form.browser().unwrap().uptime_url("http://localhost/", &config);
+            assert!(url.contains("domain=service-uptime") && url.contains("services=3") && url.contains("cadence_ms=250"));
+            assert!(!url.contains("clients="));
+            form.edit("--services", "17");
+            assert!(form.uptime().is_err());
+        }
     }
     #[test]
     fn groups_are_composed_for_the_selected_case_and_environment() {

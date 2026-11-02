@@ -12,7 +12,13 @@ stay with their case; shared support connects them to the chosen environment.
 - [Chain hash](chain_hash/README.md): order-sensitive application and reference validation.
 - [Client movement](client_movement/README.md): timestamped direction inputs, character snapshots and corrected paths.
 
+- [Service uptime](service_uptime/README.md): health reports, corrected outage durations and an arrival-order comparison.
+
 Live native entry points live in [support/entrypoints/](../support/entrypoints/README.md).
 The [launcher](../support/launcher/README.md) selects compatible cases, environments,
 execution modes and startup settings. Shared loops and presentation live in
 [support](../support/README.md).
+
+- [Account balances](account_balances/README.md): delayed provisional payments, identical retries and an arrival-order comparison; visualizer choice 3.
+
+- [Robotics](robotics/README.md): delayed camera localization, heading-dependent motion replay, and revised route proposals; visualizer choice 4.

@@ -50,8 +50,8 @@ impl Transfers {
             if event.arrived_ns.is_none() || self.seen.contains(&event.id) {
                 continue;
             }
-            // Very short network delays can complete before the entrance animation.
-            // Delay only this visual handoff, never the input or queried state.
+            // Entrances finish by network delivery. Keep the handoff behind
+            // timeline placement; never delay input processing or queried state.
             if !reduced_motion && !entries.complete(event.id) {
                 continue;
             }
@@ -119,15 +119,15 @@ mod tests {
         report
     }
     #[test]
-    fn short_delay_waits_for_the_visual_entrance_before_launching() {
+    fn already_arrived_short_input_can_launch_without_replaying_an_entrance() {
         let report = delivered();
         let mut entries = crate::entrance::Entries::default();
         let tracks = crate::tracks::Tracks::default();
         let mut transfers = Transfers::default();
         entries.update(&report, 0.0, false);
         transfers.update(&report, &tracks, &entries, 0.0, false);
-        assert!(transfers.flights.is_empty());
-        entries.update(&report, 400.0, false);
+        assert_eq!(transfers.flights.len(), 1);
+        entries.update(&report, 0.0, false);
         transfers.update(&report, &tracks, &entries, 0.0, false);
         assert_eq!(transfers.flights.len(), 1);
         transfers.update(&report, &tracks, &entries, 0.0, false);
@@ -231,7 +231,6 @@ mod tests {
         for (elapsed, landed) in [(0.0, false), (449.0, false), (1.0, true)] {
             let (visible, launch) = playback.update(Arc::clone(&query), elapsed, false);
             entries.update(&query, elapsed, false);
-            entries.handoff(&launch);
             transfers.update(&launch, &tracks, &entries, elapsed, false);
             assert_eq!(visible.positions[0].direction == [1.0, 0.0], landed);
             assert_eq!(transfers.flights.is_empty(), landed);

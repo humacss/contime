@@ -61,7 +61,7 @@ impl Options {
             || self.targets == 0
             || self.targets > self.snapshots
             || self.retention_ms == 0
-            || self.retention_ms > 86_400_000
+            || self.retention_ms > (u64::MAX - 1) / 1_000_000
             || self.checkpoint_interval == 0
             || self.checkpoint_interval > 1_000_000_000
             || !(1..=1_000).contains(&self.query_hz)

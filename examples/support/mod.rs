@@ -55,3 +55,7 @@ pub mod movement_report;
 
 #[allow(dead_code)] // Only standalone application hosts exit the process.
 pub(crate) mod exit;
+
+#[allow(dead_code)]
+#[path = "uptime/config.rs"]
+pub(crate) mod uptime_config;

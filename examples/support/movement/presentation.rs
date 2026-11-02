@@ -74,6 +74,9 @@ pub struct IntendedPath {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Report {
+    /// Shared bot source frequency; absent for scripted or older reports.
+    #[serde(default)]
+    pub bot_hz: Option<u64>,
     pub clients: usize,
     pub workers: usize,
     pub client_spacing: u64,
@@ -134,7 +137,7 @@ impl Report {
             || self.network.iter().any(|e| {
                 e.client == 0
                     || e.client > self.clients
-                    || e.action_ns > self.now_ns
+                    || e.action_ns > self.now_ns.saturating_add(timeline_window(self.average_latency_ms, self.jitter_ms).1 as u64)
                     || e.delivery_ns < e.action_ns
                     || e.arrived_ns.is_some_and(|at| at < e.delivery_ns || at > self.now_ns)
                     || (e.reordered && e.arrived_ns.is_none())

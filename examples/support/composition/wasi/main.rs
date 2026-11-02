@@ -3,11 +3,20 @@ mod config;
 use config::Options;
 fn main() -> Result<(), String> {
     let Some(options) = Options::parse(std::env::args().skip(1))? else {
-        println!("ConTime live WASI host\n\n--domain counter|chain-hash|client-movement (default counter)\n--execution manual|runtime (default manual)\n--snapshots N  --workers N (runtime only)\n--snapshot-skew 0..100 (0 = even, 100 = concentrated)\n--average-snapshots-per-event DECIMAL  --max-snapshots-per-event N\n--events-per-second max|N  --query-hz N  --retention-ms N\n--checkpoint-interval N  --max-pending N (numeric rates only)  --duration SECONDS\n--no-setup  --headless  --metrics-stdio  --help\n\nRuns continuously until the host is stopped (Ctrl-C).\nAn explicit --duration stops production, validates final state and exits without history teardown.");
+        println!("ConTime live WASI host\n\n--domain counter|chain-hash|client-movement|service-uptime|account-balances|robotics (default counter)\n--execution manual|runtime (default manual)\n--snapshots N  --workers N (runtime only)\n--snapshot-skew 0..100 (0 = even, 100 = concentrated)\n--average-snapshots-per-event DECIMAL  --max-snapshots-per-event N\n--events-per-second max|N  --query-hz N  --retention-ms N\n--checkpoint-interval N  --max-pending N (numeric rates only)  --duration SECONDS\nService uptime: --services 1..16 --cadence-ms 100..60000 --latency-ms N --jitter-ms N --min-delay-ms N (default 250)\n--no-setup  --headless  --metrics-stdio  --help\n\nRuns continuously until the host is stopped (Ctrl-C).\nAn explicit --duration stops production, validates final state and exits without history teardown.");
         return Ok(());
     };
     if !options.metrics_stdio {
         println!("Execution: {}", options.execution);
+    }
+    if let Some(config) = options.robotics {
+        return contime_wasm_example::robotics_host::run(config, options.metrics_stdio, options.controls);
+    }
+    if let Some(config) = options.accounts {
+        return contime_wasm_example::accounts_host::run(config, options.metrics_stdio, options.controls);
+    }
+    if let Some(config) = options.uptime {
+        return contime_wasm_example::uptime_host::run(config, options.metrics_stdio, options.controls);
     }
     if let Some(config) = options.movement {
         return contime_wasm_example::movement_host::run(config, options.metrics_stdio, options.controls);

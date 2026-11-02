@@ -157,6 +157,11 @@ name = "client_movement"
 path = "examples/support/entrypoints/client_movement.rs"
 required-features = ["runtime", "manual", "monitor", "simulator", "macros"]
 
+[[example]]
+name = "service_uptime"
+path = "examples/support/entrypoints/service_uptime.rs"
+required-features = ["runtime", "manual", "monitor", "simulator", "macros"]
+
 [[test]]
 name = "modules"
 path = "tests/modules/main.rs"

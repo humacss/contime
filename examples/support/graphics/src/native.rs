@@ -45,8 +45,8 @@ impl Source {
                 let mut bytes = Vec::new();
                 let record = match input.by_ref().take(protocol::MAX_LINE_BYTES as u64 + 2).read_until(b'\n', &mut bytes) {
                     Ok(0) => break,
-                    Ok(_) if bytes.len() > protocol::MAX_LINE_BYTES + 1 => Err("Movement report exceeds protocol limit".into()),
-                    Ok(_) if !bytes.ends_with(b"\n") => Err("Truncated movement report".into()),
+                    Ok(_) if bytes.len() > protocol::MAX_LINE_BYTES + 1 => Err("Presentation report exceeds protocol limit".into()),
+                    Ok(_) if !bytes.ends_with(b"\n") => Err("Truncated presentation report".into()),
                     Ok(_) => String::from_utf8(bytes)
                         .map_err(|e| e.to_string())
                         .and_then(|line| protocol::decode(line.trim_end_matches(['\r', '\n']))),
@@ -90,7 +90,13 @@ impl Source {
         Ok(())
     }
     pub fn stop(&mut self) -> io::Result<()> {
-        self.input(b'q')?;
+        // A finite workload may have exited between presentation frames. Its
+        // final report and exit status must still be checked by poll below.
+        if let Err(error) = self.input(b'q')
+            && error.kind() != io::ErrorKind::BrokenPipe
+        {
+            return Err(error);
+        }
         self.stopping = true;
         Ok(())
     }
@@ -102,7 +108,13 @@ impl Source {
                     if self.final_seen {
                         return Err("Workload sent data after its final report".into());
                     }
-                    bridge.publish(frame.movement)?;
+                    match (frame.movement, frame.uptime, frame.accounts, frame.robotics) {
+                        (Some(report), None, None, None) => bridge.publish(report)?,
+                        (None, Some(report), None, None) => bridge.publish_uptime(report)?,
+                        (None, None, Some(report), None) => bridge.publish_accounts(report)?,
+                        (None, None, None, Some(report)) => bridge.publish_robotics(report)?,
+                        _ => return Err("Expected exactly one visualization report".into()),
+                    }
                     self.final_seen = frame.done;
                 }
                 Ok(Err(error)) => return Err(error),
@@ -182,6 +194,54 @@ mod tests {
         // Pass the fixture as an argument, never interpolate it into shell code.
         command.args(["-c", "printf '%s\\n' \"$1\"; exit \"$2\"", "fixture", &payload, &exit_code.to_string()]);
         Source::spawn(command).unwrap()
+    }
+    #[test]
+    fn stopping_an_already_exited_workload_still_requires_successful_final_validation() {
+        for (final_report, code) in [(true, 0), (true, 7), (false, 0)] {
+            let mut source = if final_report {
+                validated_child(code)
+            } else {
+                let mut command = Command::new("sh");
+                command.args(["-c", "exit 0"]);
+                Source::spawn(command).unwrap()
+            };
+            // Reproduce the race deterministically: stdin is closed, but no report
+            // or exit status has reached the presentation poll yet.
+            let start = Instant::now();
+            while source.child.try_wait().unwrap().is_none() {
+                assert!(start.elapsed() < Duration::from_secs(3));
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert!(source.child.stdin.is_some());
+            source.stop().unwrap();
+            let start = Instant::now();
+            let result = loop {
+                match source.poll(&Bridge::default()) {
+                    Ok(false) => {
+                        assert!(start.elapsed() < Duration::from_secs(3));
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    result => break result,
+                }
+            };
+            assert_eq!(result.is_ok(), final_report && code == 0, "{result:?}");
+        }
+    }
+    #[test]
+    fn uptime_final_report_reaches_the_shared_bridge() {
+        let report = serde_json::json!({"done": true, "uptime": crate::uptime_report::Report::default()});
+        let payload = format!("contime-workers-v2\t{report}");
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf '%s\\n' \"$1\"", "fixture", &payload]);
+        let mut source = Source::spawn(command).unwrap();
+        let bridge = Bridge::default();
+        let start = Instant::now();
+        while !source.poll(&bridge).unwrap() {
+            assert!(start.elapsed() < Duration::from_secs(3));
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(bridge.snapshot().uptime.is_some());
+        assert!(bridge.snapshot().report.is_none());
     }
     #[test]
     fn final_report_requires_a_successful_workload_exit() {

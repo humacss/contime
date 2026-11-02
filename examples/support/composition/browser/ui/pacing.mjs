@@ -8,6 +8,28 @@ export function parseRate(value) {
     return Number(text);
 }
 export function readSettings(values) {
+    if (['account-balances','robotics'].includes(values.domain)) {
+        const result = { domain: values.domain, max_ms: Number(values.max_ms) };
+        for (const [key,min,max] of [['query_hz',1,60],['retention_ms',1,18446744073709],['checkpoint_interval',1,1000000000],['max_steps',1,100000]]) {
+            const value=Number(values[key]);
+            if(!Number.isSafeInteger(value)||value<min||value>max) throw new Error(`Invalid ${key}`);
+            result[key]=value;
+        }
+        if(!Number.isFinite(result.max_ms)||result.max_ms<0.01||result.max_ms>1000) throw new Error('Invalid max_ms');
+        return Object.freeze(result);
+    }
+    if (values.domain === 'service-uptime') {
+        const result = {domain:values.domain,max_ms:Number(values.max_ms)};
+        const limits={services:[1,16],cadence_ms:[100,60000],latency_ms:[0,18446744073709],min_delay_ms:[0,18446744073709],jitter_ms:[0,18446744073709],query_hz:[1,60],retention_ms:[1,18446744073709],checkpoint_interval:[1,1000000000],max_steps:[1,100000]};
+        for(const [key,[min,max]] of Object.entries(limits)) {
+            const value=Number(values[key]);
+            if(!Number.isSafeInteger(value)||value<min||value>max) throw new Error(`Invalid ${key}`);
+            result[key]=value;
+        }
+        if(!Number.isFinite(result.max_ms)||result.max_ms<0.01||result.max_ms>1000) throw new Error('Invalid max_ms');
+        if(result.latency_ms+Math.min(result.latency_ms,result.jitter_ms)>18446744073709) throw new Error('Invalid delivery delay');
+        return Object.freeze(result);
+    }
     if (values.domain === 'client-movement') {
         const result = { domain: values.domain, max_ms: Number(values.max_ms) };
         if (values.showcase === '1') result.showcase = true;
@@ -50,7 +72,8 @@ export function readSettings(values) {
 export function startupSettings(params) {
     const defaults = {showcase:'0',domain:'counter',snapshots:1000,rate:'Maximum',query_hz:20,retention_ms:10000,
         checkpoint_interval:128,max_pending:20000,average_targets:'1.0',max_targets:2,snapshot_skew:0,
-        max_ms:2,max_steps:256,clients:5,client_spacing:16,movement_speed:6,input_hz:1,
+        max_ms:2,max_steps:256,services:5,cadence_ms:1000,latency_ms:800,min_delay_ms:250,clients:5,client_spacing:16,movement_speed:6,input_hz:1,
         average_latency_ms:500,jitter_ms:500,trail_ms:5000,fade_ms:5000};
+    if(params.get('domain') === 'service-uptime') defaults.jitter_ms=800;
     return readSettings(Object.fromEntries(Object.entries(defaults).map(([key,value]) => [key,params.get(key) ?? value])));
 }

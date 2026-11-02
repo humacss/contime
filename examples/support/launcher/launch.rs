@@ -44,8 +44,8 @@ impl CommandSpec {
         Ok(())
     }
 }
-/// Movement has client/network settings instead of throughput/fanout settings.
-pub fn movement_command(root: &Path, selection: Selection, settings: &[String]) -> CommandSpec {
+/// Graphical cases have domain settings instead of throughput/fanout settings.
+pub fn graphical_command(root: &Path, selection: Selection, settings: &[String]) -> CommandSpec {
     let mut args = vec![
         "run".to_string(),
         "--quiet".into(),
@@ -54,7 +54,7 @@ pub fn movement_command(root: &Path, selection: Selection, settings: &[String]) 
         root.join("Cargo.toml").display().to_string(),
         "--all-features".into(),
         "--example".into(),
-        "client_movement".into(),
+        selection.domain.binary().into(),
         "--".into(),
         "--execution".into(),
         selection.execution.slug().into(),
@@ -224,7 +224,7 @@ pub fn wasi_target_command(root: &Path, selection: Selection, settings: &Setting
     run.args.extend(settings_arguments(settings, selection.execution == Execution::Runtime).into_iter().map(OsString::from));
     run
 }
-fn wasi_case_command(root: &Path, selection: Selection, settings: &Settings, arguments: Option<&[String]>) -> CommandSpec {
+pub(super) fn wasi_case_command(root: &Path, selection: Selection, settings: &Settings, arguments: Option<&[String]>) -> CommandSpec {
     let mut run = wasi_target_command(root, selection, settings);
     if let Some(arguments) = arguments {
         let index = run.args.iter().position(|a| a == "--execution").expect("execution argument") + 2;
@@ -247,7 +247,7 @@ pub fn wasi(
     let mut run = wasi_case_command(root, selection, settings, case_arguments);
     if dry {
         build.show();
-        if selection.domain == Domain::Movement && !settings.headless {
+        if selection.domain.graphical() && !settings.headless {
             run.args.extend([
                 "--metrics-stdio".into(),
                 "--control-input".into(),
@@ -258,9 +258,47 @@ pub fn wasi(
         run.show();
         return Ok(());
     }
+    let result = prepare_wasi(root, selection, false).and_then(|program| {
+        run.program = program;
+        println!("Running {} execution…", selection.execution.slug());
+        if selection.domain.graphical() && !settings.headless {
+            run.args.extend([
+                "--metrics-stdio".into(),
+                "--control-input".into(),
+                if target == WasmTarget::Threads { "poll".into() } else { "nonblocking".into() },
+            ]);
+            super::graphics::present(root, run, false, cancelled)
+        } else if !selection.domain.graphical() && super::terminal::enabled(settings) {
+            run.args.push("--metrics-stdio".into());
+            if selection.domain == Domain::Movement {
+                run.args
+                    .extend(["--control-input".into(), if target == WasmTarget::Threads { "poll".into() } else { "nonblocking".into() }]);
+            }
+            super::terminal::run(run.command(), cancelled, selection.domain == Domain::Movement)
+        } else {
+            run.run()
+        }
+    });
+    if cancelled.load(Ordering::Acquire) {
+        Ok(())
+    } else {
+        result
+    }
+}
+
+/// Validate the selected WASI host and build the portable workload once.
+pub(super) fn prepare_wasi(root: &Path, selection: Selection, dry: bool) -> Result<OsString, Box<dyn std::error::Error>> {
+    let target = selection.environment.wasm_target().ok_or("Expected a WASI environment")?;
+    let program =
+        if target == WasmTarget::Wasi { "node".into() } else { std::env::var_os("WASMTIME").unwrap_or_else(|| "wasmtime".into()) };
+    let build = wasi_build(root, selection);
+    if dry {
+        build.show();
+        return Ok(program);
+    }
     require_target(target.triple())?;
-    run.program = resolve_tool_path(run.program, &std::env::current_dir()?)?;
-    let status = Command::new(&run.program).arg("--version").output().map_err(|_| match target {
+    let program = resolve_tool_path(program, &std::env::current_dir()?)?;
+    let status = Command::new(&program).arg("--version").output().map_err(|_| match target {
         WasmTarget::Wasi => "Standalone WASI needs Node.js with WASI support",
         WasmTarget::Threads => "Threaded WASI needs Wasmtime 36.x LTS; set WASMTIME to its executable",
     })?;
@@ -271,32 +309,8 @@ pub fn wasi(
         validate_wasmtime(&String::from_utf8_lossy(&status.stdout))?;
     }
     println!("Building standalone WebAssembly ({})…", target.triple());
-    let result = (|| {
-        build.run()?;
-        println!("Running {} execution…", selection.execution.slug());
-        if selection.domain == Domain::Movement && !settings.headless {
-            run.args.extend([
-                "--metrics-stdio".into(),
-                "--control-input".into(),
-                if target == WasmTarget::Threads { "poll".into() } else { "nonblocking".into() },
-            ]);
-            super::graphics::present(root, run, false, cancelled)
-        } else if super::terminal::enabled(settings) {
-            run.args.push("--metrics-stdio".into());
-            if selection.domain == Domain::Movement {
-                run.args
-                    .extend(["--control-input".into(), if target == WasmTarget::Threads { "poll".into() } else { "nonblocking".into() }]);
-            }
-            super::terminal::run(run.command(), cancelled, selection.domain == Domain::Movement)
-        } else {
-            run.run()
-        }
-    })();
-    if cancelled.load(Ordering::Acquire) {
-        Ok(())
-    } else {
-        result
-    }
+    build.run()?;
+    Ok(program)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -305,6 +319,7 @@ pub fn browser(
     domain: Domain,
     common: &Settings,
     movement: Option<&crate::support::movement_config::Config>,
+    uptime: Option<&crate::support::uptime_config::Config>,
     settings: BrowserSettings,
     dry: bool,
     no_open: bool,
@@ -315,7 +330,7 @@ pub fn browser(
         build.show();
         let generator = std::env::var_os("WASM_BINDGEN").unwrap_or_else(|| "wasm-bindgen".into());
         bindings_command(root, generator.clone()).show();
-        if domain == Domain::Movement {
+        if domain.graphical() {
             super::graphics::build(root, true).show();
             super::graphics::bindings(root, generator).show();
         }
@@ -324,7 +339,10 @@ pub fn browser(
             "  {} {}",
             if no_open { "URL:" } else { "Open:" },
             movement.map_or_else(
-                || settings.url("http://127.0.0.1:<assigned-port>/", domain, common),
+                || uptime.map_or_else(
+                    || settings.url("http://127.0.0.1:<assigned-port>/", domain, common),
+                    |c| settings.uptime_url("http://127.0.0.1:<assigned-port>/", c)
+                ),
                 |config| settings.movement_url("http://127.0.0.1:<assigned-port>/", config)
             )
         );
@@ -336,13 +354,16 @@ pub fn browser(
     build.run()?;
     println!("Generating browser bindings…");
     bindings_command(root, generator.clone()).run()?;
-    if domain == Domain::Movement {
+    if domain.graphical() {
         println!("Building shared Bevy browser presentation (Rust 1.95)…");
         super::graphics::build(root, true).run()?;
         super::graphics::bindings(root, generator).run()?;
     }
     let server = Server::start(&root.join("examples/support/composition/browser"))?;
-    let url = movement.map_or_else(|| settings.url(&server.url(), domain, common), |config| settings.movement_url(&server.url(), config));
+    let url = movement.map_or_else(
+        || uptime.map_or_else(|| settings.url(&server.url(), domain, common), |c| settings.uptime_url(&server.url(), c)),
+        |config| settings.movement_url(&server.url(), config),
+    );
     println!("\nBrowser example: {url}\nSettings are fixed for this run. Press Ctrl-C here to stop the server.");
     io::stdout().flush()?;
     if !no_open {
@@ -378,6 +399,33 @@ fn open_browser(url: &str) -> io::Result<()> {
 mod tests {
     use super::super::selection::Execution;
     use super::*;
+    #[test]
+    fn uptime_launches_use_its_own_binary_domain_and_case_arguments() {
+        let config = crate::support::uptime_config::Config::parse(
+            ["--execution", "manual", "--services", "3", "--cadence-ms", "250"].map(str::to_owned),
+        )
+        .unwrap()
+        .unwrap();
+        let settings = Settings::parse([], true).unwrap().unwrap().0;
+        for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads] {
+            let selection = Selection::new(environment, Execution::Manual, Domain::Uptime).unwrap();
+            let command = if environment == Environment::Terminal {
+                graphical_command(Path::new("/checkout"), selection, &config.arguments())
+            } else {
+                wasi_case_command(Path::new("/checkout"), selection, &settings, Some(&config.arguments()))
+            };
+            let args: Vec<_> = command.args.iter().map(|a| a.to_string_lossy()).collect();
+            assert!(args.windows(2).any(|p| p == ["--services", "3"]));
+            assert!(args.windows(2).any(|p| p == ["--cadence-ms", "250"]));
+            assert!(!args.iter().any(|a| matches!(a.as_ref(), "--clients" | "--snapshots" | "--input-hz" | "--events-per-second")));
+            assert!(selection.domain.graphical());
+            if environment == Environment::Terminal {
+                assert!(args.windows(2).any(|p| p == ["--example", "service_uptime"]));
+            } else {
+                assert!(args.windows(2).any(|p| p == ["--domain", "service-uptime"]));
+            }
+        }
+    }
     #[test]
     fn pending_capacity_is_forwarded_only_for_numeric_rates_to_every_child_host() {
         for rate in ["max", "100"] {
@@ -530,11 +578,11 @@ mod monitor_features_tests {
     use super::*;
     #[test]
     fn native_launches_enable_tools_for_each_case_and_execution() {
-        for domain in [Domain::Counter, Domain::Hash, Domain::Movement] {
+        for domain in [Domain::Counter, Domain::Hash, Domain::Movement, Domain::Uptime] {
             for execution in [Execution::Runtime, Execution::Manual] {
                 let selection = Selection::new(Environment::Terminal, execution, domain).unwrap();
-                let command = if domain == Domain::Movement {
-                    movement_command(Path::new("/checkout"), selection, &[])
+                let command = if domain.graphical() {
+                    graphical_command(Path::new("/checkout"), selection, &[])
                 } else {
                     native_command(Path::new("/checkout"), selection, &Settings::parse(std::iter::empty(), false).unwrap().unwrap().0)
                 };

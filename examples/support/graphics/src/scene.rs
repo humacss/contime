@@ -17,13 +17,16 @@ struct Display {
     entries: crate::entrance::Entries,
     tracks: crate::tracks::Tracks,
     generation: u64,
+    uptime_playback: crate::uptime::Playback,
+    accounts: crate::accounts::Display,
+    robotics: crate::robotics::Display,
 }
 
 pub fn app(bridge: Bridge, canvas: Option<String>) -> App {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: "ConTime / Client movement".into(),
+            title: "ConTime / Reconciliation".into(),
             canvas,
             resolution: (1440, 900).into(),
             fit_canvas_to_parent: true,
@@ -35,10 +38,11 @@ pub fn app(bridge: Bridge, canvas: Option<String>) -> App {
     }))
     .insert_resource(ClearColor(Color::srgb_u8(21, 37, 53)))
     .insert_resource(bridge)
+    .init_resource::<crate::chooser::Focus>()
     .init_resource::<Display>()
     .init_resource::<crate::labels::Labels>()
     .configure_sets(Update, (GraphicsSet::Collect, GraphicsSet::Draw).chain())
-    .add_systems(Startup, (setup, crate::labels::setup))
+    .add_systems(Startup, (setup, crate::labels::setup, crate::chooser::setup, crate::navigation::setup))
     .add_systems(
         PostUpdate,
         crate::labels::draw
@@ -46,6 +50,8 @@ pub fn app(bridge: Bridge, canvas: Option<String>) -> App {
             .before(bevy::ui::UiSystems::Prepare)
             .before(bevy::text::detect_text_needs_rerender),
     )
+    .add_systems(Update, (crate::chooser::update, crate::navigation::update).before(GraphicsSet::Collect))
+    .add_systems(Update, crate::viewport::update.in_set(GraphicsSet::Collect))
     .add_systems(Update, draw.in_set(GraphicsSet::Draw));
     app
 }
@@ -64,6 +70,9 @@ fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut 
     labels.clear();
     let state = bridge.snapshot();
     if display.generation != state.generation {
+        display.robotics = crate::robotics::Display::default();
+        display.accounts = crate::accounts::Display::default();
+        display.uptime_playback = crate::uptime::Playback::default();
         display.animation.reset();
         display.clock = crate::animation::FrameClock::default();
         display.playback.reset();
@@ -73,6 +82,31 @@ fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut 
         display.entries.reset();
         display.tracks.reset();
         display.generation = state.generation;
+    }
+    if let Some(report) = &state.robotics {
+        let elapsed = display.clock.elapsed(state.running, state.resume_epoch, time.delta_secs_f64() * 1000.0);
+        display.robotics.draw(report, elapsed, state.reduced_motion || state.finished, &mut labels, &mut gizmos);
+        return;
+    }
+    if let Some(report) = &state.accounts {
+        let elapsed = display.clock.elapsed(state.running, state.resume_epoch, time.delta_secs_f64() * 1000.0);
+        display.accounts.draw(report, elapsed, state.reduced_motion || state.finished, &mut labels, &mut gizmos);
+        return;
+    }
+    if let Some(report) = &state.uptime {
+        let elapsed = display.clock.elapsed(state.running, state.resume_epoch, time.delta_secs_f64() * 1000.0);
+        let visible = display.uptime_playback.update(std::sync::Arc::clone(report), elapsed, state.reduced_motion || state.finished);
+        crate::uptime::draw(
+            report,
+            &visible,
+            display.uptime_playback.layout(),
+            display.uptime_playback.history_ms(),
+            (state.running, state.finished),
+            &mut labels,
+            &mut gizmos,
+        );
+        display.uptime_playback.draw(&mut gizmos);
+        return;
     }
     let Some(report) = state.report else {
         return;
@@ -86,7 +120,6 @@ fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut 
     display.unreconciled_animation.update(&right, elapsed, immediate);
     display.tracks.update(&report);
     display.entries.update(&report, elapsed, immediate);
-    display.entries.handoff(&handoff);
     let Display { transfers, unreconciled_transfers, tracks, entries, .. } = &mut *display;
     transfers.update(&left_handoff, tracks, entries, elapsed, immediate);
     unreconciled_transfers.update(&right_handoff, tracks, entries, elapsed, immediate);

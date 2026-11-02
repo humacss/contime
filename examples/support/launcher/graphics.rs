@@ -45,13 +45,28 @@ pub(super) fn present(root: &Path, guest: CommandSpec, dry: bool, cancelled: &At
     launch::native(presenter, false, cancelled)
 }
 pub(super) fn native(root: &Path, selection: Selection, arguments: &[String], dry: bool, cancelled: &AtomicBool) -> Result<(), Failure> {
+    let build = native_build(root);
+    let guest = native_guest(root, selection, arguments);
+    if dry {
+        build.show();
+    } else {
+        println!("Building native graphical workload…");
+        build.run()?;
+    }
+    present(root, guest, dry, cancelled)
+}
+
+pub(super) fn native_build(root: &Path) -> CommandSpec {
     let cwd = root.join("examples/environments/wasi");
-    // The portable workload is compiled to a native binary here, not WebAssembly.
     let mut build = CommandSpec::new("cargo", &cwd, ["+1.90.0", "build", "--release", "--features", "runtime", "--target-dir"]);
     build.args.push(cwd.join("target").into_os_string());
+    build
+}
+pub(super) fn native_guest(root: &Path, selection: Selection, arguments: &[String]) -> CommandSpec {
+    let cwd = root.join("examples/environments/wasi");
     let mut args = vec![
         "--domain".into(),
-        "client-movement".into(),
+        selection.domain.slug().into(),
         "--execution".into(),
         selection.execution.slug().into(),
         "--metrics-stdio".into(),
@@ -60,14 +75,23 @@ pub(super) fn native(root: &Path, selection: Selection, arguments: &[String], dr
         "--no-setup".into(),
     ];
     args.extend_from_slice(arguments);
-    let guest = CommandSpec::new(cwd.join("target/release/contime-wasm-example"), &cwd, args);
+    CommandSpec::new(cwd.join("target/release/contime-wasm-example"), &cwd, args)
+}
+pub(super) fn present_catalog(root: &Path, catalog: &super::catalog::Catalog, dry: bool, cancelled: &AtomicBool) -> Result<(), Failure> {
+    catalog.validate()?;
+    let build = build(root, false);
+    let presenter = CommandSpec::new(
+        root.join("examples/support/graphics/target/debug/contime-graphics-example"),
+        root,
+        ["--visualizer-catalog".to_string(), serde_json::to_string(catalog)?],
+    );
     if dry {
         build.show();
-    } else {
-        println!("Building native movement workload…");
-        build.run()?;
+        presenter.show();
+        return Ok(());
     }
-    present(root, guest, dry, cancelled)
+    build.run()?;
+    launch::native(presenter, false, cancelled)
 }
 
 #[cfg(test)]
