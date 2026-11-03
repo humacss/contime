@@ -54,19 +54,12 @@ async function browserPage(search, report = null, hidden = false) {
         elements.set(match[1], { hidden: /\shidden\b/.test(tag),
             disabled: /\sdisabled\b/.test(tag), handlers: {},
             addEventListener(name, handler) { this.handlers[name] = handler; },
-            setAttribute(name,value) { this[name]=value; },
             replaceChildren() { this.textContent = ''; } });
     }
     const started = [];
     const graphicsEvents = [];
-    let pendingChoice, pendingNavigation;
-    const lifecycle = [], frameCalls = [];
-    let nextReport = report;
     globalThis.graphicsBindings = { default: async () => {}, start_graphics: () => graphicsEvents.push("start"),
-        take_navigation() { const action = pendingNavigation; pendingNavigation = undefined; return action; },
-        show_visualizations() { graphicsEvents.push("choices"); },
-        take_visualization() { const choice = pendingChoice; pendingChoice = undefined; return choice; },
-        update_scene() { graphicsEvents.push("draw"); }, update_uptime() { graphicsEvents.push("uptime"); }, finish_scene: () => graphicsEvents.push("finish"), set_running: value => graphicsEvents.push(value), reset_scene: () => graphicsEvents.push("reset") };
+        update_scene() { graphicsEvents.push("draw"); }, finish_scene: () => graphicsEvents.push("finish"), set_running: value => graphicsEvents.push(value), reset_scene: () => graphicsEvents.push("reset") };
     globalThis.window = { handlers: {}, listenerOptions: {}, addEventListener(name, handler, options) { this.handlers[name] = handler; this.listenerOptions[name] = options; } };
     globalThis.location = { search };
     globalThis.document = { hidden, handlers: {}, listenerOptions: {}, addEventListener(name, handler, options) { this.handlers[name] = handler; this.listenerOptions[name] = options; }, getElementById: id => elements.get(id) };
@@ -76,10 +69,10 @@ async function browserPage(search, report = null, hidden = false) {
     globalThis.cancelAnimationFrame = () => { frameCallback = null; };
     elements.get('start').click = () => elements.get('start').handlers.click();
     globalThis.browserBindings = { default: async () => {}, BudgetDemo: class {
-        constructor(json) { started.push(JSON.parse(json)); lifecycle.push('start'); }
-        free() { lifecycle.push('free'); }
+        constructor(json) { started.push(JSON.parse(json)); }
+        free() {}
         input(direction) { inputs.push(direction); }
-        frame(elapsed, maxMs, maxSteps, stopping) { frameTimes.push(elapsed); frameCalls.push({elapsed,maxMs,maxSteps,stopping}); return JSON.stringify(typeof nextReport === 'function' ? nextReport(frameCalls.at(-1)) : nextReport); }
+        frame(elapsed) { frameTimes.push(elapsed); return JSON.stringify(report); }
     } };
     const source = (await readFile(new URL('../ui/app.js', import.meta.url), 'utf8'))
         .replaceAll("performance.now()", "globalThis.browserNow()")
@@ -88,7 +81,7 @@ async function browserPage(search, report = null, hidden = false) {
         .replace("await import('../pkg/contime_browser_example.js')", 'globalThis.browserBindings')
         .replace("await import('../pkg/graphics/contime_graphics_example.js')", 'globalThis.graphicsBindings');
     await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#${encodeURIComponent(search)}`);
-    return { elements, started, graphicsEvents, frameTimes, frameCalls, lifecycle, inputs, navigate: action => { pendingNavigation = action; }, report: value => { nextReport = value; }, choose: choice => { pendingChoice = choice; }, listenerOptions: window.listenerOptions, result: window.contimeExample,
+    return { elements, started, graphicsEvents, frameTimes, inputs, listenerOptions: window.listenerOptions, result: window.contimeExample,
         runFrame: (elapsed = 16) => { now += elapsed; const callback = frameCallback; frameCallback = null; callback?.(); },
         visibility: (hidden, elapsed = 0) => { now += elapsed; document.hidden = hidden; document.handlers.visibilitychange?.(); },
         canvasKey: key => elements.get('movement-map').handlers.keydown({key, preventDefault() {}}),
@@ -268,165 +261,4 @@ test('P preserves browser shortcuts and Space still stops movement only while ru
     page.key('p');
     page.canvasKey(' ');
     assert.deepEqual(page.inputs, ['stop', 'stop']);
-});
-
-
-test('uptime keeps its graphical view and excludes hidden and manually paused time', async()=>{
-    const page=await browserPage('?domain=service-uptime&uptime-pause=1',{uptime:{services:[]},done:false});
-    assert.equal(page.result.error,null); assert.equal(page.started.length,1);
-    assert.equal(page.elements.get('run-title').hidden,true);
-    assert.equal(page.elements.get('diagnostics').open,false);
-    page.runFrame(16); assert.ok(page.graphicsEvents.includes('uptime'));
-    assert.equal(page.elements.get('state').hidden,true);
-    page.visibility(true);page.runFrame(3600000);page.visibility(false);page.runFrame(16);
-    assert.deepEqual(page.frameTimes,[16,32]);
-    page.key('p');page.runFrame(5000);page.visibility(true);page.visibility(false,10000);page.runFrame(16);
-    assert.equal(page.frameTimes.length,2);
-    page.key('P');page.runFrame(16);assert.deepEqual(page.frameTimes,[16,32,48]);
-    page.elements.get('reset').handlers.click(); assert.equal(page.result.report,null);assert.equal(page.result.frames,0);
-    page.visibility(true);page.visibility(false,10000);page.runFrame(16);assert.equal(page.result.frames,0);
-});
-
-
-test('visualizer chooser starts Bevy once without constructing or stepping a workload', async () => {
-    const page = await browserPage('?domain=visualizer&autostart=1&chooser-idle=1');
-    assert.equal(page.result.error, null);
-    assert.equal(page.elements.get('movement-panel').hidden, false);
-    assert.equal(page.elements.get('diagnostics').open, false);
-    assert.equal(page.elements.get('start').disabled, true);
-    page.runFrame(); page.runFrame();
-    assert.equal(page.started.length, 0);
-    assert.equal(page.frameTimes.length, 0);
-    assert.equal(page.result.frames, 0);
-    assert.equal(page.graphicsEvents.filter(event => event === 'start').length, 1);
-    assert.ok(page.graphicsEvents.includes('choices'));
-});
-
-test('chooser creates only the selected case with its defaults and retained common budget', async () => {
-    for (const [domain, jitter] of [['client-movement', 500], ['service-uptime', 800]]) {
-        const report = domain === 'service-uptime' ? {uptime:{services:[]}} : movementReport;
-        const page = await browserPage(`?domain=visualizer&max_ms=1.5&max_steps=1000&query_hz=12&retention_ms=12000&checkpoint_interval=64&choose=${domain}`, report);
-        page.choose(domain); page.runFrame();
-        assert.equal(page.result.error, null);
-        assert.equal(page.started.length, 1);
-        assert.equal(page.started[0].domain, domain);
-        assert.equal(page.started[0].jitter_ms, jitter);
-        assert.equal(page.started[0].max_ms, 1.5);
-        assert.equal(page.started[0].max_steps, 1000);
-        assert.equal(page.started[0].query_hz, 12);
-        assert.equal(page.started[0].retention_ms, 12000);
-        assert.equal(page.started[0].checkpoint_interval, 64);
-        page.runFrame();
-        assert.ok(page.graphicsEvents.includes(domain === 'service-uptime' ? 'uptime' : 'draw'));
-        assert.equal(page.graphicsEvents.filter(event => event === 'start').length, 1);
-    }
-});
-
-test('chooser reset returns to choices and can select another case in the same Bevy app', async () => {
-    const page = await browserPage('?domain=visualizer&chooser-reset=1', movementReport);
-    page.choose('client-movement'); page.runFrame(); page.runFrame();
-    page.elements.get('reset').handlers.click();
-    assert.equal(page.result.report, null);
-    assert.equal(page.result.frames, 0);
-    assert.equal(page.elements.get('movement-panel').hidden, false);
-    page.runFrame();
-    assert.equal(page.started.length, 1);
-    page.choose('service-uptime'); page.runFrame();
-    assert.equal(page.started.length, 2);
-    assert.equal(page.started[1].domain, 'service-uptime');
-    assert.equal(page.started[1].jitter_ms, 800);
-    assert.equal(page.graphicsEvents.filter(event => event === 'start').length, 1);
-});
-
-test('hidden chooser waits for visibility before consuming a selection', async () => {
-    const page = await browserPage('?domain=visualizer&chooser-hidden=1', movementReport, true);
-    page.choose('client-movement'); page.runFrame();
-    assert.equal(page.started.length, 0);
-    page.visibility(false); page.runFrame();
-    assert.equal(page.started.length, 1);
-    assert.equal(page.frameTimes.length, 0);
-    page.runFrame(); assert.equal(page.frameTimes[0], 16);
-});
-
-
-test('top-bar reset advances delivery time before freeing and restarts exactly the same settings and clock', async () => {
-    const page = await browserPage('?domain=client-movement&clients=3&jitter_ms=123&max_ms=1&max_steps=7&navigation-reset=1', movementReport);
-    page.runFrame(20);
-    page.navigate('reset'); page.runFrame(20);
-    assert.equal(page.started.length, 1);
-    assert.deepEqual(page.lifecycle, ['start']);
-    assert.equal(page.frameCalls.at(-1).stopping, true);
-    assert.equal(page.frameCalls.at(-1).maxMs, 1);
-    assert.equal(page.frameCalls.at(-1).maxSteps, 7);
-    const stoppedAt = page.frameCalls.at(-1).elapsed;
-    page.runFrame(1000);
-    assert.equal(page.frameCalls.at(-1).elapsed, stoppedAt + 1000);
-    page.report({...movementReport,done:true}); page.runFrame(1000);
-    assert.deepEqual(page.lifecycle, ['start','free','start']);
-    assert.deepEqual(page.started[1],page.started[0]);
-    assert.equal(page.result.frames,0);
-    assert.equal(page.result.paused,false);
-    page.report(movementReport);page.runFrame(16);
-    assert.equal(page.frameCalls.at(-1).elapsed,16);
-    assert.equal(page.graphicsEvents.filter(event=>event==='start').length,1);
-});
-
-test('paused navigation advances delivery time while hidden tabs do no work', async () => {
-    const page = await browserPage('?domain=service-uptime&navigation-paused=1', {uptime:{services:[]},done:false});
-    page.runFrame(16);page.key('p');
-    const frames=page.result.frames;
-    page.runFrame(2000);assert.equal(page.result.frames,frames);
-    page.navigate('menu');page.runFrame(1000);
-    assert.equal(page.frameCalls.at(-1).elapsed,16);
-    assert.equal(page.frameCalls.at(-1).stopping,true);
-    page.visibility(true);const drained=page.frameCalls.length;page.runFrame(60000);
-    assert.equal(page.frameCalls.length,drained);
-    page.report({uptime:{services:[]},done:true});page.visibility(false);page.runFrame(16);
-    assert.equal(page.frameCalls.at(-1).elapsed,32);
-    assert.deepEqual(page.lifecycle,['start','free']);
-    assert.equal(page.result.frames,0);
-    assert.equal(page.elements.get('movement-panel').hidden,false);
-    page.runFrame();assert.equal(page.started.length,1);
-});
-
-test('finished direct cases can reset or go back and a new choice uses fresh case defaults', async () => {
-    const page=await browserPage('?domain=service-uptime&jitter_ms=999&services=2&max_steps=99&navigation-finished=1',{uptime:{services:[]},done:true});
-    page.runFrame();assert.equal(page.result.done,true);
-    page.navigate('reset');page.runFrame();
-    assert.equal(page.started.length,2);assert.deepEqual(page.started[0],page.started[1]);
-    page.runFrame();assert.equal(page.result.done,true);
-    const frames=page.frameCalls.length;
-    page.navigate('menu');page.runFrame();
-    assert.equal(page.frameCalls.length,frames,'completed session needs no more drain frames');
-    assert.equal(page.started.length,2);
-    page.choose('client-movement');page.runFrame();
-    assert.equal(page.started.length,3);
-    assert.equal(page.started[2].jitter_ms,500);
-    assert.equal(page.started[2].max_steps,99);
-    assert.equal(page.started[2].services,undefined);
-    assert.equal(page.graphicsEvents.filter(event=>event==='start').length,1);
-});
-
-
-test('delayed movement delivery must become due before navigation can release the old workload', async () => {
-    let stopTime;
-    const page = await browserPage('?domain=client-movement&average_latency_ms=500&jitter_ms=500&delivery-drain=1', frame => {
-        if (!frame.stopping) return movementReport;
-        stopTime ??= frame.elapsed;
-        return {...movementReport,done:frame.elapsed >= stopTime + 1000};
-    });
-    page.runFrame(16);page.key('p');page.runFrame(5000);
-    page.navigate('menu');page.runFrame(16);
-    assert.deepEqual(page.lifecycle,['start']);
-    page.runFrame(400);assert.deepEqual(page.lifecycle,['start']);
-    page.visibility(true);page.runFrame(60000);
-    page.visibility(false);page.runFrame(400);
-    assert.equal(page.frameCalls.at(-1).elapsed,stopTime+800);
-    assert.deepEqual(page.lifecycle,['start']);
-    page.runFrame(200);
-    assert.deepEqual(page.lifecycle,['start','free']);
-    assert.equal(page.result.report,null);
-    page.choose('service-uptime');page.runFrame(16);
-    assert.deepEqual(page.lifecycle,['start','free','start']);
-    assert.equal(page.graphicsEvents.filter(event=>event==='start').length,1);
 });

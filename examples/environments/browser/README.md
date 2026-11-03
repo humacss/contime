@@ -22,23 +22,6 @@ For those cases, Pause excludes paused time; Resume continues the same instance.
 Reset clears the instance and metrics and retains that startup configuration.
 Relaunch to change the configuration. Runs continue until paused or the page closes.
 
-The launcher's **Visualize** option (`--example visualizer`) opens a graphical
-chooser inside the same Bevy app. Select Client movement or Service uptime to
-start that workload. While choosing, no workload instance is created or stepped.
-The browser shows only the shared canvas; there is no HTML selector or settings
-panel. The selected case uses its own defaults and the launcher's common query,
-retention, checkpoint and frame-budget settings. Direct case URLs continue to
-start their selected graphical example automatically.
-
-The shared top bar provides **Reset** and **Back**. Reset drains the current
-workload, then restarts the same case with exactly the same settings and a fresh
-simulation clock. Back drains and releases the workload before returning to the
-chooser in the same page and Bevy app. These controls work while paused and after
-a finite run finishes. Navigation drains use the configured frame budget. The case stops producing at
-its captured simulation time while an internal delivery clock advances to flush
-in-flight delayed inputs; hidden tabs pause that clock and do no workload processing. Choosing a case
-again uses that case's defaults plus the original common host settings.
-
 ## Build directly
 
 From this directory (Rust 1.95 is isolated to the Bevy presentation):
@@ -200,23 +183,10 @@ remain queried history, rather than interpolated or predicted trajectories.
 The short visual transitions add a little display lag; query results, keyboard
 input delivery, monitoring and independent validation are unchanged. Reduced-motion
 preferences disable these transitions. The movement page has no separate controls
-or diagnostics panel. Use the shared top bar to reset the current run or return
-to the visualization chooser; P pauses and resumes.
+or diagnostics panel; reload to restart it. The shared renderer still supports
+pause and reset through its adapter.
 
 The movement case uses a fixed 96 × 56 world-unit arena. Its model stops positions
 at the walls, so queries and late-input replay observe the same collisions on all
 hosts. The browser fits the whole arena into the canvas, rather than following
 the player and letting other clients move off screen.
-
-## Service uptime
-
-Select Service uptime in the launcher, or add `domain=service-uptime&autostart=1`
-to a locally served demo URL. The same browser workload and shared Bevy viewer
-show corrected health intervals beside arrival-order state. No extra browser
-settings view is added. P and tab visibility pause its simulation clock and
-pending operations, and the configured processing budget remains per frame.
-
-Uptime URL settings are `services`, `cadence_ms`, `latency_ms`, `jitter_ms`,
-`query_hz`, `retention_ms`, `checkpoint_interval`, `max_ms` and `max_steps`.
-The [case guide](../../cases/service_uptime/README.md) explains the model,
-validation and startup settings. Movement remains available through its existing URL.

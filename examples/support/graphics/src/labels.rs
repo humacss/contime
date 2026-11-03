@@ -129,14 +129,6 @@ pub(crate) fn draw(
 mod tests {
     use super::*;
     #[test]
-    fn screen_text_stays_legible_at_compact_and_desktop_widths() {
-        assert_eq!(Style::Heading.size(1440.0), 24.0);
-        assert_eq!(Style::Heading.size(600.0), 18.0);
-        assert_eq!(Style::Caption.size(600.0), 14.0);
-        assert_eq!(Style::Legend.size(600.0), 12.0);
-        assert_eq!(Style::Legend.size(1440.0), 14.0);
-    }
-    #[test]
     fn status_labels_cannot_grow_the_entity_pool_without_bound() {
         let mut labels = Labels::default();
         for _ in 0..1000 {

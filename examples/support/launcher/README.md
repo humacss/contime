@@ -13,23 +13,7 @@ native workloads. Portable hosts keep their platform-specific build configuratio
 including Manual-only processing in a browser. Library defaults remain Runtime only.
 Add `--release` when you want an optimized launcher build.
 
-Choose an environment, execution mode, example, and live settings. The interactive
-examples menu offers **Counter**, **Chain hash verification**, and **Visualizer**.
-Visualizer opens the shared Bevy window with **Client movement** and **Service uptime**
-choices. Click a card, press 1 or 2, or use the arrow keys and Enter. No simulation
-starts before the graphical choice. Both choices are available in every environment.
-The active view explains the case and offers **Reset** and **Back to visualizations**.
-Reset keeps the current configuration; Back returns to the menu after the old
-workload stops and validates. Finite graphical runs leave their final view open
-until you reset, go back or close the window.
-
-The Visualizer startup form contains shared worker, retention, checkpoint and query
-settings, plus browser processing limits where applicable. Each visualization keeps
-its own traffic defaults. To edit all settings for one case, use its direct launcher
-option (`--example client-movement` or `--example service-uptime`); those commands
-continue to open that case directly. Case settings remain fixed during a run.
-
-One grouped startup form combines the applicable definitions:
+Choose an environment, execution mode, example, and live settings. One grouped startup form combines the applicable definitions:
 
 - **ConTime:** worker count, history retention, checkpoint spacing. Manual uses
   one worker and hides its control.
@@ -37,8 +21,6 @@ One grouped startup form combines the applicable definitions:
   query frequency, and pending work for numeric rates, for Counter and Chain hash.
 - **Client movement:** clients, spacing, movement speed, input/query frequency, average latency, jitter,
   trail and fading, instead of throughput/fanout settings.
-- **Service uptime:** service count, health-change cadence, delivery latency/jitter,
-  query frequency and ConTime retention/worker settings.
 - **Browser:** frame processing time and step limits, shown only for that host.
 
 Each field shows its allowed range, unit, help and numbered presets. Custom
@@ -56,15 +38,15 @@ highest numeric preset, and `m` selects it directly.
 
 | Environment | Execution | Examples |
 | --- | --- | --- |
-| Native | Runtime or Manual | Counter, client movement, chain hash, service uptime |
-| Standalone WASI (`wasm32-wasip1`, Node) | Manual | Counter, client movement, chain hash, service uptime |
-| Standalone WASI threads (`wasm32-wasip1-threads`, Wasmtime 36.x LTS) | Runtime or Manual | Counter, client movement, chain hash, service uptime |
-| Browser | Manual | Counter, client movement, chain hash, service uptime |
+| Native terminal | Runtime or Manual | Counter, client movement, chain hash |
+| Standalone WASI (`wasm32-wasip1`, Node) | Manual | Counter, client movement, chain hash |
+| Standalone WASI threads (`wasm32-wasip1-threads`, Wasmtime 36.x LTS) | Runtime or Manual | Counter, client movement, chain hash |
+| Browser | Manual | Counter, client movement, chain hash |
 
 Counter event and snapshot definitions are shared across all four environments. Runs
 continue until stopped unless a duration is supplied. Application definitions
 stay under `examples/cases/counter/`, `examples/cases/client_movement/`, and
-`examples/cases/chain_hash/`, and `examples/cases/service_uptime/`; the launcher
+`examples/cases/chain_hash/`; the launcher
 contains no domain logic. The ConTime library is unchanged by host selection.
 
 All live native, WASI and browser cases use simulator callbacks and worker-monitor
@@ -81,7 +63,7 @@ WASI host. Explicit-duration runs drain their work and shut down normally.
 Headless and redirected runs keep their human-readable text output.
 
 Counter/hash settings are collected before launch and forwarded to the selected host.
-Direct movement launches are configured in that same form and start without a second prompt.
+Movement is configured in that same form and starts without a second prompt.
 Its retention grows with latency until explicitly edited; explicit values are
 validated against the delay and trail. Worker-dependent workload defaults follow
 worker edits until their own values are explicitly set.
@@ -206,7 +188,3 @@ cargo run --release --example launcher -- --environment browser --example client
 cargo run --release --example launcher -- --environment wasm --example client-movement
 cargo run --release --example launcher -- --environment wasm-threads --execution runtime --example client-movement
 ```
-
-Service uptime uses the same graphical viewer as movement, with independent health
-intervals and a live input/delivery timeline. Choose it in any environment; settings
-are fixed during the run. See [the case guide](../../cases/service_uptime/README.md).

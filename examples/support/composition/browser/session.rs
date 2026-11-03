@@ -46,9 +46,6 @@ enum Domain {
     Counter(Box<crate::frame::Frame>),
     Hash(Box<crate::frame::Frame<HashExample>>),
     Movement(Box<crate::movement_frame::Frame>),
-    Uptime(Box<crate::uptime_frame::Frame>),
-    Accounts(Box<crate::accounts_frame::Frame>),
-    Robotics(Box<crate::robotics_frame::Frame>),
 }
 impl crate::scheduler::Task for Domain {
     fn step(&mut self, now: Duration, stop: bool) -> Result<bool, String> {
@@ -56,9 +53,6 @@ impl crate::scheduler::Task for Domain {
             Self::Counter(task) => task.step(now, stop),
             Self::Hash(task) => task.step(now, stop),
             Self::Movement(task) => task.step(now, stop),
-            Self::Uptime(task) => task.step(now, stop),
-            Self::Accounts(task) => task.step(now, stop),
-            Self::Robotics(task) => task.step(now, stop),
         }
     }
     fn report(&self) -> serde_json::Value {
@@ -66,9 +60,6 @@ impl crate::scheduler::Task for Domain {
             Self::Counter(task) => task.report(),
             Self::Hash(task) => task.report(),
             Self::Movement(task) => task.report(),
-            Self::Uptime(task) => task.report(),
-            Self::Accounts(task) => task.report(),
-            Self::Robotics(task) => task.report(),
         }
     }
 }
@@ -84,18 +75,12 @@ impl Session {
                 frame.use_showcase()?;
             }
             Domain::Movement(Box::new(frame))
-        } else if domain == "robotics" {
-            Domain::Robotics(Box::new(crate::robotics_frame::Frame::new(json)?))
-        } else if domain == "account-balances" {
-            Domain::Accounts(Box::new(crate::accounts_frame::Frame::new(json)?))
-        } else if domain == "service-uptime" {
-            Domain::Uptime(Box::new(crate::uptime_frame::Frame::new(crate::uptime::config(json)?)?))
         } else {
             let settings = settings(json)?;
             match domain {
                 "counter" => Domain::Counter(Box::new(crate::frame::Frame::new(&settings)?)),
                 "chain-hash" => Domain::Hash(Box::new(crate::frame::Frame::hash(&settings)?)),
-                _ => return Err("Domain must be counter, chain-hash, client-movement service-uptime account-balances or robotics".into()),
+                _ => return Err("Domain must be counter, chain-hash or client-movement".into()),
             }
         };
         Ok(Self { inner: crate::scheduler::Session::new(task) })
@@ -128,106 +113,6 @@ mod tests {
     }
     fn report(session: &mut Session, elapsed: f64, stop: bool) -> serde_json::Value {
         serde_json::from_str(&session.frame(elapsed, 2.0, 16, stop, || 0.0).unwrap()).unwrap()
-    }
-    #[test]
-    fn unknown_domain_lists_every_supported_case() {
-        let error = match Session::new(&options(0), "unknown") {
-            Err(error) => error,
-            Ok(_) => panic!("unknown domain accepted"),
-        };
-        for domain in ["counter", "chain-hash", "client-movement", "service-uptime"] {
-            assert!(error.contains(domain), "{error}");
-        }
-    }
-    #[test]
-    fn robotics_keeps_frame_budgets_and_both_timestamp_policies_use_every_observation() {
-        let mut session = Session::new("{}", "robotics").unwrap();
-        let mut clock = 0.0;
-        let initial: serde_json::Value = serde_json::from_str(
-            &session
-                .frame(0.0, 0.01, 256, false, || {
-                    clock += 0.02;
-                    clock
-                })
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(initial["steps"], 0);
-        let mut last = serde_json::Value::Null;
-        for tick in 0..1000 {
-            last = serde_json::from_str(&session.frame(tick as f64 * 16.0, 1.0, 8, tick >= 410, || 0.0).unwrap()).unwrap();
-            assert!(last["steps"].as_u64().unwrap() <= 8);
-            let report: crate::robotics::report::Report = serde_json::from_value(last["robotics"].clone()).unwrap();
-            report.validate().unwrap();
-            if last["done"] == true {
-                break;
-            }
-        }
-        assert_eq!(last["done"], true);
-        assert_eq!(last["robotics"]["historical"]["observations"], 2);
-        assert_eq!(last["robotics"]["current"]["observations"], 2);
-        assert_ne!(last["robotics"]["historical"]["pose"], last["robotics"]["current"]["pose"]);
-    }
-    #[test]
-    fn accounts_honor_frame_budget_and_validate_late_requests_and_retries() {
-        let mut session = Session::new("{}", "account-balances").unwrap();
-        let mut clock = 0.0;
-        let initial: serde_json::Value = serde_json::from_str(
-            &session
-                .frame(0.0, 0.01, 256, false, || {
-                    clock += 0.02;
-                    clock
-                })
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(initial["steps"], 0);
-        let mut last = serde_json::Value::Null;
-        for tick in 0..1000 {
-            last = serde_json::from_str(&session.frame(tick as f64 * 16.0, 1.0, 8, tick >= 375, || 0.0).unwrap()).unwrap();
-            assert!(last["steps"].as_u64().unwrap() <= 8);
-            let report: crate::accounts::report::Report = serde_json::from_value(last["accounts"].clone()).unwrap();
-            report.validate().unwrap();
-            if last["done"] == true {
-                break;
-            }
-        }
-        assert_eq!(last["done"], true);
-        assert_eq!(last["accounts"]["balance"], 40);
-        assert_eq!(last["accounts"]["arrival_balance"], 60);
-        assert_eq!(last["accounts"]["retries"], 2);
-    }
-    #[test]
-    fn uptime_honors_frame_budget_then_validates_and_drains() {
-        let json=serde_json::json!({"services":3,"cadence_ms":100,"latency_ms":100,"jitter_ms":100,"min_delay_ms":25,"query_hz":20,"retention_ms":1000,"checkpoint_interval":4}).to_string();
-        let mut session = Session::new(&json, "service-uptime").unwrap();
-        let mut clock = 0.0;
-        let initial: serde_json::Value = serde_json::from_str(
-            &session
-                .frame(0.0, 0.01, 256, false, || {
-                    clock += 0.02;
-                    clock
-                })
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(initial["steps"], 0);
-        assert_eq!(initial["uptime"]["submitted"], 3, "only startup health baselines exist before any frame work");
-        let mut last = serde_json::Value::Null;
-        for tick in 0..1000 {
-            last = serde_json::from_str(&session.frame(tick as f64 * 16.0, 1.0, 8, tick >= 200, || 0.0).unwrap()).unwrap();
-            assert!(last["steps"].as_u64().unwrap() <= 8);
-            let report: crate::uptime::Report = serde_json::from_value(last["uptime"].clone()).unwrap();
-            report.validate().unwrap();
-            if last["done"] == true {
-                break;
-            }
-        }
-        assert_eq!(last["done"], true, "{last}");
-        assert_eq!(last["outstanding"], 0);
-        assert!(last["uptime"]["submitted"].as_u64().unwrap() > 0);
-        assert!(last["uptime"]["late"].as_u64().unwrap() > 0);
-        assert_eq!(last["uptime"]["services"].as_array().unwrap().len(), 3);
     }
     #[test]
     fn maximum_ignores_legacy_pending_capacity_and_accepts_its_absence() {
@@ -394,14 +279,13 @@ mod movement_tests {
         let json = serde_json::json!({"clients":5,"client_spacing":18,"movement_speed":8,
             "input_hz":1,"query_hz":20,"average_latency_ms":1000,"jitter_ms":1000,
             "trail_ms":5000,"fade_ms":5000,"retention_ms":10000,"checkpoint_interval":128,
-            "showcase":true})
-        .to_string();
+            "showcase":true}).to_string();
         let mut session = Session::new(&json, "client-movement").unwrap();
         let mut saw_reordered = false;
         let mut saw_revised = false;
         for tick in 0..1800 {
-            let frame: serde_json::Value =
-                serde_json::from_str(&session.frame(tick as f64 * 16.0, 1.0, 64, tick >= 1700, || 0.0).unwrap()).unwrap();
+            let frame: serde_json::Value = serde_json::from_str(
+                &session.frame(tick as f64 * 16.0, 1.0, 64, tick >= 1700, || 0.0).unwrap()).unwrap();
             let report: crate::support::movement_report::Report = serde_json::from_value(frame["movement"].clone()).unwrap();
             report.validate().unwrap();
             saw_reordered |= report.network.iter().any(|input| input.reordered);
@@ -413,19 +297,16 @@ mod movement_tests {
     fn arrival_pulses_do_not_wait_for_a_slow_query() {
         let config = serde_json::json!({"clients":2,"input_hz":10,"query_hz":1,
             "average_latency_ms":0,"jitter_ms":0,"trail_ms":2000,"fade_ms":500,
-            "retention_ms":3000,"checkpoint_interval":4})
-        .to_string();
+            "retention_ms":3000,"checkpoint_interval":4}).to_string();
         let mut session = Session::new(&config, "client-movement").unwrap();
         let mut visible_before_query = false;
         for tick in 0..50 {
-            let frame: serde_json::Value =
-                serde_json::from_str(&session.frame(tick as f64 * 16.0, 1.0, 32, false, || 0.0).unwrap()).unwrap();
+            let frame: serde_json::Value = serde_json::from_str(
+                &session.frame(tick as f64 * 16.0, 1.0, 32, false, || 0.0).unwrap()).unwrap();
             let scene = &frame["movement"];
-            let latest = scene["trails"].as_array().unwrap().iter().filter_map(|p| p["time_ns"].as_u64()).max().unwrap_or(0);
-            visible_before_query |= scene["arrivals"]
-                .as_array()
-                .unwrap()
-                .iter()
+            let latest = scene["trails"].as_array().unwrap().iter()
+                .filter_map(|p| p["time_ns"].as_u64()).max().unwrap_or(0);
+            visible_before_query |= scene["arrivals"].as_array().unwrap().iter()
                 .any(|a| a["time_ns"].as_u64().unwrap() > latest && a["pulse"].as_f64().unwrap() > 0.0);
         }
         assert!(visible_before_query, "a delivered input must pulse before the next one-second query");
@@ -460,6 +341,7 @@ mod movement_tests {
             assert!(rows.windows(2).all(|pair| pair[0]["action_ns"].as_u64() <= pair[1]["action_ns"].as_u64()));
             saw_waiting |= rows.iter().any(|e| e["arrived_ns"].is_null());
             saw_reordered |= rows.iter().any(|e| e["reordered"] == true);
+
         }
         assert!(saw_waiting && saw_reordered, "timeline must show queued inputs and actual reordered arrivals");
         let movement = &last["movement"];

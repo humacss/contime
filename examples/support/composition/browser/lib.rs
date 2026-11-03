@@ -26,22 +26,3 @@ pub mod movement_example;
 
 mod movement_frame;
 mod worker_report;
-
-#[path = "../../../support/uptime/mod.rs"]
-pub mod uptime;
-#[path = "../../../cases/service_uptime/mod.rs"]
-pub mod uptime_example;
-mod uptime_frame;
-
-#[path = "../../../support/accounts/mod.rs"]
-pub mod accounts;
-#[path = "../../../cases/account_balances/mod.rs"]
-pub mod accounts_example;
-mod accounts_frame;
-
-#[path = "../../../cases/robotics/mod.rs"]
-pub mod robotics_example;
-
-#[path = "../../../support/robotics/mod.rs"]
-pub mod robotics;
-mod robotics_frame;

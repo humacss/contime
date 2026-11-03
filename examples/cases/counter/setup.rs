@@ -1,10 +1,8 @@
 //! Connect the counter model to the shared simulator/monitor example harness.
 //!
 //! The lane's application contract is already in `model.rs`:
-//! `CounterChanged` names counter IDs. Derives provide time, identity and event
-//! registration; the handwritten `SnapshotApply` implementation adds each change.
-//! The environment instantiates Runtime or Manual with these event/state types.
-//! There is no additional lane registry here.
+//! `CounterChanged` names counter IDs, and the snapshot derive supplies the application rule. The environment instantiates Runtime or Manual
+//! with these event/state types. There is no additional lane registry here.
 //!
 //! `Example` supplies construction, inspection and canonical-reference hooks for
 //! the diagnostic harness; consumers using ConTime do not implement this trait.

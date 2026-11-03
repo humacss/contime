@@ -69,11 +69,11 @@ pub(crate) mod tests {
     use crate::report::{Client, Report};
     pub(crate) fn scene(x: f64) -> Report {
         Report {
+            bot_hz: None,
             clients: 1,
             workers: 1,
             client_spacing: 4,
             movement_speed: 6,
-            bot_hz: Some(1),
             average_latency_ms: 50,
             jitter_ms: 25,
             submitted: 1,

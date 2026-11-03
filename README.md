@@ -159,10 +159,9 @@ and [scaling results](benches/scaling/README.md) for the measured workloads and 
 
 ## Beyond games
 
-A delayed service-health report can reveal an outage after recovery has already
-arrived. The [service uptime example](examples/cases/service_uptime/README.md)
-shows ConTime correcting that history and its downtime totals. Try it alongside
-client movement in the example launcher.
+ConTime can also reconstruct state from delayed sensor readings, service reports,
+and other event streams. Your application defines the events and state updates,
+while ConTime handles the history and replay.
 
 ## Where to go next
 

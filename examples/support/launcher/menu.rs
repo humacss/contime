@@ -6,7 +6,7 @@ use super::{
 
 const ENVIRONMENTS: [&str; 4] = ["Native", "WebAssembly / WASI", "WebAssembly / WASI Threads", "Browser (WebAssembly)"];
 const EXECUTIONS: [&str; 2] = ["runtime", "manual"];
-const EXAMPLES: [&str; 3] = ["Counter", "Chain hash verification", "Visualizer"];
+const EXAMPLES: [&str; 3] = ["Counter", "Chain hash verification", "Client movement"];
 fn field(label: &'static str, help: &'static str, value: impl ToString, choices: &[&str]) -> Field {
     Field::new(label, help, value.to_string(), choices.iter().map(|s| s.to_string()).collect())
 }
@@ -15,9 +15,9 @@ fn selection_form(options: &Options) -> Result<Form, String> {
     // silently changing an explicitly requested backend.
     let selected = options.defaults()?;
     let mut form = Form::new(vec![
-        field("Environment", "Native runs a local executable. Visualizer opens a Bevy window where you choose Client movement or Service uptime; Counter and Chain hash use the terminal. WASI uses Node (Manual only). WASI Threads uses Wasmtime 36.x LTS (Manual or Runtime). Browser opens a local WebAssembly page (Manual only).", selected.environment.label(), &ENVIRONMENTS),
+        field("Environment", "Native runs a local executable. Client movement opens a Bevy graphics window; other cases use the terminal. WASI uses Node (Manual only). WASI Threads uses Wasmtime 36.x LTS (Manual or Runtime). Browser opens a local WebAssembly page (Manual only).", selected.environment.label(), &ENVIRONMENTS),
         field("Execution", "Runtime uses background worker threads. Manual runs one worker on the calling thread. Runtime is available for Terminal or WASI threads. Standard WASI and Browser support Manual only.", selected.execution.slug(), &EXECUTIONS),
-        field("Example", "Counter shows changing totals. Chain hash verifies event ordering, including late events. Visualizer opens a graphical chooser for movement reconciliation and service health histories.", selected.domain.label(), &EXAMPLES),
+        field("Example", "Counter shows changing totals. Chain hash verifies event ordering, including late events. Client movement shows delayed client inputs and corrected paths.", selected.domain.label(), &EXAMPLES),
     ], false);
     if options.execution.is_some() {
         form.fields[1].remember_choice();
@@ -25,16 +25,13 @@ fn selection_form(options: &Options) -> Result<Form, String> {
     if options.domain.is_some() {
         form.fields[2].remember_choice();
     }
-    if matches!(selected.domain, Domain::Movement | Domain::Uptime) {
-        form.fields[2].choices.push(selected.domain.label().into());
-    }
     constrain(&mut form);
     Ok(form)
 }
 fn constrain(form: &mut Form) {
     let runtime = form.fields[0].value == ENVIRONMENTS[0] || form.fields[0].value == ENVIRONMENTS[2];
     form.fields[1].set_choices(if runtime { EXECUTIONS.iter().map(|s| s.to_string()).collect() } else { vec!["manual".into()] });
-    // Explicit direct-case commands remain available without cluttering the default menu.
+    form.fields[2].set_choices(EXAMPLES.iter().map(|s| s.to_string()).collect());
 }
 fn selected(form: &Form) -> Result<Selection, String> {
     let environment = match form.fields[0].value.as_str() {
@@ -47,8 +44,6 @@ fn selected(form: &Form) -> Result<Selection, String> {
     let domain = match form.fields[2].value.as_str() {
         "Counter" => Domain::Counter,
         "Client movement" => Domain::Movement,
-        "Service uptime" => Domain::Uptime,
-        "Visualizer" => Domain::Visualizer,
         _ => Domain::Hash,
     };
     Selection::new(environment, execution, domain)
@@ -68,11 +63,6 @@ pub fn selection(options: &Options, interactive: bool) -> Result<Option<Selectio
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn visualizations_share_one_interactive_entry() {
-        let form = selection_form(&Options::default()).unwrap();
-        assert_eq!(form.fields[2].choices, ["Counter", "Chain hash verification", "Visualizer"]);
-    }
     #[test]
     fn environment_selection_limits_execution_and_examples() {
         let mut form = selection_form(&Options::default()).unwrap();

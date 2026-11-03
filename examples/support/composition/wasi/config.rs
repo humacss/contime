@@ -7,9 +7,6 @@ pub(super) struct Options {
     pub settings: Settings,
     pub metrics_stdio: bool,
     pub movement: Option<contime_wasm_example::movement::Config>,
-    pub uptime: Option<contime_wasm_example::uptime::Config>,
-    pub accounts: Option<contime_wasm_example::accounts::Config>,
-    pub robotics: Option<contime_wasm_example::robotics::Config>,
     pub controls: Option<contime_wasm_example::input::Mode>,
 }
 impl Options {
@@ -43,8 +40,8 @@ impl Options {
                 _ => common.push(flag),
             }
         }
-        if !["counter", "chain-hash", "client-movement", "service-uptime", "account-balances", "robotics"].contains(&domain.as_str()) {
-            return Err("Domain must be counter, chain-hash, client-movement or service-uptime".into());
+        if !["counter", "chain-hash", "client-movement"].contains(&domain.as_str()) {
+            return Err("Domain must be counter, chain-hash or client-movement".into());
         }
         if !["manual", "runtime"].contains(&execution.as_str()) {
             return Err("Execution must be manual or runtime".into());
@@ -52,111 +49,10 @@ impl Options {
         if execution == "runtime" && !cfg!(feature = "runtime") {
             return Err("Runtime execution needs --features runtime and a thread-capable host".into());
         }
-        if domain == "robotics" {
-            common.extend(["--execution".into(), execution.clone()]);
-            let config = contime_wasm_example::robotics::Config::parse(common)?;
-            let mut settings = Settings::parse(
-                [
-                    "--snapshots".into(),
-                    "1".into(),
-                    "--max-snapshots-per-event".into(),
-                    "1".into(),
-                    "--workers".into(),
-                    config.workers.to_string(),
-                ],
-                execution == "manual",
-            )
-            .map_err(|e| e.to_string())?
-            .ok_or("Missing settings")?
-            .0;
-            settings.duration = config.duration;
-            return Ok(Some(Self {
-                domain,
-                execution,
-                settings,
-                metrics_stdio,
-                controls,
-                movement: None,
-                uptime: None,
-                accounts: None,
-                robotics: Some(config),
-            }));
-        }
-        if domain == "account-balances" {
-            common.extend(["--execution".into(), execution.clone()]);
-            let config = contime_wasm_example::accounts::Config::parse(common)?;
-            let mut settings = Settings::parse(
-                [
-                    "--snapshots".into(),
-                    "1".into(),
-                    "--max-snapshots-per-event".into(),
-                    "1".into(),
-                    "--workers".into(),
-                    config.workers.to_string(),
-                ],
-                execution == "manual",
-            )
-            .map_err(|e| e.to_string())?
-            .ok_or("Missing settings")?
-            .0;
-            settings.duration = config.duration;
-            return Ok(Some(Self {
-                domain,
-                execution,
-                settings,
-                metrics_stdio,
-                controls,
-                movement: None,
-                uptime: None,
-                accounts: Some(config),
-                robotics: None,
-            }));
-        }
-        if domain == "service-uptime" {
-            common.extend(["--execution".into(), execution.clone(), "--no-setup".into()]);
-            let config = contime_wasm_example::uptime::Config::parse(common)?.ok_or("Missing uptime settings")?;
-            let mut settings = Settings::parse(
-                [
-                    "--snapshots".into(),
-                    config.services.to_string(),
-                    "--max-snapshots-per-event".into(),
-                    "1".into(),
-                    "--workers".into(),
-                    config.workers.to_string(),
-                ],
-                execution == "manual",
-            )
-            .map_err(|e| e.to_string())?
-            .ok_or("Missing settings")?
-            .0;
-            settings.headless = config.headless;
-            settings.duration = config.duration;
-            return Ok(Some(Self {
-                domain,
-                execution,
-                settings,
-                movement: None,
-                uptime: Some(config),
-                accounts: None,
-                robotics: None,
-                metrics_stdio,
-                controls,
-            }));
-        }
         if domain == "client-movement" {
             common.extend(["--execution".into(), execution.clone(), "--no-setup".into()]);
             let config = contime_wasm_example::movement::Config::parse(common)?.ok_or("Missing movement settings")?;
-            return Ok(Some(Self {
-                domain,
-                execution,
-                settings: config.settings()?,
-                movement: Some(config),
-                uptime: None,
-                accounts: None,
-                robotics: None,
-                metrics_stdio,
-                controls,
-            }));
+            return Ok(Some(Self { domain, execution, settings: config.settings()?, movement: Some(config), metrics_stdio, controls }));
         }
         let explicit_duration = common.iter().any(|arg| arg == "--duration");
         let Some((mut settings, _)) = Settings::parse(common, execution == "manual").map_err(|e| e.to_string())? else {
@@ -167,17 +63,7 @@ impl Options {
             settings.duration = None;
         }
         settings.validate().map_err(|e| e.to_string())?;
-        Ok(Some(Self {
-            domain,
-            execution,
-            settings,
-            metrics_stdio,
-            controls,
-            movement: None,
-            uptime: None,
-            accounts: None,
-            robotics: None,
-        }))
+        Ok(Some(Self { domain, execution, settings, metrics_stdio, controls, movement: None }))
     }
 }
 #[cfg(test)]
@@ -185,29 +71,6 @@ mod tests {
     use super::*;
     fn parse(args: &[&str]) -> Result<Option<Options>, String> {
         Options::parse(args.iter().map(|s| s.to_string()))
-    }
-    #[test]
-    fn uptime_uses_its_own_settings_and_graphical_transport_selection() {
-        let options = parse(&[
-            "--domain",
-            "service-uptime",
-            "--execution",
-            "manual",
-            "--services",
-            "3",
-            "--cadence-ms",
-            "250",
-            "--metrics-stdio",
-            "--control-input",
-            "poll",
-        ])
-        .unwrap()
-        .unwrap();
-        assert!(options.metrics_stdio && options.controls.is_some() && options.movement.is_none());
-        let config = options.uptime.unwrap();
-        assert!(config.manual);
-        assert_eq!((config.services, config.cadence_ms), (3, 250));
-        assert!(parse(&["--domain", "service-uptime", "--clients", "2"]).is_err());
     }
     #[test]
     fn metrics_stdio_is_host_presentation_only() {

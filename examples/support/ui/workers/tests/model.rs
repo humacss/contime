@@ -25,30 +25,57 @@ impl AdvanceTime for Time {
     }
 }
 
-#[derive(contime::ContimeEvent)]
 pub struct Increment {
-    #[contime(id)]
     pub id: u128,
-    #[contime(time)]
     pub time: Time,
 }
+impl contime::checkpoints::Event for Increment {
+    type Time = Time;
+    fn time(&self) -> Self::Time {
+        self.time
+    }
+}
 
-#[derive(Clone, Default, contime::ContimeSnapshot)]
-#[contime(event = Increment, id = counter_event_ids)]
+impl contime::EventId for Increment {
+    fn event_id(&self) -> u128 {
+        self.id
+    }
+}
+
+#[derive(Clone, Default)]
+
 pub struct Counter {
-    #[contime(id)]
     id: u128,
-    #[contime(time)]
     time: Time,
     count: u64,
 }
-
-fn counter_event_ids(event: &Increment, emit: &mut dyn FnMut(u128)) {
-    emit(event.id % 4096);
+impl contime::checkpoints::Snapshot for Counter {
+    type Time = Time;
+    fn time(&self) -> &Self::Time {
+        &self.time
+    }
+    fn set_time(&mut self, time: Self::Time) {
+        self.time = time;
+    }
 }
 
-// Routing folds event IDs into a bounded snapshot set, so creation uses the
-// routed destination rather than copying the event's original ID.
+impl Counter {
+    pub fn id_for(id: &u128) -> u128 {
+        *id
+    }
+}
+impl contime::SnapshotId for Counter {
+    fn snapshot_id(&self) -> u128 {
+        Self::id_for(&self.id)
+    }
+}
+impl contime::SnapshotEvents for Counter {
+    fn define(events: &mut contime::EventSetBuilder<Self>) {
+        events.event::<Increment>(|event, emit| {
+            emit(<Counter>::id_for(&(event.id % 4096)));
+        });
+    }
+}
 impl contime::SnapshotCreate for Counter {
     fn create(snapshot_id: u128, _event: contime::EventRef<'_>) -> Self {
         Self { id: snapshot_id, ..Self::default() }

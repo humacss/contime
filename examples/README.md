@@ -15,7 +15,6 @@ repository root. Use `--release` when comparing performance.
 | Live counters | `cargo run --release --all-features --example counter` | [`cases/counter/model.rs`](cases/counter/model.rs), then [`cases/counter/setup.rs`](cases/counter/setup.rs) |
 | Order-sensitive hash chains | `cargo run --release --all-features --example chain_hash` | [`cases/chain_hash/model.rs`](cases/chain_hash/model.rs), then [`cases/chain_hash/setup.rs`](cases/chain_hash/setup.rs) |
 | Client movement | `cargo run --release --all-features --example client_movement` | [`cases/client_movement/model.rs`](cases/client_movement/model.rs), then [`cases/client_movement/setup.rs`](cases/client_movement/setup.rs) |
-| Service uptime | `cargo run --all-features --example service_uptime` | [`cases/service_uptime/model.rs`](cases/service_uptime/model.rs), health intervals corrected by late reports |
 | WebAssembly without a browser | See [`environments/wasi/README.md`](environments/wasi/README.md) | [`support/composition/wasi/main.rs`](support/composition/wasi/main.rs), then [`support/load/verification.rs`](support/load/verification.rs) |
 | WebAssembly in a browser | See [`environments/browser/README.md`](environments/browser/README.md) | Shared WebAssembly Rust code, then [`environments/browser/src/clock.rs`](environments/browser/src/clock.rs) |
 
@@ -30,11 +29,6 @@ directly with `cargo run --example readme --features macros` and is not offered 
 [Manual code sample](cases/counter/manual.rs) is included in the Rust documentation;
 it is not another Cargo example target. Use `counter --execution manual`
 to run the live counter with Manual processing.
-
-The launcher's **Visualizer** entry opens a graphical chooser for **Client movement**,
-**Service uptime**, **Account balances** and **Robotics / delayed perception**. All four share a window and presentation tools while keeping
-independent workloads; the chosen simulation starts only after selection. Direct
-case commands still open their case without the chooser.
 
 ## Folder layout
 
@@ -86,7 +80,7 @@ Individual commands above remain available.
 
 ## Compose a definition, execution model, and host
 
-The counter, movement, hash and uptime folders define application behavior: events,
+The counter, movement, and hash folders define application behavior: events,
 snapshots, destination IDs, and how an event changes a snapshot. Start with a
 folder's `model.rs`. Its small `setup.rs` adapts that definition to the shared
 example drivers; it contains no worker loop, pacing, backpressure, or UI.
@@ -106,8 +100,8 @@ cargo run --release --all-features --example chain_hash -- --execution manual
 ```
 
 Environment is a third choice. The WASI command and browser host import the same
-counter, hash, client movement and uptime definitions and their shared live drivers; select
-`counter`, `chain-hash`, `client-movement` or `service-uptime` in any host. They do not depend on each other.
+counter, hash and client movement definitions and their shared live drivers; select
+`counter`, `chain-hash` or `client-movement` in any host. They do not depend on each other.
 Standard WASI and Browser use Manual. Standalone threaded WASI also verifies
 the existing Runtime, using Wasmtime 36.x LTS and the `wasm32-wasip1-threads`
 target. Choose WebAssembly / WASI or WebAssembly / WASI Threads in the
@@ -115,10 +109,10 @@ launcher; execution modes follow the chosen environment.
 
 | Host | Definitions exposed | Execution |
 | --- | --- | --- |
-| Native live commands | Counter, movement, hash, uptime | Runtime or Manual |
-| Standalone WASI / Node | Counter, movement, hash, uptime | Manual |
-| Standalone WASI threads / Wasmtime 36.x LTS | Counter, movement, hash, uptime | Runtime or Manual |
-| Browser | Counter, movement, hash, uptime | Manual with a frame budget |
+| Native live commands | Counter, movement, hash | Runtime or Manual |
+| Standalone WASI / Node | Counter, movement, hash | Manual |
+| Standalone WASI threads / Wasmtime 36.x LTS | Counter, movement, hash | Runtime or Manual |
+| Browser | Counter, movement, hash | Manual with a frame budget |
 
 Shared [`support/`](support/README.md) contains settings, execution adapters,
 production control, validation and UI. All live cases use simulator iterators
@@ -217,10 +211,3 @@ tearing down retained histories. Reusable runners and tests shut down normally.
 WASI guests likewise flush a final validated record before process exit. Browser
 sessions preserve their frame allowance and pause/resume ownership. The independent finite
 portable scenario covers late events, duplicates, rejection and pruning.
-
-## Reconcile service health
-
-[Service uptime](cases/service_uptime/README.md) demonstrates the same shared viewer
-with health intervals instead of movement. Late outage reports repair historical
-downtime on the ConTime side; arrival-order state can remain incorrect. Select
-Visualizer in the launcher for Native, WASI, WASI Threads or Browser, then Service uptime in the graphical window.

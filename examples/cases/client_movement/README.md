@@ -12,11 +12,9 @@ cargo run --release --all-features --example client_movement -- --execution manu
 ```
 
 The direct commands above retain the terminal view. For the shared Bevy graphics,
-choose **Visualizer** in the central launcher with Native, WASI, WASI
-Threads or Browser, then **Client movement** in the graphical window. To configure
-all movement-specific settings before starting, use the launcher's
-`--example client-movement` option to open this case directly. The browser uses Manual and its processing budget per frame;
-WASI Threads also supports Runtime. The direct-case startup form shows
+choose **Client movement** in the central launcher with Native, WASI, WASI
+Threads or Browser. The browser uses Manual and its processing budget per frame;
+WASI Threads also supports Runtime. The startup form shows
 client count, workers, input/query frequencies, delivery latency/jitter and trail
 and fade durations, with retention and checkpoint spacing in the ConTime group.
 The launcher collects these settings before starting the example; direct launches

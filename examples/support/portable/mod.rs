@@ -19,6 +19,3 @@ pub mod movement_config;
 
 #[path = "../movement/presentation.rs"]
 pub mod movement_report;
-
-#[path = "../uptime/config.rs"]
-pub mod uptime_config;

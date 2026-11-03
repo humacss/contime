@@ -9,8 +9,7 @@ native process lifetime come from the generic environment adapters.
 | `counter.rs` | `counter` | Counter |
 | `chain_hash.rs` | `chain_hash` | Chain hash verification |
 | `client_movement.rs` | `client_movement` | Client movement |
-| `service_uptime.rs` | `service_uptime` | Service uptime |
 
 The launcher selects these commands. Case code lives in `../../cases`; shared
 simulation and monitoring composition lives in `../monitored`. Self-contained
-API walkthroughs live directly under `examples/`.
+API walkthroughs stay beside their cases.

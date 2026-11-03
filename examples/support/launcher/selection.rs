@@ -71,8 +71,6 @@ pub enum Domain {
     Counter,
     Movement,
     Hash,
-    Uptime,
-    Visualizer,
 }
 impl Domain {
     pub fn slug(self) -> &'static str {
@@ -80,8 +78,6 @@ impl Domain {
             Self::Counter => "counter",
             Self::Movement => "client-movement",
             Self::Hash => "chain-hash",
-            Self::Uptime => "service-uptime",
-            Self::Visualizer => "visualizer",
         }
     }
     pub fn label(self) -> &'static str {
@@ -89,20 +85,13 @@ impl Domain {
             Self::Counter => "Counter",
             Self::Movement => "Client movement",
             Self::Hash => "Chain hash verification",
-            Self::Uptime => "Service uptime",
-            Self::Visualizer => "Visualizer",
         }
-    }
-    pub fn graphical(self) -> bool {
-        matches!(self, Self::Movement | Self::Uptime | Self::Visualizer)
     }
     pub fn binary(self) -> &'static str {
         match self {
             Self::Counter => "counter",
             Self::Movement => "client_movement",
             Self::Hash => "chain_hash",
-            Self::Uptime => "service_uptime",
-            Self::Visualizer => "visualizer",
         }
     }
     fn parse(value: &str) -> Result<Self, String> {
@@ -110,9 +99,7 @@ impl Domain {
             "counter" => Ok(Self::Counter),
             "client-movement" => Ok(Self::Movement),
             "chain-hash" => Ok(Self::Hash),
-            "service-uptime" => Ok(Self::Uptime),
-            "visualizer" => Ok(Self::Visualizer),
-            _ => Err("Example must be counter, chain-hash, visualizer, client-movement or service-uptime".into()),
+            _ => Err("Example must be counter, client-movement or chain-hash".into()),
         }
     }
 }
@@ -236,13 +223,6 @@ pub struct BrowserSettings {
     pub max_steps: usize,
 }
 impl BrowserSettings {
-    pub fn uptime_url(&self, base: &str, config: &crate::support::uptime_config::Config) -> String {
-        let mut url = format!("{base}?domain=service-uptime&services={}&cadence_ms={}&latency_ms={}&jitter_ms={}&min_delay_ms={}&query_hz={}&retention_ms={}&checkpoint_interval={}&max_ms={}&max_steps={}&autostart=1",config.services,config.cadence_ms,config.latency_ms,config.jitter_ms,config.min_delay_ms,config.query_hz,config.retention_ms,config.checkpoint_interval,self.budget_ms,self.max_steps);
-        if let Some(duration) = config.duration {
-            url.push_str(&format!("&duration={}", duration.as_secs()));
-        }
-        url
-    }
     pub fn movement_url(&self, base: &str, config: &crate::support::movement_config::Config) -> String {
         let mut url=format!("{base}?domain=client-movement&clients={}&input_hz={}&query_hz={}&average_latency_ms={}&jitter_ms={}&trail_ms={}&fade_ms={}&retention_ms={}&checkpoint_interval={}&max_ms={}&max_steps={}&autostart=1",
             config.clients,config.input_hz,config.query_hz,config.average_latency_ms,config.jitter_ms,config.trail_ms,config.fade_ms,config.retention_ms,config.checkpoint_interval,self.budget_ms,self.max_steps);
@@ -253,16 +233,6 @@ impl BrowserSettings {
         url
     }
     pub fn url(&self, base: &str, domain: Domain, settings: &crate::support::Settings) -> String {
-        if domain == Domain::Visualizer {
-            let mut url = format!(
-                "{base}?domain=visualizer&query_hz={}&retention_ms={}&checkpoint_interval={}&max_ms={}&max_steps={}",
-                settings.query_hz, settings.retention_ms, settings.checkpoint_interval, self.budget_ms, self.max_steps
-            );
-            if let Some(duration) = settings.duration {
-                url.push_str(&format!("&duration={}", duration.as_secs()));
-            }
-            return url;
-        }
         let mut url = format!(
             "{base}?domain={}&snapshots={}&rate={}&query_hz={}&retention_ms={}&checkpoint_interval={}&average_targets={}&max_targets={}&snapshot_skew={}&max_ms={}&max_steps={}&autostart=1",
             domain.slug(), settings.snapshot_count, settings.event_rate.limit().unwrap_or(0), settings.query_hz,
@@ -285,26 +255,6 @@ mod tests {
         Options::parse(args.iter().map(|s| s.to_string()))
     }
     #[test]
-    fn visualizer_is_a_graphical_choice_in_every_environment() {
-        for environment in ["native", "wasm", "wasm-threads", "browser"] {
-            let options = parse(&["--environment", environment, "--example", "visualizer"]).unwrap();
-            let selected = options.defaults().unwrap();
-            assert_eq!(selected.domain.label(), "Visualizer");
-            assert!(selected.domain.graphical());
-        }
-    }
-    #[test]
-    fn visualizer_browser_url_contains_only_shared_settings() {
-        let settings = crate::support::Settings::parse(["--query-hz", "5", "--duration", "2"].map(str::to_owned), true).unwrap().unwrap().0;
-        let url = BrowserSettings { budget_ms: 1.0, max_steps: 1000 }.url("http://localhost/", Domain::Visualizer, &settings);
-        for expected in ["domain=visualizer", "query_hz=5", "duration=2", "max_ms=1", "max_steps=1000"] {
-            assert!(url.contains(expected));
-        }
-        for excluded in ["snapshots=", "clients=", "services=", "jitter_ms=", "rate="] {
-            assert!(!url.contains(excluded));
-        }
-    }
-    #[test]
     fn browser_pending_capacity_is_forwarded_only_for_numeric_rates() {
         for rate in ["max", "100"] {
             let settings = crate::support::Settings::parse(["--events-per-second", rate, "--max-pending", "64"].map(str::to_owned), true)
@@ -322,7 +272,7 @@ mod tests {
     #[test]
     fn capabilities_and_browser_only_limits_are_checked() {
         assert!(Selection::new(Environment::Browser, Execution::Runtime, Domain::Counter).is_err());
-        for domain in [Domain::Counter, Domain::Hash, Domain::Movement, Domain::Uptime] {
+        for domain in [Domain::Counter, Domain::Hash, Domain::Movement] {
             for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads, Environment::Browser] {
                 assert!(Selection::new(environment, Execution::Manual, domain).is_ok());
             }
