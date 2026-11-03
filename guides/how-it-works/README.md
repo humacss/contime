@@ -32,7 +32,7 @@ ConTime supplies events in chronological order, grouped into complete timestamp 
 
 Events do not need to arrive in that order. If a reading arrives late, ConTime reconstructs the affected history with that reading in its proper place, then reapplies the later events. Previously calculated state may change as a result.
 
-Resubmitting an identical event with the same retained event ID does not apply it twice. Given the same retained events, stable IDs, and deterministic application logic, the resulting state is independent of arrival order.
+Resubmitting an identical event with the same retained event ID does not apply it twice. To get the same state regardless of arrival order, use deterministic application logic and keep each event's ID and timestamp stable. Events must arrive before the history they affect is pruned. Given the same admitted events under these conditions, queries for the same time produce the same state.
 
 ## Queries
 

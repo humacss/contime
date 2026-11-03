@@ -1,4 +1,4 @@
-![ConTime — continuous-time state from unreliable event streams](assets/contime-header.svg)
+![ConTime: continuous-time state from unreliable event streams](assets/contime-header.svg)
 
 [![Crates.io](https://img.shields.io/crates/v/contime.svg)](https://crates.io/crates/contime)
 [![Docs](https://docs.rs/contime/badge.svg)](https://docs.rs/contime)
@@ -7,78 +7,84 @@
 
 > **Work in progress:** ConTime is still being developed for my own use. There is more cleanup to do, and the API needs further refinement before it is ready for general adoption. You are welcome to try it, but expect changes and rough edges.
 
-ConTime is a Rust library for building state from events, even when those events
-arrive late or out of order. You define the events and how they change your state;
-ConTime keeps the history and replays the affected state when earlier input arrives.
-
-## Reconciliation in action
-
 [![The same delayed inputs with ConTime reconciliation on the left and without reconciliation on the right.](assets/reconciliation.gif)][browser-demo]
 
-A delayed input can leave a character in the wrong place. If you apply each
-movement change only when it arrives, those errors accumulate.
+ConTime is a Rust library for building **continuous-time state from unreliable
+event streams**.
 
-Both sides of this demo receive the same inputs. **On the left, ConTime corrects
-the past when a late input arrives**, bringing the character back onto its intended
-path. **On the right, without reconciliation, the route drifts.**
+Independent processes often communicate by sending messages that describe changes:
+a player moves, a sensor reports a reading, or a service changes status. Network
+delivery and processing can delay those messages or cause them to arrive out of order.
 
-ConTime handles the history and replay behind those corrections, so you can build
-reconciliation into your application without implementing it yourself.
+Keeping state consistent when changes arrive late often requires retaining history and
+reapplying the changes that came after them. ConTime handles that reconciliation
+for you: define your events, your snapshots, and how the events change them, and
+ConTime reconstructs the affected state in timestamp order.
+
+You can query that state at any time within your retained history, whether now,
+ten seconds ago, or between events. A rendering or processing loop can repeatedly
+query the state it needs while ConTime handles late and out-of-order events.
+
+ConTime is designed for performance. It can distribute independent histories across
+CPU cores. In a local counter benchmark on an Apple M3 Pro, it processed over five
+million events per second with just one worker.
+
+## How ConTime works
+
+ConTime applies events to snapshots that hold your application state. Each event
+has a timestamp and can target one or more snapshots. It is applied at its timestamp,
+whether it arrives on time or late.
+
+When a late event changes a snapshot, ConTime replays the affected later events up
+to the current processing target.
+
+Many systems keep only the latest state or update state at fixed ticks. ConTime
+maintains a continuous window of history, with a configurable retention horizon
+that controls how far back history is kept. Within that window, you can reconstruct
+a snapshot at any time your timestamp type can represent, including between events.
+This is the continuous time in ConTime.
+
+Your application advances a processing target, typically the current time. Events
+beyond that target remain stored for future live processing, while older history
+outside the retention window is eventually pruned from memory and can no longer be
+queried.
+
+For the same admitted events, state at a given time is deterministic regardless of
+arrival order. See [how ConTime works](guides/how-it-works/README.md) for queries,
+checkpoints, workers, and retention.
+
+The demo above shows this in action: ConTime corrects the path on the left, while
+the right applies inputs on arrival and its path drifts.
 
 **[Play the demo][browser-demo]** ·
 [Read about the example](examples/cases/client_movement/README.md) ·
 [View the code](examples/cases/client_movement/model.rs)
 
-## Performance
-
-On the author's Apple M3 Pro, the public API benchmark processed **about 5.2 million
-simple counter events per second with one worker**, submitting events individually.
-This includes submission, routing and processing, excluding event construction and
-runtime startup.
-
-A separate order-sensitive hash workload, with 64 snapshot histories and batches
-of 1,000 events, recorded:
-
-| Worker threads | Total throughput |
-| ---: | ---: |
-| 1 | 4.0 million events/s |
-| 2 | 8.0 million events/s |
-| 4 | 17.9 million events/s |
-
-These release-mode results were recorded on 2026-10-28 with Rust 1.90.0, unpinned
-threads and normal desktop background activity. Your event logic, fanout, late
-arrivals and queries affect throughput. See the [pipeline benchmarks](benches/README.md)
-and [scaling results](benches/scaling/README.md) for the measured workloads and commands.
-
-## Continuous time
-
-ConTime lets you ask **“what was the state at time T?”** within retained history,
-including times between events. An event's timestamp determines where it belongs
-in that history; its arrival time does not. A late event can therefore change
-what a later query returns.
-
-An **event** describes a timestamped change. A **snapshot** represents the state
-of one entity, such as a client or a list. ConTime maintains that entity's history
-so it can reconstruct state at the time you request. It keeps history in memory;
-your application owns persistence and chooses how much history to retain.
-
 ## Use cases
 
-- **Multiplayer games:** reconstruct state from delayed or out-of-order player inputs.
-- **Sensors and devices:** combine readings that arrive over unreliable networks.
+The same event and snapshot model can be used across applications:
+
+- **Multiplayer games:** reconstruct and render state from delayed player inputs.
+- **Robotics:** maintain a queryable world estimate as sensor results arrive at different times.
+- **IoT and services:** reconstruct device state or service uptime from delayed reports.
 - **Historical application state:** query past state without building replay yourself.
+
+ConTime runs in memory. Your application supplies the events and update logic, as
+well as any networking or persistence it needs. Local workers process independent
+histories; communication and coordination across machines remain the application's
+responsibility.
 
 ## Using `contime`
 
-ConTime 0.1.2 requires Rust 1.90 or newer. Runtime worker threads are enabled by
-default; enable the optional macros for the helpers shown here:
+ConTime 0.1.2 requires Rust 1.90 or newer. Local Runtime worker threads are enabled
+by default; enable the optional macros for the helpers shown here:
 
 ```toml
 [dependencies]
 contime = { version = "0.1.2", features = ["macros"] }
 ```
 
-The [complete ordered-list example](examples/readme.rs) defines a `Value` event
+The [complete list example](examples/readme.rs) defines a `Value` event
 with an ID, timestamp, target list and character, and a `List` snapshot that stores
 those characters. Derives handle identity, time and event registration. The
 application rule and module are:
@@ -126,6 +132,30 @@ follow; live applications use operation-specific responses or progress.
 ```sh
 cargo run --example readme --features macros
 ```
+
+## Performance
+
+ConTime routes independent snapshot histories across local worker threads and uses
+checkpoints to reduce repeated replay. On the author's Apple M3 Pro, the public API
+benchmark processed **about 5.2 million simple counter events per second with one
+worker**, submitting events individually.
+This includes submission, routing and processing, excluding event construction and
+runtime startup.
+
+A separate order-sensitive hash workload, with 64 snapshot histories and batches
+of 1,000 events, recorded:
+
+| Worker threads | Total throughput |
+| ---: | ---: |
+| 1 | 4.0 million events/s |
+| 2 | 8.0 million events/s |
+| 4 | 17.9 million events/s |
+
+These release-mode results were recorded on 2026-10-28 with Rust 1.90.0, unpinned
+threads and normal desktop background activity. They predate the 0.1.2 changes;
+rerun the benchmarks to measure the current code. Event logic, fanout, late arrivals
+and queries affect throughput. See the [pipeline benchmarks](benches/README.md)
+and [scaling results](benches/scaling/README.md) for the measured workloads and commands.
 
 ## Beyond games
 
