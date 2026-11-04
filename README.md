@@ -89,13 +89,32 @@ by default; enable the optional macros for the helpers shown here:
 contime = { version = "0.1.2", features = ["macros"] }
 ```
 
-The [complete list example](examples/readme.rs) defines a `Value` event
-with an ID, timestamp, target list and character, and a `List` snapshot that stores
-those characters. Derives handle identity, time and event registration. The
-application rule and module are:
+The [list example](examples/readme.rs) defines a `Value` event and a `List`
+snapshot. The event ID identifies each event, its timestamp determines when it
+applies, and `list_id` selects the list it affects:
 
 ```rust
 use contime::prelude::*;
+
+#[derive(ContimeEvent)]
+struct Value {
+    #[contime(id)]
+    event_id: u128,
+    list_id: u128,
+    #[contime(time)]
+    time: i64,
+    value: char,
+}
+
+#[derive(Clone, Default, ContimeSnapshot)]
+#[contime(events = [Value])]
+struct List {
+    #[contime(id)]
+    list_id: u128,
+    #[contime(time)]
+    time: i64,
+    values: Vec<char>,
+}
 
 impl SnapshotApply for List {
     fn apply_batch(&mut self, batch: impl ApplyContext<Self>) {
@@ -128,10 +147,10 @@ let ListsSnapshotLanes::List(list) = &*snapshots[0];
 assert_eq!(list.values, ['a', 'b', 'c']);
 ```
 
-These are excerpts: the [full source](examples/readme.rs) includes the data
-definitions, configuration, error handling and shutdown. It submits each event
-separately and checks the result after each insertion, then retries an event to
-show that duplicate IDs are ignored. Its idle waits make the assertions easy to
+These are excerpts: the [full source](examples/readme.rs) includes configuration,
+error handling and shutdown. It submits each event separately and checks the
+result after each insertion, then retries an event to show that duplicate IDs
+are ignored. Its idle waits make the assertions easy to
 follow; live applications use operation-specific responses or progress.
 
 ```sh
