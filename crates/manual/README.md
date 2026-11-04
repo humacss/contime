@@ -1,6 +1,6 @@
 # contime-manual
 
-Create a caller-driven ConTime instance by driving one existing `contime-worker::MessageWorker` on the calling thread. No
+Create a caller-driven `contime` instance by driving one existing `contime-worker::MessageWorker` on the calling thread. No
 router, coordinator thread, alternate replay implementation, or snapshot task is used.
 The worker owns all histories, replay scheduling, queries, and pruning.
 
@@ -49,10 +49,10 @@ insertion failures. Subscriptions are not exposed by that convenience API.
 
 The [Manual code sample](../../examples/cases/counter/manual.rs), included in the
 Rust documentation, demonstrates a host loop using only the root crate. To try
-Manual processing in the shared live counter, run:
+Manual processing in the Chain hash example, run:
 
 ```sh
-cargo run --all-features --example counter -- --execution manual
+cargo run --all-features --example chain_hash -- --execution manual
 ```
 
 Advanced callers can still use this crate directly, or the root API's

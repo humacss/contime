@@ -121,6 +121,8 @@ jobs:
                   assert (linked / source.relative_to(component)).as_posix() in files, source
               assert not (linked / "README.md").exists()
           assert "src/_symlinks/README.md" in files
+          assert "assets/reconciliation.gif" not in files
+          assert "guides/usage/README.md" in files
           fixtures = Path("src/_symlinks/runtime/tests/controlled")
           assert fixtures.is_symlink()
           assert fixtures.resolve(strict=True) == (root / "crates/runtime/tests/controlled").resolve(strict=True)

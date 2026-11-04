@@ -4,7 +4,7 @@
 submission sizes. It has no runtime dependencies, owns no threads, and knows
 nothing about event time, histories, routing, or storage.
 
-In the native ConTime pipeline it runs on the existing coordinator thread,
+In the native `contime` pipeline it runs on the existing coordinator thread,
 **after each original request passes admission and before the routers**. No
 additional queue or thread is introduced. Runtime implements the protocol adapters;
 the batcher owns packet sizing, splitting, adjacent merging, and bounded draining.
@@ -26,7 +26,7 @@ the batcher owns packet sizing, splitting, adjacent merging, and bounded drainin
   all flush immediately. Dispatch errors propagate without rollback of earlier
   packets.
 
-ConTime uses 1,024 items per packet, at most 1,024 original requests per drain,
+`contime` uses 1,024 items per packet, at most 1,024 original requests per drain,
 and a 50 microsecond soft gathering-work budget. The coordinator supplies the
 clock check after each request; a single large submission or admission callback
 can exceed that budget. `Batcher::new` accepts a positive packet limit for focused
@@ -67,7 +67,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved

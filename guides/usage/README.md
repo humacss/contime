@@ -1,4 +1,4 @@
-# Using ConTime
+# Using `contime`
 
 [Overview](../../README.md) · [How it works](../how-it-works/README.md) · [Workspace](../workspace/README.md)
 
@@ -8,13 +8,13 @@ if you just want to see the shape of the API.
 
 A running application usually submits events as they arrive and queries state when it needs to display or use it. It does not wait for every submission to finish before doing anything else.
 
-This walkthrough starts an in-memory ConTime instance with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down ConTime.
+This walkthrough starts an in-memory `contime` instance with four workers. A producer submits counter changes at varying intervals, while the main loop queries and prints two counters **20 times per second**. Some events change both counters at once. The demo runs for five seconds, then stops its producer and shuts down `contime`.
 
 The Rust blocks below show the lower-level counter contracts as a complete
 program. For runnable single-file walkthroughs, start with
 [`examples/readme.rs`](../../examples/readme.rs) or
 [`examples/explicit_traits.rs`](../../examples/explicit_traits.rs), which implements
-the ordered-list application without ConTime macros.
+the ordered-list application without `contime` macros.
 
 ```sh
 cargo run --example readme --features macros
@@ -23,7 +23,7 @@ cargo run --example explicit_traits
 
 ## Dependencies and Features
 
-To use ConTime 0.1.2 in your own Rust binary project, add:
+To use `contime` 0.1.2 in your own Rust binary project, add:
 
 ```toml
 [dependencies]
@@ -31,7 +31,7 @@ contime = "0.1.2"
 fastrand = "2"
 ```
 
-ConTime supports Rust 1.90 or newer. Runtime and built-in integer time support (`time`) are enabled by default, so ordinary
+`contime` supports Rust 1.90 or newer. Runtime and built-in integer time support (`time`) are enabled by default, so ordinary
 applications need no feature list. Enable `manual` for caller-driven processing,
 `monitor` for monitoring, or `simulator` for traffic generation and feedback tools.
 The [module API](../modules/README.md) starts managed processing with
@@ -43,7 +43,7 @@ Creating a Manual instance starts no threads. `process_with_clock` is an optiona
 helper for budgeted processing. The [manual crate](../../crates/manual/README.md)
 describes its worker contracts and processing budget. Shared contracts and storage
 adapters are available through `contime::core`. `fastrand` only varies the example
-traffic and is not required by ConTime. For local development, you can instead use
+traffic and is not required by `contime`. For local development, you can instead use
 `contime = { path = "/path/to/contime" }`.
 
 The optional `monitor` feature automatically records worker-owned insertion and live replay
@@ -76,7 +76,7 @@ All corresponding contracts remain manually implementable.
 
 ## Define Time
 
-First, import ConTime and the traits used by the example:
+First, import `contime` and the traits used by the example:
 
 ```rust
 use std::thread;
@@ -86,7 +86,7 @@ use contime::checkpoints::{ApplyBatch, ApplyEvents, CheckpointConfig, Event, Sna
 use contime::{AdvanceTime, RawConTime, ConTimeConfig, Input, Placement};
 ```
 
-ConTime uses your application's time type. Here, `Time` counts logical milliseconds. The application will calculate it from elapsed time; ConTime does not own a clock. The type provides ordering, an explicit minimum, a checked predecessor, and retention subtraction. `Default`
+`contime` uses your application's time type. Here, `Time` counts logical milliseconds. The application will calculate it from elapsed time; `contime` does not own a clock. The type provides ordering, an explicit minimum, a checked predecessor, and retention subtraction. `Default`
 is an ordinary construction value, not the history boundary. Built-in integer
 types already implement these contracts when the default `time` feature is enabled;
 signed integers support negative timestamps down to their minimum.
@@ -151,7 +151,7 @@ An event targeting `[1, 2]` contributes to both histories. Each history is updat
 
 ## Define Snapshot State and Application
 
-`Counter` stores its history ID, timestamp, and current value. The ID lets the display identify returned snapshots without relying on their order. `create` starts each counter at zero, and `apply_events` adds each event's delta. ConTime updates the snapshot timestamp through `set_time`.
+`Counter` stores its history ID, timestamp, and current value. The ID lets the display identify returned snapshots without relying on their order. `create` starts each counter at zero, and `apply_events` adds each event's delta. `contime` updates the snapshot timestamp through `set_time`.
 
 ```rust
 #[derive(Clone, Default)]
@@ -186,9 +186,9 @@ impl ApplyEvents<CounterChanged> for Counter {
 }
 ```
 
-## Start ConTime
+## Start `contime`
 
-Start the in-memory ConTime instance inside `main`:
+Start the in-memory `contime` instance inside `main`:
 
 ```rust
 fn main() {
@@ -275,7 +275,7 @@ The counters advance at varying intervals, and their values differ between runs.
 
 ## Shut Down
 
-After five seconds, the display loop ends and the scoped producer exits. Once the producer is joined, close admission and join ConTime's owned threads:
+After five seconds, the display loop ends and the scoped producer exits. Once the producer is joined, close admission and join `contime`'s owned threads:
 
 ```rust
     let report = history.shutdown();
@@ -290,12 +290,12 @@ For a practical example with delayed client inputs and corrected historical path
 
 ## Submissions and Completion
 
-Submit one event or an iterator of events with `apply`; use `send` when you need a request-specific rejection stream and insertion response. ConTime manages internal transport batching independently: it splits large submissions and combines adjacent submissions already waiting in the queue. The isolated `contime-batcher` crate manages this packetization after admission and before routing. It never waits to fill a batch. Each request keeps its own rejection destination and completion ownership; internal packet boundaries do not change event timestamps or canonical replay order. Gathering is bounded so queries and coordination can make progress, but gathering and dispatch still consume CPU time.
+Submit one event or an iterator of events with `apply`; use `send` when you need a request-specific rejection stream and insertion response. `contime` manages internal transport batching independently: it splits large submissions and combines adjacent submissions already waiting in the queue. The isolated `contime-batcher` crate manages this packetization after admission and before routing. It never waits to fill a batch. Each request keeps its own rejection destination and completion ownership; internal packet boundaries do not change event timestamps or canonical replay order. Gathering is bounded so queries and coordination can make progress, but gathering and dispatch still consume CPU time.
 
-## Run ConTime Manually
+## Run `contime` Manually
 
 If your application already owns the loop, create a manual instance and decide
-when it processes work. No ConTime background threads are started. Use the same
+when it processes work. No `contime` background threads are started. Use the same
 `Input`, `Snapshot`, and `ApplyEvents` contracts described below; you do not need
 to define worker messages or storage adapters.
 
@@ -305,11 +305,7 @@ contime = { version = "0.1.2", features = ["manual"] }
 
 The self-contained [Manual code sample](../../examples/cases/counter/manual.rs),
 also included in the Rust documentation, drives two counters from a host loop
-at 20 frames per second. To run the live counter with Manual processing:
-
-```sh
-cargo run --all-features --example counter -- --execution manual
-```
+at 20 frames per second. The counter workload is retained for internal tests and benchmarks.
 
 For a constrained build that omits the managed runtime, monitoring, counters, and
 simulator, explicitly select only Manual:
@@ -327,7 +323,7 @@ selection controls available code; enabling a tool never starts collection,
 event generation, or background threads by itself.
 
 The self-contained sample schedules submissions and display requests at 20 Hz, while giving
-ConTime one processing opportunity on every loop turn. The key operations are:
+`contime` one processing opportunity on every loop turn. The key operations are:
 
 ```rust,ignore
 contime.apply([event])?;
@@ -356,19 +352,19 @@ currently provides snapshot/event queries without subscriptions.
 
 The [WebAssembly example](../../examples/environments/wasi/README.md) runs outside a browser through WASI:
 Manual on standard WASI, or Manual and Runtime on threaded WASI with a compatible host. The separate [browser example](../../examples/environments/browser/README.md)
-uses Manual with simulator/monitor feedback for counters and a configurable dashboard; browser presentation stays under `examples/support/composition/browser/ui/`.
+uses Manual with simulator/monitor feedback for hash chains and a configurable dashboard; browser presentation stays under `examples/support/composition/browser/ui/`.
 It drives processing through `requestAnimationFrame` and `performance.now()`.
 
 ## Explore Live Workloads
 
 The [example guide](../../examples/README.md) lists runnable walkthroughs and configurable
 live dashboards. Each scenario has its own folder and reader guide. Start with
-its application model and ConTime loop; UI code lives separately under `ui/`.
+its application model and `contime` loop; UI code lives separately under `ui/`.
 
 ```sh
-cargo run --release --all-features --example counter
+cargo run --release --all-features --example chain_hash
 cargo run --release --all-features --example client_movement
-cargo run --release --all-features --example counter -- --execution manual
+cargo run --release --all-features --example chain_hash -- --execution manual
 ```
 
 Start the central example launcher with `cargo run --release --example launcher`
@@ -386,7 +382,7 @@ with cumulative per-worker throughput averages. WASI workload processing and ful
 validation stay inside WebAssembly; its UI runs in the launcher. Browser hosts
 use Manual through a frame-budgeted adapter.
 
-The counter and chain-hash dashboards offer startup settings for snapshot count, worker count (Runtime),
+The chain-hash dashboard offers startup settings for snapshot count, worker count (Runtime),
 event rate, average/maximum snapshots per event, query frequency, retention and checkpoint spacing.
 Numeric event rates also offer an outstanding-work allowance. Live demos default to one worker per available logical CPU, 1,000 snapshots
 per worker, Maximum event production, and 128-event checkpoint spacing. Manual
@@ -397,7 +393,7 @@ retains a configurable source-event allowance. Worker readings confirm bounded
 production windows independently of state queries. Dashboards show target and
 cumulative completed source-event rates, unconfirmed events, and per-worker
 application totals and cumulative averages. Hashes validate state at completed
-windows; counters validate at shutdown.
+windows and after shutdown.
 
 Client movement is a real-time case with its own client count, input
 frequency, latency/jitter and fading settings. It queries current and historical
@@ -407,9 +403,9 @@ input cadence rather than Maximum production; keyboard inputs follow the same
 delayed delivery path as simulated clients. See the
 [movement guide](../../examples/cases/client_movement/README.md).
 Use `--headless --duration 5` for finite comparisons without terminal rendering.
-The browser demo exposes one Manual worker and a configurable frame allowance.
+The launcher uses fixed Game defaults, including one Manual worker in the browser.
 Measurements include example overhead; these are live diagnostics rather than
-isolated ConTime benchmarks.
+isolated `contime` benchmarks.
 
 ## Verify Order-Sensitive State
 
@@ -419,19 +415,19 @@ The separate [`chain_hash` example](https://github.com/humacss/contime/blob/main
 cargo run -p contime --all-features --example chain_hash -- --snapshots 6 --workers 4 --events-per-second 100
 ```
 
-The example submits event groups in reverse order and queries fully admitted timestamp ranges. Its dashboard shows the target and average completed source-event rates, monitor-unconfirmed work, worker activity, and last verified and latest produced hashes. Each queried digest must match its captured canonical reference state; an invalid result stops the example with an error. It runs until `q`, Escape, or Ctrl-C. See the [example guide](https://github.com/humacss/contime/blob/main/examples/cases/chain_hash/README.md) for configuration and verification details. The counter walkthrough above needs no hashing or terminal UI dependencies.
+The example submits event groups in reverse order and queries fully admitted timestamp ranges. Its dashboard shows the target and average completed source-event rates, monitor-unconfirmed work, worker activity, and counts of up-to-date, pending and failed hashes. Each queried digest must match its captured canonical reference state; an invalid result stops the example with an error. It runs until `q`, Escape, or Ctrl-C. See the [example guide](https://github.com/humacss/contime/blob/main/examples/cases/chain_hash/README.md) for configuration and verification details. The counter walkthrough above needs no hashing or terminal UI dependencies.
 
 ## Reproduce the reconciliation recording
 
 The README recording uses an opt-in, repeatable choreography rather than random
 traffic. Five clients follow compact paths, with bots in four separate quadrants and the
 player moving up, right, left and down from the center, returning along the same
-axis after each outward leg. Inputs are sent once per second with staggered sends.
+axis after each outward leg. All five clients send their scripted inputs on the same one-second ticks.
 The intended player route stays clear of the bot routes, returns exactly to the
 center every two seconds, and finishes with a two-second rest. Explicit delays from 150 to 1,700 ms regularly deliver newer
 turns before older ones. Bots keep moving; the player
 briefly stops at the center to demonstrate Stop. All events still go through the same simulated delivery,
-ConTime processing, validated queries and renderer as the interactive example.
+`contime` processing, validated queries and renderer as the interactive example.
 No queried state or corrections are fabricated.
 
 Each client has a consistent color across the timeline, inputs, delivery animations
@@ -443,8 +439,9 @@ view: both arenas share one input timeline, with reconciliation on the left and
 arrival-time movement on the right. The canvas is recorded directly at 60 fps.
 The capture starts at the beginning of the player’s trips and ends after the
 final Stop at eight seconds has been delivered to both views, including the
-450 ms arena handoff and a brief settling interval. The last frame is held to
-make a ten-second, 1,000 × 625, 50 fps GIF. ConTime’s player finishes at the
+450 ms arena handoff and a brief settling interval. The ten-second recording is
+exported as a 900 × 542, 50 fps GIF, cropped above the controls and legend.
+`contime`’s player finishes at the
 center; the arrival-time player stops at its accumulated offset. No new trip
 starts before the recording ends. Capture reads the canvas directly rather than
 taking repeated screenshots during simulation.
@@ -453,7 +450,7 @@ To reproduce the choreography, first launch the browser host below, then add
 `showcase=1&client_spacing=18&movement_speed=8&average_latency_ms=1000&jitter_ms=1000`
 to its URL, replacing existing spacing, speed, latency and jitter values. These
 recording settings allow the explicit 1,700 ms delays; the interactive defaults
-remain 500 ms average with ±500 ms jitter. Five clients are required. The scripted inputs ignore
+remain 1,000 ms average with ±1,000 ms jitter. Five clients are required. The scripted inputs ignore
 keyboard movement. The complete input-and-delay sequence repeats every 40 seconds. Omit
 `showcase=1` to return to the normal interactive generator.
 
@@ -461,10 +458,7 @@ With the [browser prerequisites](../../examples/environments/browser/README.md#b
 installed, run from the repository root:
 
 ```sh
-cargo run --release --example launcher -- \
-  --environment browser --execution manual --example client-movement --budget-ms 1 --no-setup -- \
-  --clients 5 --client-spacing 16 --movement-speed 12 --input-hz 1 --query-hz 20 \
-  --average-latency-ms 500 --jitter-ms 500 --trail-ms 5000 --fade-ms 5000
+cargo run --release --example launcher -- --environment browser --example game
 ```
 
 Click the map, then use WASD or the arrow keys to choose a direction. Space stops

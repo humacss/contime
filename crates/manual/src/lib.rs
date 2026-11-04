@@ -1,4 +1,4 @@
-//! Drive one existing ConTime worker synchronously from the host loop.
+//! Drive one existing `contime` worker synchronously from the host loop.
 //!
 //! Enqueue caller-owned worker messages, then call [`ManualConTime::process`] once per host-loop turn.
 //! [`ManualConTime::process_with_clock`] is an optional budgeted helper.

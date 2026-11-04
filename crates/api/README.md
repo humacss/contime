@@ -1,6 +1,6 @@
 # contime-api
 
-`contime-api` isolates the work performed at ConTime's public input boundary.
+`contime-api` isolates the work performed at `contime`'s public input boundary.
 Its default channel helpers do not know what receives or processes their output.
 
 Runtime uses the default helpers to submit its protocol messages. The optional
@@ -14,7 +14,7 @@ channel. They run only after a worker begins processing their request. Empty
 queries complete with an empty vector; dropping unprocessed requests does not
 invoke callbacks. Callbacks must not block waiting for the same worker.
 
-The synchronous helpers here are independent functions. The root ConTime instance's
+The synchronous helpers here are independent functions. The root `contime` instance's
 `apply` and `advance_to` methods enqueue work asynchronously. In the composed
 pipeline, closing an apply rejection stream acknowledges insertion; it does
 not establish replay completion.
@@ -62,7 +62,7 @@ registrations forward nothing and drop the supplied sender.
 
 ## Verification
 
-Run the unit tests from the ConTime repository root:
+Run the unit tests from the `contime` repository root:
 
 ```bash
 cargo test --manifest-path crates/api/Cargo.toml --lib
@@ -155,7 +155,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved

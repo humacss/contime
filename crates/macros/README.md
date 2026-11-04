@@ -1,6 +1,6 @@
 # contime-macros
 
-The separately published implementation of ConTime's optional `macros` feature.
+The separately published implementation of `contime`'s optional `macros` feature.
 Import helpers from `contime::prelude::*`; the normal traits remain usable without
 macros. See the [application guide](../../guides/modules/README.md) for the full API.
 

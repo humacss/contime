@@ -8,10 +8,10 @@ use std::marker::PhantomData;
 ///
 /// Handle event types in an explicit phase order inside `apply_batch`. Each typed
 /// view preserves canonical ordering within that type and can be read repeatedly.
-/// ConTime never groups distinct effective timestamps into the same batch.
+/// `contime` never groups distinct effective timestamps into the same batch.
 pub trait SnapshotApply: SnapshotCreate {
     /// Applies one complete effective timestamp batch in application-defined phases.
-    /// The default leaves application state unchanged; ConTime still maintains time/history.
+    /// The default leaves application state unchanged; `contime` still maintains time/history.
     fn apply_batch(&mut self, _batch: impl ApplyContext<Self>) {}
 }
 /// Metadata and non-consuming event views for one snapshot's timestamp batch.

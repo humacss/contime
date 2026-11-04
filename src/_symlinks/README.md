@@ -2,7 +2,7 @@
 
 The leading underscore marks this directory as internal crate assembly.
 
-Why are there symbolic links under `src/`? ConTime keeps components as ordinary
+Why are there symbolic links under `src/`? `contime` keeps components as ordinary
 independent development crates under the top-level `crates/`, but publishes their
 implementation together as one public `contime` package.
 
@@ -54,7 +54,7 @@ published; it is not assembled through this directory.
 
 Cargo documents [symlink flattening](https://doc.rust-lang.org/cargo/commands/cargo-package.html)
 and [nested-package exclusions](https://doc.rust-lang.org/cargo/reference/manifest.html#the-exclude-and-include-fields).
-This directory layout is ConTime's use of those supported behaviors.
+This directory layout is `contime`'s use of those supported behaviors.
 
 ## Checkout and verification
 

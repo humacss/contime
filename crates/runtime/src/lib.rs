@@ -1,4 +1,4 @@
-//! Managed background ConTime execution, admission and thread lifecycle.
+//! Managed background `contime` execution, admission and thread lifecycle.
 //!
 //! [`ConTime::start`] starts the complete runtime. The root `contime` crate
 //! re-exports this interface. Shared application/storage contracts live in Core.
@@ -55,7 +55,7 @@ pub use crate::contime_core::{checkpoints, lanes, Input, RejectionReason};
 pub use crate::contime_progress::{ProgressObservation, ProgressPolicy};
 pub use crate::contime_router::Placement;
 pub use crate::contime_worker::{AdvanceTime, WorkerCounters, WorkerStatus};
-/// A managed background ConTime instance.
+/// A managed background `contime` instance.
 pub type Runtime<I, S, W> = ConTime<I, S, W>;
 pub use self::coordinator::{run as coordinate, Settings as CoordinatorSettings};
 pub use self::thread_input::ThreadInput;

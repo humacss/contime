@@ -2,7 +2,7 @@
 
 [Overview](../../README.md) · [Explicit traits](../usage/README.md) · [Time](../../crates/time/README.md)
 
-ConTime 0.1.2 provides optional helpers through `features = ["macros"]`.
+`contime` 0.1.2 provides optional helpers through `features = ["macros"]`.
 Start with [`examples/readme.rs`](../../examples/readme.rs); each teaching
 example is one standalone file, separate from the launcher workloads.
 
@@ -81,7 +81,7 @@ the snapshot's identity fields; other fields come from `Default`. Routing never
 constructs a temporary snapshot. Borrowed selectors do not clone identity fields
 while routing or mapping; creation clones them once into owned state.
 
-Overrides must produce the ID of the initialized snapshot. ConTime checks that
+Overrides must produce the ID of the initialized snapshot. `contime` checks that
 invariant before accepting created state. The
 [registration walkthrough](../../examples/event_registration.rs) demonstrates defaults,
 renamed source fields and equivalent alternative mapping.
@@ -110,7 +110,7 @@ attribute is needed.
 Each call handles one complete effective timestamp bucket. Typed views borrow
 events and can be read repeatedly. Handle different event types in an explicit
 phase order chosen by your application. Each view preserves canonical ordering;
-ConTime never merges distinct effective timestamps into the same application.
+`contime` never merges distinct effective timestamps into the same application.
 `ApplyContext` also exposes the snapshot ID, effective time and raw canonical
 history event count preceding this batch. Query and retention reconstruction use
 the same deterministic application logic.
@@ -171,7 +171,7 @@ dependencies are compile errors. A source-free module needs an explicit
 `#[contime(time = i64)]` because there is no type from which to infer time.
 
 Snapshot derives export hidden definition-site metadata, supporting paths across
-crates, renamed ConTime dependencies, generic snapshots and default generic
+crates, renamed `contime` dependencies, generic snapshots and default generic
 arguments. No source scanning or runtime registration registry is used. The
 [composition walkthrough](../../examples/modules.rs) shows a shared dependency
 included once through multiple paths.
@@ -228,7 +228,7 @@ syntax remains compatible. The fully handwritten
 ## Registration names and aliases
 
 A module lists snapshots and child modules, inferring event types by default. Child
-registrations are included automatically; ConTime accepts one final module.
+registrations are included automatically; `contime` accepts one final module.
 The macro generates flat enums and deduplicates repeated registration names,
 including shared dependencies reached through several modules. It emits Rust
 type-equality checks before merging registrations with the same name.

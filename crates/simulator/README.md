@@ -1,4 +1,4 @@
-# ConTime Simulator
+# `contime` Simulator
 
 Enable `simulator` on the public `contime` crate for event generation. It does not
 enable monitoring or worker bookkeeping. Enable `monitor` separately if you also
@@ -79,14 +79,14 @@ The older `Simulator`, `Workload`, and `Maximum` interfaces below remain availab
 when both `simulator` and `monitor` are enabled. They are separate from the
 independent event iterator.
 
-Test a ConTime setup with generated events, independent query validation, and
+Test a `contime` setup with generated events, independent query validation, and
 adaptive load. The simulator uses a clock supplied by its caller and creates no
 threads or timers. It works around Runtime, Manual, and WebAssembly hosts; the
 host still owns execution, queries, retention, and shutdown.
 
 `contime-monitor` records submitted and query-confirmed source events and target
 applications. `contime-simulator` uses those observations to decide how much new
-work to admit. Neither tool changes ConTime's ordering or replay rules.
+work to admit. Neither tool changes `contime`'s ordering or replay rules.
 
 ## Maximum production
 
@@ -112,7 +112,7 @@ other tasks between calls. Set `minimum_work` to the largest event cost. Units
 are target applications by default; `WorkUnit::Events` supports source-event
 pacing while the monitor continues to record both totals.
 
-These are workload-control settings, not ConTime execution settings. Query
+These are workload-control settings, not `contime` execution settings. Query
 confirmation can reconstruct a historical state without completing background
 live replay. Do not label these observations as measured worker CPU throughput.
 
@@ -120,7 +120,7 @@ live replay. Do not label these observations as measured worker CPU throughput.
 
 Implement `Workload` to supply your event generator, expected state and validator.
 No snapshot counter, hash, ID format or timestamp type is required. `Simulator`
-combines that model with Maximum and a monitor; it does not start ConTime.
+combines that model with Maximum and a monitor; it does not start `contime`.
 
 ```rust
 # #[cfg(feature = "monitor")]

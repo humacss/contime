@@ -4,7 +4,7 @@ This standalone, unpublished benchmark package measures native worker scaling
 and end-to-end application/query latency. It is separate from the browser
 example, and is excluded from the workspace and published packages.
 
-Run commands from the ConTime repository root:
+Run commands from the `contime` repository root:
 
 ```sh
 cargo +1.90.0 test --manifest-path benches/scaling/Cargo.toml
@@ -50,6 +50,32 @@ medians and spread rather than a single run.
 The latency probe queries the final timestamp while processing catches up.
 Frequent queries can repeatedly reconstruct unprocessed event tails, so this is
 a query-stress workload. Its completion rate is not baseline application throughput.
+
+## 0.1.2 throughput — 2026-11-04
+
+Measured the committed 0.1.2 code at `f75043f` in an isolated checkout on an
+Apple M3 Pro with Rust 1.90.0. The untracked benchmark lockfile was resolved from
+the local cache. Threads were unpinned and normal desktop background activity was
+present. This excludes the uncommitted runtime and worker experiments.
+
+The public API probe submitted 524,288 prebuilt events in batches of 1,000 across
+64 snapshot histories, with zero extra arithmetic rounds and one response channel.
+Each configuration ran five times and verified the final counts and ordered hash.
+Rates below are event count divided by median wall time; the range shows the five
+wall-time samples. Event preparation, final verification and shutdown are excluded.
+
+| Workers | Median wall time | Range | Throughput |
+| ---: | ---: | ---: | ---: |
+| 1 | 130.493 ms | 129.781–130.890 ms | 4.02 M events/s |
+| 2 | 65.001 ms | 64.858–66.149 ms | 8.07 M events/s |
+| 4 | 32.255 ms | 31.379–32.715 ms | 16.25 M events/s |
+
+```sh
+cargo +1.90.0 build --release --manifest-path benches/scaling/Cargo.toml --bin contime-scaling-bench
+benches/scaling/target/release/contime-scaling-bench 524288 0 1000 5 full 1
+```
+
+These are finite-work measurements, not a sustained throughput guarantee.
 
 ## Recorded results
 

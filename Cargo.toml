@@ -21,6 +21,7 @@ include = [
     "/README.md",
     "/assets/contime-logo.svg",
     "/assets/contime-header.svg",
+    "/guides/**",
     "/src/**",
     "/examples/**",
     "/tests/**",

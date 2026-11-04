@@ -1,4 +1,4 @@
-//! Generate events without starting ConTime: cargo run -p contime-simulator --example event_stream
+//! Generate events without starting `contime`: cargo run -p contime-simulator --example event_stream
 use contime_simulator::{EventStream, StreamConfig};
 use std::num::NonZeroU64;
 

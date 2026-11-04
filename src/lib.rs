@@ -101,7 +101,7 @@ It also requests time-based retention through [`ConTimeConfig::history_retention
 [`ConTime::subscribe_pruned_horizon`](RawConTime::subscribe_pruned_horizon) observes completed pruning, while
 [`ProgressPolicy`] supplies separate local processing observations.
 Neither a query nor a progress observation establishes external delivery or
-durable storage. ConTime owns no persistence or network protocol.
+durable storage. `contime` owns no persistence or network protocol.
 
 Shut down the owned topology with [`ConTime::shutdown`] after stopping
 submissions; inspect its [`ShutdownReport`] for router and worker outcomes.

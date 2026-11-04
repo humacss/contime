@@ -1,6 +1,6 @@
 # contime-core
 
-Shared application contracts and synchronous storage adapters for ConTime.
+Shared application contracts and synchronous storage adapters for `contime`.
 Core starts no threads and defines no channel-based request protocol. It does
 not depend on Runtime, the router, the batcher, or distributed progress tracking.
 
@@ -89,7 +89,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved

@@ -1,4 +1,4 @@
-//! API-side request adapters and rejection collection for ConTime.
+//! API-side request adapters and rejection collection for `contime`.
 //!
 //! The optional `manual` feature adds local callback-based worker requests.
 //! It starts no processing and owns no storage or worker loop.

@@ -1,10 +1,10 @@
-# How ConTime works
+# How `contime` works
 
-[Overview](../../README.md) · [Using ConTime](../usage/README.md) · [Workspace](../workspace/README.md)
+[Overview](../../README.md) · [Using `contime`](../usage/README.md) · [Workspace](../workspace/README.md)
 
-ConTime builds continuous-time state from two concepts you define: **snapshots**, which represent state, and **events**, which describe changes to that state.
+`contime` builds continuous-time state from two concepts you define: **snapshots**, which represent state, and **events**, which describe changes to that state.
 
-You define the data and how events change it. ConTime maintains the history needed to reconstruct that state at a requested time.
+You define the data and how events change it. `contime` maintains the history needed to reconstruct that state at a requested time.
 
 ## Snapshots
 
@@ -12,7 +12,7 @@ A snapshot represents state at a particular point in time.
 
 For example, a snapshot could describe a sensor's latest reading. The snapshot type defines what data is stored, while a snapshot ID identifies which sensor the data belongs to.
 
-ConTime maintains an independent history for each snapshot ID. The same sensor can therefore have different snapshot state at different times, and you can ask for its state at time `T`.
+`contime` maintains an independent history for each snapshot ID. The same sensor can therefore have different snapshot state at different times, and you can ask for its state at time `T`.
 
 ## Events
 
@@ -28,31 +28,31 @@ Applying events means taking snapshot state and updating it using the events tha
 
 Suppose a sensor's state contains its latest reading and the number of readings received. Your application logic might replace the stored reading and increment the count whenever a new reading arrives.
 
-ConTime supplies events in chronological order, grouped into complete timestamp batches. Your application logic processes each batch to produce the next snapshot state. Events at the same timestamp are ordered by event ID.
+`contime` supplies events in chronological order, grouped into complete timestamp batches. Your application logic processes each batch to produce the next snapshot state. Events at the same timestamp are ordered by event ID.
 
-Events do not need to arrive in that order. If a reading arrives late, ConTime reconstructs the affected history with that reading in its proper place, then reapplies the later events. Previously calculated state may change as a result.
+Events do not need to arrive in that order. If a reading arrives late, `contime` reconstructs the affected history with that reading in its proper place, then reapplies the later events. Previously calculated state may change as a result.
 
 Resubmitting an identical event with the same retained event ID does not apply it twice. To get the same state regardless of arrival order, use deterministic application logic and keep each event's ID and timestamp stable. Events must arrive before the history they affect is pruned. Given the same admitted events under these conditions, queries for the same time produce the same state.
 
 ## Queries
 
-You generally use ConTime by submitting events and querying the state they describe.
+You generally use `contime` by submitting events and querying the state they describe.
 
 A query asks for one or more snapshots at a particular time. For example: what was sensor 42's state at time `T`?
 
-ConTime reconstructs the requested state by applying the relevant events through `T`, including events exactly at that timestamp. Events after `T` do not contribute to the result.
+`contime` reconstructs the requested state by applying the relevant events through `T`, including events exactly at that timestamp. Events after `T` do not contribute to the result.
 
-The result describes state at the requested time. Querying an earlier time does not rewind the running ConTime instance or replace its current state.
+The result describes state at the requested time. Querying an earlier time does not rewind the running `contime` instance or replace its current state.
 
 Queries use admitted, retained history. Submitting an event is asynchronous, so a query does not guarantee that earlier submissions have finished processing. Use the completion response or progress notification corresponding to the operation you need to observe. Insertion acknowledgements establish insertion, not completed live replay.
 
 ## Checkpoints
 
-Replaying an entire history for every query would become increasingly expensive. ConTime keeps **checkpoints** to avoid that repeated work.
+Replaying an entire history for every query would become increasingly expensive. `contime` keeps **checkpoints** to avoid that repeated work.
 
 A checkpoint is saved snapshot state at a particular time. It provides a starting point for reconstructing later state.
 
-To answer a query at time `T`, ConTime starts from an appropriate checkpoint and applies the remaining events through `T`. It only needs to replay the part of the history after that starting point.
+To answer a query at time `T`, `contime` starts from an appropriate checkpoint and applies the remaining events through `T`. It only needs to replay the part of the history after that starting point.
 
 If a late event changes history, checkpoints affected by that event must be recalculated. Earlier valid checkpoints can still be used.
 
@@ -60,7 +60,7 @@ Checkpoint spacing controls the tradeoff between storing more saved states and r
 
 ## Routers and Workers
 
-ConTime distributes independent snapshot histories across workers so that they can be processed concurrently.
+`contime` distributes independent snapshot histories across workers so that they can be processed concurrently.
 
 A **router** uses the destination snapshot IDs supplied by your input implementation to send work to the appropriate workers. All work belonging to a particular snapshot history goes to the same worker. An event affecting several histories can be routed to several workers.
 
@@ -88,11 +88,11 @@ query snapshots at time T
 
 ## Advancement and Retention
 
-ConTime keeps a processing target that you move forward with `advance_to`.
+`contime` keeps a processing target that you move forward with `advance_to`.
 
 That target controls how far live event application should progress. Future events can already be stored and queried before live processing reaches them. A query reconstructs state independently; it does not advance the processing target.
 
-ConTime also retains a configurable amount of history. As time advances, it can discard older events and checkpoints once coordinated progress establishes that they are safe to prune.
+`contime` also retains a configurable amount of history. As time advances, it can discard older events and checkpoints once coordinated progress establishes that they are safe to prune.
 
 Pruning preserves the snapshot state needed as a starting point for the remaining history. Queries cannot reconstruct history that has already been discarded.
 

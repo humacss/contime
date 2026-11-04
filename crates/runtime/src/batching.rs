@@ -1,4 +1,4 @@
-//! ConTime protocol adapters for the isolated transport batcher.
+//! `contime` protocol adapters for the isolated transport batcher.
 use crate::contime_runtime::{CompletionHandle, RouterBatch, RouterMessage, SharedEvent};
 use crossbeam_channel::{Receiver, Sender};
 

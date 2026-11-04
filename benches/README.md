@@ -1,6 +1,6 @@
-# ConTime integration benchmarks
+# `contime` integration benchmarks
 
-These benchmarks exercise the public ConTime pipeline and example-owned terminal
+These benchmarks exercise the public `contime` pipeline and example-owned terminal
 presentation. Component benchmark results live in each crate's README. Timing
 boundaries and fixture definitions are in the corresponding benchmark sources.
 
@@ -29,6 +29,23 @@ cargo +1.90.0 test --release --workspace --all-features --lib benchmark_ -- --ig
 Run benchmark suites sequentially. Keep compiler, dependencies, features and
 workload settings consistent when comparing measurements.
 
+## Public API counter benchmark — 2026-11-04
+
+On an Apple M3 Pro with Rust 1.90.0, the committed 0.1.2 code at `f75043f`
+processed approximately **5.0 million events/s** in the single-worker
+`core/send_end_to_end/1000_batches/1_events_each` benchmark. Criterion reported
+198.41 µs per 1,000 events, with a 195.38–202.21 µs interval, over 20 samples.
+Event construction and runtime startup are outside the timed portion. Threads were
+unpinned and the machine had normal desktop background activity.
+
+```sh
+cargo +1.90.0 bench -p contime --bench apply -- core/send_end_to_end/1000_batches/1_events_each
+```
+
+This isolated build excluded uncommitted runtime and worker experiments. Its
+untracked lockfile was resolved from the local cache for the run. See the
+[scaling results](scaling/README.md) for the separate order-sensitive workload.
+
 ## Full benchmark run — 2026-10-28
 
 Measured on Apple M3 Pro (11 logical CPUs), Rust 1.90.0, optimized Cargo bench
@@ -44,7 +61,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved
@@ -249,7 +266,7 @@ cargo +1.90.0 bench -p contime --all-features --bench module_application
 The direct tests time only application of an already-borrowed timestamp bucket.
 They exclude routing, storage, scheduling and event generation. The tiny arithmetic
 allows aggressive compiler optimization, so these are adapter costs, not complete
-ConTime throughput numbers. The current implementation keeps a single-event bucket
+`contime` throughput numbers. The current implementation keeps a single-event bucket
 as one reference, stores up to eight references inline, and allocates reference
 storage for larger buckets. Typed views are repeatable and borrow payloads.
 

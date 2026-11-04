@@ -1,4 +1,4 @@
-//! Owned managed ConTime instance and its public operations.
+//! Owned managed `contime` instance and its public operations.
 mod advance;
 mod api;
 mod apply;

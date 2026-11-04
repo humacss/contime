@@ -5,7 +5,7 @@
 //! immediately available requests and flushes before returning a control boundary.
 //! The caller owns admission, dispatch, scheduling, and the processing clock.
 //!
-//! No threads, channels, sleeps, or ConTime event/storage contracts are required.
+//! No threads, channels, sleeps, or `contime` event/storage contracts are required.
 
 #![deny(missing_docs)]
 

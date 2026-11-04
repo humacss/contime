@@ -2,7 +2,7 @@
 
 Worker-status collection and passive workload accounting, with presentation kept
 separate. The default build is standard-library-only. Enable `workers` for the
-nonblocking collector and protocol, or `runtime` for the managed ConTime adapter.
+nonblocking collector and protocol, or `runtime` for the managed `contime` adapter.
 The collector starts no threads, sleeps, or application queries. Rust 1.90 or newer
 is required.
 
@@ -233,7 +233,7 @@ pre-populated state. Query-capture/completion fixtures are rebuilt outside the
 measured section; monitor destruction is excluded from those measurements.
 Compaction includes one submission-recording call. History iteration includes a
 checksum over all retained samples. Submission throughput describes bookkeeping
-units per call, **not** ConTime event-processing capacity.
+units per call, **not** `contime` event-processing capacity.
 
 The shared [Runtime fixture](benches/support/pipeline.rs) is exercised by both
 integration tests and the `pipeline` benchmark. Each trial prepares 4,096 unique
@@ -241,7 +241,7 @@ events, 128 snapshots, one or four workers, and one or three targets per event.
 Reversing 256-event arrival blocks makes events late within each history.
 All variants send the same individual events through the same Runtime APIs;
 only monitor bookkeeping changes. Per-64-event monitoring does not batch
-ConTime submissions. Tests additionally cover an incomplete recording batch.
+`contime` submissions. Tests additionally cover an incomplete recording batch.
 
 Pipeline timing includes submission, insertion responses, settled replay, a
 snapshot query and monitor bookkeeping. Controlled replay uses `wait_until_idle`
@@ -254,7 +254,7 @@ latencies are not the Criterion timing result.
 Use release measurements and repeat the pipeline comparison. Thread scheduling,
 allocator behavior and other activity can overwhelm the cost of a few counter
 updates. A monitored run appearing faster is not evidence that monitoring speeds
-up ConTime. Results here measure local bookkeeping and a fixed diagnostic
+up `contime`. Results here measure local bookkeeping and a fixed diagnostic
 workload; they do not predict sustained application throughput.
 
 
@@ -339,7 +339,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved

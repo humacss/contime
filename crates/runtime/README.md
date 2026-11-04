@@ -1,6 +1,6 @@
 # contime-runtime
 
-The managed ConTime runtime. `ConTime::start` (also available as `Runtime::start`)
+The managed `contime` runtime. `ConTime::start` (also available as `Runtime::start`)
 starts admission, router, and worker threads. The root `contime` crate exposes the module-selected
 `ConTime::<App>::start(config)` facade. Direct lane-level callers use its
 `RawConTime<I, S, W>` re-export; configuration and processing operations are shared.
@@ -37,7 +37,7 @@ completed live replay. Use operation-specific responses or progress in running
 applications. Global idle helpers are only for controlled tests and benchmarks.
 
 `shutdown` closes admission and joins the owned topology. It preserves router
-and worker outcomes in `ShutdownReport`. ConTime does not restart failed threads
+and worker outcomes in `ShutdownReport`. `contime` does not restart failed threads
 or provide persistence.
 
 The optional `monitor` feature enables cumulative worker counters and native
@@ -124,7 +124,7 @@ Both cases include two Crossbeam channel hops,
 the router and worker receive loops, and final queue-drain observation. They
 exclude startup, shutdown, real snapshot routing, event storage, replay, lane
 projection and filtering, checkpoint work, API rejection collection, and
-every sibling ConTime crate.
+every sibling `contime` crate.
 
 The process-wide flamegraphs place the dominant sampled work in Crossbeam's
 send/receive, backoff, park, and unpark paths. Allocation is a minor sampled
@@ -236,7 +236,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved

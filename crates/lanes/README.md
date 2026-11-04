@@ -1,9 +1,9 @@
-# ConTime Lanes
+# `contime` Lanes
 
 `contime-lanes` contains isolated, statically dispatched contracts for routing
 canonical events through snapshot-specific filter lanes and apply lanes.
 
-The crate intentionally has no dependency on ConTime or on its API, router,
+The crate intentionally has no dependency on `contime` or on its API, router,
 worker, events, or snapshot subcrates. Core and the root `contime` crate
 re-export these contracts for consumer application adapters.
 
@@ -87,7 +87,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved

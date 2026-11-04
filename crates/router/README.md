@@ -80,7 +80,7 @@ recovery orchestration.
 
 ## Verification
 
-Run the inline unit tests from the ConTime repository root:
+Run the inline unit tests from the `contime` repository root:
 
 ```bash
 cargo test --manifest-path crates/router/Cargo.toml --lib
@@ -324,7 +324,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved

@@ -1,4 +1,4 @@
-//! A complete caller-driven instance using the ordinary ConTime application contracts.
+//! A complete caller-driven instance using the ordinary `contime` application contracts.
 //!
 //! Create an instance, enqueue operations, then call [`ManualConTime::process`](crate::manual::RawManualConTime::process)
 //! from the host loop. Query callbacks run during processing; they may capture `Rc`

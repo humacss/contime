@@ -1,6 +1,6 @@
 # Workspace and verification
 
-[Overview](../../README.md) · [Using ConTime](../usage/README.md) · [How it works](../how-it-works/README.md)
+[Overview](../../README.md) · [Using `contime`](../usage/README.md) · [How it works](../how-it-works/README.md)
 
 The root crate is a facade: it re-exports application contracts and the selected
 execution model. Most implementation lives in the subcrates below. Runtime starts
@@ -93,7 +93,7 @@ configurable browser host.
 
 ## Current constraints
 
-- ConTime is in-memory only. Persistence, replay from disk, and recovery belong in surrounding systems.
+- `contime` is in-memory only. Persistence, replay from disk, and recovery belong in surrounding systems.
 - Retention prunes old events and checkpoints by time. There is no built-in memory cap.
 - Application logic must be deterministic. Stable event IDs and snapshot routing belong to the consumer.
 - Queries earlier than retained history cannot reconstruct discarded events.

@@ -10,7 +10,7 @@ where
 {
     /// Subscribe to the horizon completed by every worker, including retention
     /// hooks. Samples strictly before each reported horizon may be considered
-    /// pruned by ConTime. This is not the requested or safe-to-prune target.
+    /// pruned by `contime`. This is not the requested or safe-to-prune target.
     ///
     /// Registration sends the current completed horizon (initially Timestamp::minimum()),
     /// followed by strictly increasing updates. Each caller has its own unbounded

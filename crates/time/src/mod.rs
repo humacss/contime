@@ -1,4 +1,4 @@
-//! Ordered time contracts shared by ConTime storage and execution.
+//! Ordered time contracts shared by `contime` storage and execution.
 #![deny(missing_docs)]
 
 // Unit fixtures use integers even when testing a minimal feature selection.

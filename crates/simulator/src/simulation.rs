@@ -5,7 +5,7 @@ use std::{num::NonZeroU64, time::Duration};
 /// Domain-specific generation and independent query validation.
 ///
 /// Implementations may use any event, snapshot, timestamp and expectation types.
-/// `generate` updates the independent expected model, never ConTime's state.
+/// `generate` updates the independent expected model, never `contime`'s state.
 pub trait Workload {
     /// Event submitted to the host's execution backend.
     type Event;

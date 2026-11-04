@@ -3,7 +3,7 @@
 pub const MAX_EVENTS: usize = 1_024;
 /// Maximum original requests gathered during one drain, including empty requests.
 pub const MAX_REQUESTS: usize = MAX_EVENTS;
-/// Default soft gathering-work budget used by ConTime's coordinator.
+/// Default soft gathering-work budget used by `contime`'s coordinator.
 ///
 /// This is not a fill delay. The coordinator checks its clock after each request;
 /// a single admission callback or large request can exceed the budget.
