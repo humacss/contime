@@ -4,8 +4,8 @@ use crate::{
     movement_example::setup::MovementExample,
     support::{
         monitored::{
-            backend::{self, Backend},
             Options,
+            backend::{self, Backend},
         },
         monitored_metrics::Metrics,
         monitored_wire::Sample,
@@ -75,12 +75,15 @@ fn drive<B: Backend<MovementExample>>(
                             elapsed: driver.now,
                             reversed: None,
                             queries: driver.updates,
+                            verified_once: false,
                         },
                         reading: driver.latest.clone(),
                         done,
                         snapshot_count: driver.config.clients,
                         snapshots: Vec::new(),
                         movement: Some(report),
+                        hash_summary: None,
+                        failure: None,
                     };
                     writeln!(io::stdout().lock(), "{}", sample.encode())?;
                 } else {

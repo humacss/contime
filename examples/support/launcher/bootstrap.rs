@@ -16,6 +16,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Cargo releases its build lock before running an example. The second build
     // enables Runtime and monitor, so it enters the dashboard instead of here.
     // Preserve the standard debug/release choice and forward arguments verbatim.
+    // The selected launcher and its presenter handle Ctrl-C. Keep the bootstrap
+    // alive until they finish, so output cannot arrive after the shell prompt.
+    ctrlc::set_handler(|| {})?;
     let status = command(Path::new(env!("CARGO_MANIFEST_DIR")), !cfg!(debug_assertions), std::env::args_os().skip(1)).status()?;
     std::process::exit(status.code().unwrap_or(1));
 }

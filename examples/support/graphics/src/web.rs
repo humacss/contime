@@ -28,12 +28,24 @@ pub fn update_scene(json: &str, reduced_motion: bool) -> Result<(), JsValue> {
     .map_err(|e| JsValue::from_str(&e))
 }
 #[wasm_bindgen]
+pub fn update_dashboard(json: &str, domain: &str) -> Result<(), JsValue> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let dashboard = crate::dashboard::Dashboard::browser(&value, domain).map_err(|e| JsValue::from_str(&e))?;
+    with_bridge(|bridge| bridge.publish_dashboard(dashboard))
+}
+
+#[wasm_bindgen]
 pub fn set_running(running: bool) -> Result<(), JsValue> {
     with_bridge(|bridge| bridge.running(running))
 }
 #[wasm_bindgen]
 pub fn reset_scene() -> Result<(), JsValue> {
     with_bridge(Bridge::reset)
+}
+
+#[wasm_bindgen]
+pub fn take_reset() -> Result<bool, JsValue> {
+    with_bridge(Bridge::take_reset)
 }
 
 #[wasm_bindgen]

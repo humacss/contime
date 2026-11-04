@@ -3,7 +3,7 @@
 Application models, lane setup and simulator callbacks live under
 [cases](../cases/README.md). Environment adapters live under
 [environments](../environments/README.md). Support composes those pieces through
-public ConTime, Monitor and Simulator APIs; it is not another library backend.
+public `contime`, Monitor and Simulator APIs; it is not another library backend.
 
 | Module | Responsibility |
 | --- | --- |
@@ -27,7 +27,7 @@ public ConTime, Monitor and Simulator APIs; it is not another library backend.
 All live cases use simulator iterators and worker-monitor feedback. Runtime and
 Manual hosts use the same bounded windows. The browser reuses the controller,
 Manual backend and reference checks through its nonblocking frame adapter.
-Counter and hash processing stays in WebAssembly in WASI; the launcher owns its
+Hash processing stays in WebAssembly in WASI; the launcher owns its
 terminal UI. Browser clock bindings stay in the environment; case selection and presentation
 stay in support composition. See
 [environments/browser](../environments/browser/README.md).
@@ -39,8 +39,7 @@ never imply completion. Prompt windows increase the next probe; slower windows
 reduce it. Numeric rates pace source events and optionally cap outstanding source
 events. An event with several destinations still uses one source slot.
 
-Queries inspect state; they do not release production credit. Counters validate
-once after monitor-confirmed drain. Hashes validate complete digests during the
+Queries inspect state; they do not release production credit. Hashes validate complete digests during the
 run and at shutdown. Pending validation freezes new inputs and time
 advancement, preserving its canonical prefix and retention boundary.
 

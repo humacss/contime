@@ -5,6 +5,15 @@ use contime::{
     checkpoints::{ApplyEvents, Event, Snapshot},
     Input,
 };
+/// Reverse a deterministic portion of a generated group and return its reordered transitions.
+pub fn reorder<T>(events: &mut [T], percent: usize) -> u64 {
+    if percent == 0 || events.len() < 2 {
+        return 0;
+    }
+    let count = (events.len() * percent.min(100) / 100).max(2).min(events.len());
+    events[..count].reverse();
+    (count - 1) as u64
+}
 pub fn record<M: Example>(events: &mut [M::Event], expected: &mut [M::State], maximum: usize, ids: &mut Vec<u128>) -> Result<u64, Failure> {
     events.sort_by_key(|event| (event.time(), event.event_id()));
     let mut applications = 0;

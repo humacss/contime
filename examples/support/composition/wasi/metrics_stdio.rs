@@ -48,6 +48,16 @@ fn check_stream(execution: &str, domain: &str) {
         assert_eq!(snapshot.produced_hash.is_some(), domain == "chain-hash");
     }
     if domain == "chain-hash" {
+        let initial = samples[0].hash_summary.as_ref().unwrap();
+        assert_eq!((initial.up_to_date, initial.pending, initial.failed), (0, 16, 0));
+        let summary = last.hash_summary.as_ref().unwrap();
+        assert_eq!((summary.up_to_date, summary.pending, summary.failed), (16, 0, 0));
+        let worker_hashes = summary.workers.as_ref().expect("final verification has worker ownership");
+        assert_eq!(worker_hashes.len(), workers);
+        for (index, worker) in worker_hashes.iter().enumerate() {
+            let expected = (1..=16).filter(|id| id % workers == index).count() as u64;
+            assert_eq!((worker.up_to_date, worker.pending, worker.failed), (expected, 0, 0));
+        }
         assert!(last.metrics.reversed.unwrap() > 0);
         assert!(last.metrics.queries > 1);
         assert!(last.snapshots.iter().any(|snapshot| snapshot.verified_hash.is_some_and(|hash| hash != [0; 32])));
@@ -62,13 +72,13 @@ fn check_stream(execution: &str, domain: &str) {
 
 #[test]
 fn manual_guest_streams_metrics_until_drained() {
-    check_stream("manual", "counter");
+    check_stream("manual", "internal-counter");
 }
 
 #[cfg(feature = "runtime")]
 #[test]
 fn runtime_guest_streams_metrics_until_validated_exit() {
-    check_stream("runtime", "counter");
+    check_stream("runtime", "internal-counter");
 }
 
 #[test]
@@ -152,5 +162,38 @@ fn movement_guest_runs_the_shared_case_and_accepts_keyboard_inputs() {
         assert!(movement.late > 0);
         assert!(movement.updates > 1);
         assert_eq!(last.reading.as_ref().unwrap().workers.len(), if execution == "runtime" { 2 } else { 1 });
+    }
+}
+
+#[test]
+fn dashboard_control_stops_and_validates_counter_and_hash() {
+    use std::io::Write;
+    use std::process::Stdio;
+    for domain in ["internal-counter", "chain-hash"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_contime-wasm-example"))
+            .args([
+                "--domain",
+                domain,
+                "--execution",
+                "manual",
+                "--metrics-stdio",
+                "--control-input",
+                "poll",
+                "--snapshots",
+                "4",
+                "--events-per-second",
+                "100",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"q").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let samples: Vec<_> = String::from_utf8(output.stdout).unwrap().lines().map(|line| Sample::decode(line).unwrap()).collect();
+        assert!(samples.last().unwrap().done);
+        assert_eq!(samples.last().unwrap().metrics.outstanding, 0);
     }
 }

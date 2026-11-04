@@ -17,6 +17,7 @@ struct Display {
     entries: crate::entrance::Entries,
     tracks: crate::tracks::Tracks,
     generation: u64,
+    dashboard_view: crate::dashboard_view::View,
 }
 
 pub fn app(bridge: Bridge, canvas: Option<String>) -> App {
@@ -38,7 +39,9 @@ pub fn app(bridge: Bridge, canvas: Option<String>) -> App {
     .init_resource::<Display>()
     .init_resource::<crate::labels::Labels>()
     .configure_sets(Update, (GraphicsSet::Collect, GraphicsSet::Draw).chain())
-    .add_systems(Startup, (setup, crate::labels::setup))
+    .add_systems(Startup, (setup, crate::labels::setup, crate::navigation::setup))
+    .add_systems(Update, crate::navigation::update.before(GraphicsSet::Collect))
+    .add_systems(Update, crate::viewport::update.in_set(GraphicsSet::Collect))
     .add_systems(
         PostUpdate,
         crate::labels::draw
@@ -60,7 +63,18 @@ fn setup(mut commands: Commands, mut config: ResMut<GizmoConfigStore>) {
     ));
     config.config_mut::<DefaultGizmoConfigGroup>().0.line.width = 2.0;
 }
-fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut labels: ResMut<crate::labels::Labels>, mut gizmos: Gizmos) {
+#[allow(clippy::too_many_arguments)] // Rendering gathers the shared scene inputs from Bevy.
+fn draw(
+    bridge: Res<Bridge>,
+    mut display: ResMut<Display>,
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    mut labels: ResMut<crate::labels::Labels>,
+    mut gizmos: Gizmos,
+) {
     labels.clear();
     let state = bridge.snapshot();
     if display.generation != state.generation {
@@ -73,6 +87,22 @@ fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut 
         display.entries.reset();
         display.tracks.reset();
         display.generation = state.generation;
+        display.dashboard_view.reset();
+    }
+    if let Some(data) = &state.dashboard {
+        let window = windows.iter().next();
+        let cursor = window.and_then(|w| w.cursor_position()).and_then(|position| {
+            cameras.iter().next().and_then(|(camera, transform)| camera.viewport_to_world_2d(transform, position).ok())
+        });
+        display.dashboard_view.draw(
+            data,
+            &keys,
+            &mut labels,
+            &mut gizmos,
+            window.map_or(Vec2::new(1280.0, 900.0), |w| Vec2::new(w.width(), w.height())),
+            crate::dashboard_view::Pointer { position: cursor, clicked: mouse.just_pressed(MouseButton::Left) },
+        );
+        return;
     }
     let Some(report) = state.report else {
         return;
@@ -90,29 +120,16 @@ fn draw(bridge: Res<Bridge>, mut display: ResMut<Display>, time: Res<Time>, mut 
     let Display { transfers, unreconciled_transfers, tracks, entries, .. } = &mut *display;
     transfers.update(&left_handoff, tracks, entries, elapsed, immediate);
     unreconciled_transfers.update(&right_handoff, tracks, entries, elapsed, immediate);
-    draw_arena(&left, -crate::comparison::OFFSET as f32, "WITH CONTIME", &mut labels, &mut gizmos);
-    draw_arena(&right, crate::comparison::OFFSET as f32, "WITHOUT RECONCILIATION", &mut labels, &mut gizmos);
+    draw_arena(&left, -crate::comparison::OFFSET as f32, "With ConTime", &mut labels, &mut gizmos);
+    draw_arena(&right, crate::comparison::OFFSET as f32, "Without ConTime", &mut labels, &mut gizmos);
     crate::paths::draw_intended(&left, &mut gizmos);
     crate::paths::draw_intended(&right, &mut gizmos);
     crate::paths::draw(&left, state.reduced_motion, &mut gizmos);
     crate::paths::draw(&right, state.reduced_motion, &mut gizmos);
     crate::network::draw(&report, &display.entries, &display.tracks, state.reduced_motion, &mut labels, &mut gizmos);
     if !state.running && !state.finished {
-        labels.push(Vec2::new(-12.0, 91.0), 50.0, "PAUSED", crate::labels::Style::Heading, Color::srgb(0.95, 0.85, 0.55));
+        labels.push(Vec2::new(55.0, 74.0), 40.0, "PAUSED", crate::labels::Style::Heading, Color::srgb(0.95, 0.85, 0.55));
     }
-    let muted = Color::srgb(0.65, 0.75, 0.80);
-    for (x, label, compact) in [
-        (-100.0, "Original timestamps\nPast paths repaired", "Repairs past paths"),
-        (4.0, "Arrival timestamps\nPast paths stay", "Applies on arrival"),
-    ] {
-        labels.responsive(Vec2::new(x, -34.0), 96.0, label, compact, crate::labels::Style::Caption, muted);
-    }
-    let controls = if cfg!(target_arch = "wasm32") {
-        "Gray dashes: intended / Solid: current / Colored dashes: replaced / WASD: move / Space: stop / P: pause"
-    } else {
-        "Gray dashes: intended / Solid: current / Colored dashes: replaced / WASD: move / Space: stop"
-    };
-    labels.push(Vec2::new(-100.0, -51.0), 200.0, controls, crate::labels::Style::Hint, muted);
     draw_markers(&display.animation, &mut gizmos);
     draw_markers(&display.unreconciled_animation, &mut gizmos);
     display.transfers.draw(&mut gizmos);
@@ -129,9 +146,9 @@ fn draw_arena(report: &crate::report::Report, offset: f32, label: &str, labels: 
         gizmos.line_2d(Vec2::new(offset - hx, y as f32 * 10.0), Vec2::new(offset + hx, y as f32 * 10.0), grid);
     }
     gizmos.rect_2d(Isometry2d::from_translation(Vec2::new(offset, 0.0)), Vec2::new(hx * 2.0, hy * 2.0), Color::srgb(0.42, 0.55, 0.62));
-    let compact = if label == "WITHOUT RECONCILIATION" { "NO REPLAY" } else { label };
+    let compact = if label == "Without ConTime" { "Without ConTime" } else { label };
     labels.responsive(
-        Vec2::new(offset - hx, hy + 8.0),
+        Vec2::new(offset - hx, hy + 4.5),
         hx * 2.0,
         label,
         compact,

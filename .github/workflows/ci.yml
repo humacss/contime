@@ -66,10 +66,10 @@ jobs:
         run: cargo +${{ matrix.toolchain }} check --workspace --all-targets
       - name: Check example targets with their shared feature set
         run: cargo +${{ matrix.toolchain }} check -p contime --all-features --all-targets
-      - name: Run native counter through the launcher
-        run: cargo +${{ matrix.toolchain }} run -p contime --example launcher -- --environment native --example counter --no-setup -- --headless --duration 1 --workers 2 --snapshots 8 --events-per-second 1000
-      - name: Run Manual counter through the launcher
-        run: cargo +${{ matrix.toolchain }} run -p contime --example launcher -- --environment native --execution manual --example counter --no-setup -- --headless --duration 1 --snapshots 8 --events-per-second 1000
+      - name: Run native chain hash through the launcher
+        run: cargo +${{ matrix.toolchain }} run -p contime --example launcher -- --environment native --example chain-hash --no-setup -- --headless --duration 1 --workers 2 --snapshots 8 --events-per-second 1000
+      - name: Run Manual chain hash through the launcher
+        run: cargo +${{ matrix.toolchain }} run -p contime --example launcher -- --environment native --execution manual --example chain-hash --no-setup -- --headless --duration 1 --snapshots 8 --events-per-second 1000
       - name: Run single-file walkthroughs
         run: |
           for example in readme composite_ids event_registration module_subsets explicit_traits modules; do

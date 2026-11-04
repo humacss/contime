@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseRate, readSettings, startupSettings } from '../ui/pacing.mjs';
-const values = { domain: 'counter', snapshots: '8', rate: 'Maximum', query_hz: '20', retention_ms: '1000', checkpoint_interval: '128', max_pending: '128', average_targets: '1.1', max_targets: '2', max_ms: '2', max_steps: '256' };
+const values = { domain: 'chain-hash', snapshots: '8', rate: 'Maximum', query_hz: '20', retention_ms: '1000', checkpoint_interval: '128', max_pending: '128', average_targets: '1.1', max_targets: '2', max_ms: '2', max_steps: '256' };
 test('Maximum and numeric rates are parsed without host pacing', () => {
     for (const value of ['max', 'Maximum', 'MAXIMUM', '0']) assert.equal(parseRate(value), 0);
     assert.equal(parseRate('1000000000'), 1000000000);
@@ -43,7 +43,7 @@ test('numeric source windows are independent of snapshot fanout', () => {
 // Load the actual host module with lightweight DOM and binding adapters. The
 // startup parsing and run controls still execute unchanged.
 async function browserPage(search, report = null, hidden = false) {
-    let frameCallback, now = 0;
+    let frameCallback, now = 0, resetRequested = false;
     const frameTimes = [];
     const inputs = [];
     const { readFile } = await import('node:fs/promises');
@@ -54,12 +54,14 @@ async function browserPage(search, report = null, hidden = false) {
         elements.set(match[1], { hidden: /\shidden\b/.test(tag),
             disabled: /\sdisabled\b/.test(tag), handlers: {},
             addEventListener(name, handler) { this.handlers[name] = handler; },
+            setAttribute(name, value) { this[name] = value; },
             replaceChildren() { this.textContent = ''; } });
     }
     const started = [];
     const graphicsEvents = [];
     globalThis.graphicsBindings = { default: async () => {}, start_graphics: () => graphicsEvents.push("start"),
-        update_scene() { graphicsEvents.push("draw"); }, finish_scene: () => graphicsEvents.push("finish"), set_running: value => graphicsEvents.push(value), reset_scene: () => graphicsEvents.push("reset") };
+        take_reset() { const value = resetRequested; resetRequested = false; return value; },
+        update_dashboard() { graphicsEvents.push("dashboard"); }, update_scene() { graphicsEvents.push("draw"); }, finish_scene: () => graphicsEvents.push("finish"), set_running: value => graphicsEvents.push(value), reset_scene: () => graphicsEvents.push("reset") };
     globalThis.window = { handlers: {}, listenerOptions: {}, addEventListener(name, handler, options) { this.handlers[name] = handler; this.listenerOptions[name] = options; } };
     globalThis.location = { search };
     globalThis.document = { hidden, handlers: {}, listenerOptions: {}, addEventListener(name, handler, options) { this.handlers[name] = handler; this.listenerOptions[name] = options; }, getElementById: id => elements.get(id) };
@@ -68,6 +70,7 @@ async function browserPage(search, report = null, hidden = false) {
     globalThis.requestAnimationFrame = callback => { frameCallback = callback; return 1; };
     globalThis.cancelAnimationFrame = () => { frameCallback = null; };
     elements.get('start').click = () => elements.get('start').handlers.click();
+    elements.get('reset').click = () => elements.get('reset').handlers.click();
     globalThis.browserBindings = { default: async () => {}, BudgetDemo: class {
         constructor(json) { started.push(JSON.parse(json)); }
         free() {}
@@ -82,12 +85,23 @@ async function browserPage(search, report = null, hidden = false) {
         .replace("await import('../pkg/graphics/contime_graphics_example.js')", 'globalThis.graphicsBindings');
     await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#${encodeURIComponent(search)}`);
     return { elements, started, graphicsEvents, frameTimes, inputs, listenerOptions: window.listenerOptions, result: window.contimeExample,
+        requestReset: () => { resetRequested = true; },
         runFrame: (elapsed = 16) => { now += elapsed; const callback = frameCallback; frameCallback = null; callback?.(); },
         visibility: (hidden, elapsed = 0) => { now += elapsed; document.hidden = hidden; document.handlers.visibilitychange?.(); },
         canvasKey: key => elements.get('movement-map').handlers.keydown({key, preventDefault() {}}),
         key: (key, options = {}) => window.handlers.keydown?.({key, preventDefault() {}, ...options}),
     };
 }
+test('out-of-order setting defaults to full reversal and accepts percentages', () => {
+    assert.equal(startupSettings(new URLSearchParams()).reorder_percent, 100);
+    assert.equal(readSettings({...values, reorder_percent: 0}).reorder_percent, 0);
+    assert.equal(readSettings({...values, reorder_percent: 50}).reorder_percent, 50);
+    assert.throws(() => readSettings({...values, reorder_percent: 101}), /Invalid reorder_percent/);
+});
+test('direct browser startup offers chain hash by default and rejects the retired counter', () => {
+    assert.equal(startupSettings(new URLSearchParams()).domain, 'chain-hash');
+    assert.throws(() => readSettings({...values, domain: 'counter'}), /Invalid domain/);
+});
 test('browser has no settings form or editable configuration controls', async () => {
     const { elements, result } = await browserPage('');
     assert.equal(result.error, null);
@@ -141,20 +155,21 @@ test('Reset clears results and the previous movement display', async () => {
     assert.ok(graphicsEvents.includes('reset'), 'previous Bevy presentation must be cleared');
 });
 
-test('movement starts without browser controls while counter retains its diagnostics', async () => {
+test('game and chain hash both use the graphical presentation', async () => {
     const movement = await browserPage('?domain=client-movement&focus-test=1');
     assert.equal(movement.result.error, null);
     assert.equal(movement.started.length, 1);
-    assert.equal(movement.started[0].average_latency_ms, 500);
-    assert.equal(movement.started[0].jitter_ms, 500);
+    assert.equal(movement.started[0].average_latency_ms, 1000);
+    assert.equal(movement.started[0].jitter_ms, 1000);
     assert.equal(movement.elements.get('diagnostics').open, false);
     assert.equal(movement.elements.get('run-title').hidden, true);
-    const counter = await browserPage('?domain=counter&focus-test=1');
-    assert.equal(counter.elements.get('diagnostics').open, true);
+    const counter = await browserPage('?domain=chain-hash&focus-test=1');
+    assert.equal(counter.elements.get('diagnostics').open, false);
+    assert.equal(counter.started.length, 1);
     assert.equal(counter.elements.get('diagnostics-title').hidden, true);
 });
 
-test('movement is limited to five clients while counter scope stays independent',()=>{
+test('movement is limited to five clients while hash scope stays independent',()=>{
     for (const clients of [1,5]) assert.equal(readSettings({...values,domain:'client-movement',clients,input_hz:2,
         average_latency_ms:50,jitter_ms:0,trail_ms:200,fade_ms:500}).clients,clients);
     assert.throws(()=>readSettings({...values,domain:'client-movement',clients:6,input_hz:2,
@@ -180,16 +195,14 @@ test('movement frames update graphics and reports without rebuilding hidden diag
     assert.equal(page.elements.get('submitted').textContent, 'untouched');
 });
 
-test('counter frames retain their visible diagnostics', async () => {
+test('hash frames go to the shared graphics', async () => {
     const report = {submitted:10,applications:10,queued:0,queries:1,steps:1,
         completed:8,outstanding:2,elapsed:1,target_rate:5,workers_status:[],query_ms:0,frame_ms:0};
-    const page = await browserPage('?domain=counter&autostart=1&diagnostics-regression=1', report);
+    const page = await browserPage('?domain=chain-hash&autostart=1&diagnostics-regression=1', report);
     page.runFrame();
     assert.equal(page.result.error, null);
-    assert.equal(page.elements.get('submitted').textContent, '10');
-    assert.equal(page.elements.get('visible').textContent, '8');
-    assert.equal(page.elements.get('pending').textContent, '2');
-    assert.ok(!page.graphicsEvents.includes('draw'));
+    assert.ok(page.graphicsEvents.includes('dashboard'));
+    assert.equal(page.elements.get('diagnostics').open, false);
 });
 
 
@@ -261,4 +274,30 @@ test('P preserves browser shortcuts and Space still stops movement only while ru
     page.key('p');
     page.canvasKey(' ');
     assert.deepEqual(page.inputs, ['stop', 'stop']);
+});
+
+
+test('graphical reset restarts the game even when paused', async () => {
+    const page = await browserPage('?domain=client-movement&reset-control=1', movementReport);
+    page.runFrame();
+    page.key('p');
+    assert.equal(page.result.paused, true);
+    page.requestReset();
+    page.runFrame();
+    assert.equal(page.result.error, null);
+    assert.equal(page.started.length, 2);
+    assert.equal(page.result.paused, false);
+    assert.ok(page.graphicsEvents.includes('reset'));
+});
+test('hash verification failure remains visible and does not resume', async () => {
+    const report = { done: true, failure: 'Snapshot 3 differs', hash_summary: { up_to_date: 2, pending: 0, failed: 1 } };
+    const page = await browserPage('?domain=chain-hash&hash-failure=1', report);
+    page.runFrame();
+    assert.equal(page.result.error, 'Snapshot 3 differs');
+    assert.equal(page.result.done, false);
+    assert.ok(page.graphicsEvents.includes('dashboard'));
+    assert.equal(page.elements.get('error').hidden, true);
+    page.key('p');
+    page.runFrame();
+    assert.equal(page.frameTimes.length, 1);
 });

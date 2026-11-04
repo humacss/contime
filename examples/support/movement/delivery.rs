@@ -113,13 +113,10 @@ mod tests {
         assert_eq!(queue.len(), 0);
     }
     #[test]
-    fn wider_delay_range_regularly_reorders_inputs_for_every_bot() {
+    fn default_delay_range_regularly_reorders_inputs_for_every_bot() {
         let mut queue = Delivery::new();
-        // A 0–2 second delay can reorder the one-second bot cadence.
-        let config =
-            crate::support::movement_config::Config::parse(["--average-latency-ms", "1000", "--jitter-ms", "1000"].map(str::to_owned))
-                .unwrap()
-                .unwrap();
+        // Exercise the same one-second cadence and defaults used by the game.
+        let config = crate::support::movement_config::Config::parse(Vec::new()).unwrap().unwrap();
         let mut id = 0;
         for second in 0..80 {
             for client in 2u64..=5 {
@@ -145,6 +142,7 @@ mod tests {
         for count in &reordered[2..] {
             assert!(*count >= 2, "each bot must demonstrate repeated out-of-order delivery: {reordered:?}");
         }
+        assert!(reordered[2..].iter().sum::<u64>() >= 24, "reordering should appear frequently: {reordered:?}");
     }
     #[test]
     fn timeline_preserves_action_due_and_actual_reordered_arrival_times() {

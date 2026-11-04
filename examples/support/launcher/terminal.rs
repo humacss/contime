@@ -327,6 +327,8 @@ mod tests {
     #[cfg(unix)]
     fn emitting(script: &str, done: bool) -> Command {
         let sample = Sample {
+            hash_summary: None,
+            failure: None,
             metrics: crate::support::monitored_metrics::Metrics::default(),
             reading: None,
             movement: None,

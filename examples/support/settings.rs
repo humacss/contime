@@ -8,6 +8,7 @@ pub struct Settings {
     pub average_targets: Average,
     pub max_targets: usize,
     pub snapshot_skew: usize,
+    pub reorder_percent: usize,
     pub workers: usize,
     pub event_rate: EventRate,
     pub query_hz: usize,
@@ -29,6 +30,7 @@ impl Settings {
             average_targets: Average::ONE,
             max_targets: 2,
             snapshot_skew: 0,
+            reorder_percent: 100,
             workers,
             event_rate: EventRate::Maximum,
             query_hz: 20,
@@ -79,6 +81,7 @@ impl Settings {
                     explicit_targets = true;
                 }
                 "--snapshot-skew" => settings.snapshot_skew = size,
+                "--reorder-percent" => settings.reorder_percent = size,
                 "--workers" => settings.workers = size,
                 "--events-per-second" => settings.event_rate = EventRate::PerSecond(size),
                 "--query-hz" => settings.query_hz = size,
@@ -136,6 +139,9 @@ impl Settings {
             if value == 0 || value > limit {
                 return Err(io::Error::other(format!("{name} must be between 1 and {limit}")));
             }
+        }
+        if self.reorder_percent > 100 {
+            return Err(io::Error::other("reorder-percent must be between 0 and 100"));
         }
         if self.snapshot_skew > 100 {
             return Err(io::Error::other("snapshot-skew must be a whole number between 0 and 100"));

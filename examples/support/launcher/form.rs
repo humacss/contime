@@ -6,7 +6,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
-use std::{io, time::Duration};
+use std::{cell::Cell as ValueCell, io, time::Duration};
 
 pub struct Field {
     pub label: &'static str,
@@ -17,6 +17,7 @@ pub struct Field {
     pub visible: bool,
     pub allowed: Option<String>,
     pub decimal: bool,
+    pub numeric: bool,
     changed: bool,
     preferred_choice: Option<String>,
     initial: String,
@@ -35,6 +36,7 @@ impl Field {
             visible: true,
             allowed: None,
             decimal: true,
+            numeric: true,
             changed: false,
             preferred_choice: None,
         }
@@ -106,10 +108,12 @@ pub struct Form {
     pub selected: usize,
     pub error: String,
     pub numeric: bool,
+    help_scroll: u16,
+    help_max_scroll: ValueCell<u16>,
 }
 impl Form {
     pub fn new(fields: Vec<Field>, numeric: bool) -> Self {
-        Self { fields, selected: 0, error: String::new(), numeric }
+        Self { fields, selected: 0, error: String::new(), numeric, help_scroll: 0, help_max_scroll: ValueCell::new(0) }
     }
     pub fn handle(&mut self, key: KeyEvent) {
         self.error.clear();
@@ -117,15 +121,20 @@ impl Form {
         if len == 0 {
             return;
         }
+        let old_selected = self.selected;
+        let old_value = self.fields[self.selected].value.clone();
+        let numeric = self.numeric && self.fields[self.selected].numeric;
         let edited = matches!(
             key.code,
             KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Char(' ') | KeyCode::Char('m') | KeyCode::Char('r')
-        ) || matches!(key.code, KeyCode::Char(c) if self.numeric && (c.is_ascii_digit() || c == '.' && self.fields[self.selected].decimal));
+        ) || matches!(key.code, KeyCode::Char(c) if numeric && (c.is_ascii_digit() || c == '.' && self.fields[self.selected].decimal));
         match key.code {
+            KeyCode::PageDown => self.help_scroll = self.help_scroll.saturating_add(6).min(self.help_max_scroll.get()),
+            KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(6),
             KeyCode::Up | KeyCode::BackTab => self.move_selection(false),
             KeyCode::Down | KeyCode::Tab => self.move_selection(true),
-            KeyCode::Left => self.fields[self.selected].adjust(false, self.numeric),
-            KeyCode::Right | KeyCode::Char(' ') => self.fields[self.selected].adjust(true, self.numeric),
+            KeyCode::Left => self.fields[self.selected].adjust(false, numeric),
+            KeyCode::Right | KeyCode::Char(' ') => self.fields[self.selected].adjust(true, numeric),
             KeyCode::Char('m') if self.fields[self.selected].choices.iter().any(|choice| choice == "Maximum") => {
                 self.fields[self.selected].value = "Maximum".into();
                 self.fields[self.selected].editing = false;
@@ -135,7 +144,7 @@ impl Form {
                 field.value.clone_from(&field.initial);
                 field.editing = false;
             }
-            KeyCode::Char(c) if self.numeric && (c.is_ascii_digit() || c == '.' && self.fields[self.selected].decimal) => {
+            KeyCode::Char(c) if numeric && (c.is_ascii_digit() || c == '.' && self.fields[self.selected].decimal) => {
                 let field = &mut self.fields[self.selected];
                 if !field.editing {
                     field.value.clear();
@@ -143,12 +152,15 @@ impl Form {
                 field.editing = true;
                 field.value.push(c);
             }
-            KeyCode::Backspace if self.numeric => {
+            KeyCode::Backspace if numeric => {
                 let field = &mut self.fields[self.selected];
                 field.value.pop();
                 field.editing = true;
             }
             _ => {}
+        }
+        if self.selected != old_selected || self.fields[self.selected].value != old_value {
+            self.help_scroll = 0;
         }
         if edited {
             self.fields[self.selected].changed = true;
@@ -219,7 +231,7 @@ impl Form {
         }
         let parts = Layout::vertical([
             Constraint::Length(2),
-            Constraint::Length((self.fields.len() as u16 + 5).min(area.height.saturating_sub(17))),
+            Constraint::Length((self.fields.iter().filter(|field| field.visible).count() as u16 + 5).min(area.height.saturating_sub(17))),
             Constraint::Min(7),
             Constraint::Length(2),
             Constraint::Length(2),
@@ -227,8 +239,15 @@ impl Form {
         .margin(1)
         .split(area);
         frame.render_widget(
-            Paragraph::new(format!("ConTime / {title}\nChoose your setup before starting ConTime."))
-                .style(Style::default().fg(Color::Cyan)),
+            Paragraph::new(format!(
+                "ConTime / {title}\n{}",
+                if self.numeric {
+                    "Choose settings here or pass them on the command line."
+                } else {
+                    "Choose your setup before starting ConTime."
+                }
+            ))
+            .style(Style::default().fg(Color::Cyan)),
             parts[0],
         );
         let mut rows = Vec::new();
@@ -279,23 +298,50 @@ impl Form {
             &mut state,
         );
         let field = &self.fields[self.selected];
-        let choices = field.choices.iter().map(|value| self.display_value(value)).collect::<Vec<_>>().join("  /  ");
+        let help = match field.allowed.as_deref() {
+            Some(allowed) => format!("{}\n\n{}", field.help, allowed.trim()),
+            None => field.help.to_owned(),
+        };
+        // Markdown source lines are soft breaks. Keep paragraph breaks and let
+        // the terminal width determine the lines within each paragraph.
+        let help =
+            help.split("\n\n").map(|paragraph| paragraph.split_whitespace().collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n\n");
+        let width = usize::from(parts[2].width.saturating_sub(2)).max(1);
+        let lines: usize = help
+            .lines()
+            .map(|line| {
+                let mut count = 1usize;
+                let mut used = 0usize;
+                for word in line.split_whitespace() {
+                    let length = word.chars().count();
+                    if used > 0 && used + 1 + length > width {
+                        count += 1;
+                        used = 0;
+                    }
+                    if length > width {
+                        count += (length - 1) / width;
+                        used = (length - 1) % width + 1;
+                    } else {
+                        used += usize::from(used > 0) + length;
+                    }
+                }
+                count
+            })
+            .sum();
+        let max_scroll = lines.saturating_sub(usize::from(parts[2].height.saturating_sub(2))).min(usize::from(u16::MAX)) as u16;
+        self.help_max_scroll.set(max_scroll);
         frame.render_widget(
-            Paragraph::new(format!(
-                "{}{}\n\n{}: {choices}",
-                field.allowed.as_deref().unwrap_or(""),
-                field.help,
-                if self.numeric { "Common values" } else { "Choices" }
-            ))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().title(format!(" {} ", field.label)).borders(Borders::ALL)),
+            Paragraph::new(help)
+                .scroll((self.help_scroll.min(max_scroll), 0))
+                .wrap(Wrap { trim: true })
+                .block(Block::default().title(format!(" {} ", field.label)).borders(Borders::ALL)),
             parts[2],
         );
         frame.render_widget(Paragraph::new(self.error.as_str()).style(Style::default().fg(Color::Red)).wrap(Wrap { trim: true }), parts[3]);
         frame.render_widget(
             Paragraph::new(format!(
-                "↑↓ / Tab select   ←→ change   {}r reset\nEnter {action}   Esc cancel",
-                if self.numeric { "Type value   " } else { "" }
+                "↑↓ / Tab select   ←→ change   {}r reset\nPgUp / PgDn scroll   Enter {action}   Esc cancel",
+                if self.numeric && field.numeric { "Type value   " } else { "" }
             )),
             parts[4],
         );
@@ -338,9 +384,21 @@ mod tests {
         let form = Form::new(vec![Field::new("Environment", "Where the example runs", "Browser".into(), vec!["Browser".into()])], false);
         terminal.draw(|frame| form.render(frame, "Example launcher", "continue")).unwrap();
         let text: String = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect();
+        assert!(!text.contains("Choices:"));
+        assert!(!text.contains("Common values:"));
         for expected in ["Environment", "Where the example runs", "Enter continue", "Esc cancel"] {
             assert!(text.contains(expected), "{expected}");
         }
+    }
+    #[test]
+    fn readme_soft_line_breaks_reflow_at_terminal_width() {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 24)).unwrap();
+        let help = "The first part of this paragraph\ncontinues on the same display line.\n\nA separate paragraph remains separate.";
+        let form = Form::new(vec![Field::new("Example", help, "Game".into(), vec!["Game".into()])], false);
+        terminal.draw(|frame| form.render(frame, "Launcher", "continue")).unwrap();
+        let text: String = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("The first part of this paragraph continues on the same display line."));
+        assert!(text.contains("A separate paragraph remains separate."));
     }
     #[test]
     fn grouped_form_scrolls_to_last_setting_and_skips_hidden_fields() {

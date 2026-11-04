@@ -6,19 +6,18 @@ pub(crate) enum Style {
     Heading,
     Caption,
     Legend,
-    Hint,
     Status,
 }
 impl Style {
     fn size(self, width: f32) -> f32 {
         match self {
-            Self::Heading if width < 640.0 => 18.0,
-            Self::Heading if width < 800.0 => 20.0,
-            Self::Heading => 24.0,
+            Self::Heading if width < 640.0 => 15.0,
+            Self::Heading if width < 800.0 => 17.0,
+            Self::Heading => 20.0,
             Self::Caption if width < 640.0 => 14.0,
             Self::Caption => 16.0,
             Self::Legend if width < 640.0 => 12.0,
-            Self::Legend | Self::Hint => 14.0,
+            Self::Legend => 14.0,
             Self::Status => 12.0,
         }
     }
@@ -82,9 +81,6 @@ pub(crate) fn draw(
     let width = windows.iter().next().map_or(1000.0, |window| window.width());
     for (slot, mut text, mut font, mut color, mut node, mut visibility) in &mut slots {
         let projected = labels.0.get(slot.0).and_then(|label| {
-            if width < 640.0 && matches!(label.style, Style::Hint | Style::Status) {
-                return None;
-            }
             let start = camera.world_to_viewport(transform, label.position.extend(0.0)).ok()?;
             let end = camera.world_to_viewport(transform, (label.position + Vec2::X * label.width).extend(0.0)).ok()?;
             Some((label, start, (end.x - start.x).max(1.0)))
@@ -132,7 +128,7 @@ mod tests {
     fn status_labels_cannot_grow_the_entity_pool_without_bound() {
         let mut labels = Labels::default();
         for _ in 0..1000 {
-            labels.push(Vec2::ZERO, 96.0, "test", Style::Status, Color::WHITE);
+            labels.push(Vec2::ZERO, 96.0, "test", Style::Caption, Color::WHITE);
         }
         assert_eq!(labels.0.len(), MAX_LABELS);
         labels.clear();

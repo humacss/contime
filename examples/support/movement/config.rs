@@ -33,8 +33,8 @@ impl Config {
             workers: if manual { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(4) },
             input_hz: 1,
             query_hz: 20,
-            average_latency_ms: 500,
-            jitter_ms: 500,
+            average_latency_ms: 1000,
+            jitter_ms: 1000,
             trail_ms: 5000,
             fade_ms: 5000,
             retention_ms: 10000,
@@ -220,7 +220,7 @@ mod tests {
         let parse = |args: &[&str]| Config::parse(args.iter().map(|s| s.to_string()));
         let default = parse(&[]).unwrap().unwrap();
         assert_eq!(default.clients, 5);
-        assert_eq!((default.average_latency_ms, default.jitter_ms, default.max_latency_ms()), (500, 500, 1000));
+        assert_eq!((default.average_latency_ms, default.jitter_ms, default.max_latency_ms()), (1000, 1000, 2000));
         assert_eq!((default.client_spacing, default.movement_speed), (16, 6));
         let custom = parse(&["--client-spacing", "9", "--movement-speed", "10"]).unwrap().unwrap();
         let round = Config::parse(custom.arguments()).unwrap().unwrap();

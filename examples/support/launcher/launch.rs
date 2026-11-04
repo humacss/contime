@@ -84,11 +84,12 @@ pub fn native_command(root: &Path, selection: Selection, settings: &Settings) ->
     CommandSpec::new("cargo", root, args)
 }
 /// Serialize the common form once for both native and WASI child hosts.
-fn settings_arguments(settings: &Settings, include_worker: bool) -> Vec<String> {
+pub(super) fn settings_arguments(settings: &Settings, include_worker: bool) -> Vec<String> {
     let mut args = Vec::new();
     for (flag, value) in [
         ("--snapshots", settings.snapshot_count.to_string()),
         ("--snapshot-skew", settings.snapshot_skew.to_string()),
+        ("--reorder-percent", settings.reorder_percent.to_string()),
         ("--average-snapshots-per-event", settings.average_targets.to_string()),
         ("--max-snapshots-per-event", settings.max_targets.to_string()),
         ("--events-per-second", settings.event_rate.limit().map_or_else(|| "max".into(), |n| n.to_string())),
@@ -247,7 +248,7 @@ pub fn wasi(
     let mut run = wasi_case_command(root, selection, settings, case_arguments);
     if dry {
         build.show();
-        if selection.domain == Domain::Movement && !settings.headless {
+        if !settings.headless {
             run.args.extend([
                 "--metrics-stdio".into(),
                 "--control-input".into(),
@@ -274,7 +275,7 @@ pub fn wasi(
     let result = (|| {
         build.run()?;
         println!("Running {} execution…", selection.execution.slug());
-        if selection.domain == Domain::Movement && !settings.headless {
+        if !settings.headless {
             run.args.extend([
                 "--metrics-stdio".into(),
                 "--control-input".into(),
@@ -315,10 +316,8 @@ pub fn browser(
         build.show();
         let generator = std::env::var_os("WASM_BINDGEN").unwrap_or_else(|| "wasm-bindgen".into());
         bindings_command(root, generator.clone()).show();
-        if domain == Domain::Movement {
-            super::graphics::build(root, true).show();
-            super::graphics::bindings(root, generator).show();
-        }
+        super::graphics::build(root, true).show();
+        super::graphics::bindings(root, generator).show();
         println!("  Serve examples/support/composition/browser on 127.0.0.1 with an available port");
         println!(
             "  {} {}",
@@ -336,11 +335,9 @@ pub fn browser(
     build.run()?;
     println!("Generating browser bindings…");
     bindings_command(root, generator.clone()).run()?;
-    if domain == Domain::Movement {
-        println!("Building shared Bevy browser presentation (Rust 1.95)…");
-        super::graphics::build(root, true).run()?;
-        super::graphics::bindings(root, generator).run()?;
-    }
+    println!("Building shared Bevy browser presentation (Rust 1.95)…");
+    super::graphics::build(root, true).run()?;
+    super::graphics::bindings(root, generator).run()?;
     let server = Server::start(&root.join("examples/support/composition/browser"))?;
     let url = movement.map_or_else(|| settings.url(&server.url(), domain, common), |config| settings.movement_url(&server.url(), config));
     println!("\nBrowser example: {url}\nSettings are fixed for this run. Press Ctrl-C here to stop the server.");
@@ -384,7 +381,7 @@ mod tests {
             let settings =
                 Settings::parse(["--events-per-second", rate, "--max-pending", "64"].map(str::to_owned), true).unwrap().unwrap().0;
             for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads] {
-                let selection = Selection::new(environment, Execution::Manual, Domain::Counter).unwrap();
+                let selection = Selection::new(environment, Execution::Manual, Domain::Hash).unwrap();
                 let command = if environment == Environment::Terminal {
                     native_command(Path::new("/checkout"), selection, &settings)
                 } else {
@@ -416,11 +413,11 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let selection = Selection::new(Environment::Terminal, Execution::Manual, Domain::Counter).unwrap();
+        let selection = Selection::new(Environment::Terminal, Execution::Manual, Domain::Hash).unwrap();
         let command = native_command(Path::new("/a checkout with spaces"), selection, &settings);
         let args = command.args.iter().map(|s| s.to_string_lossy().to_string()).collect::<Vec<_>>();
         assert_eq!(command.cwd, Path::new("/a checkout with spaces"));
-        assert!(args.windows(2).any(|pair| pair == ["--example", "counter"]));
+        assert!(args.windows(2).any(|pair| pair == ["--example", "chain_hash"]));
         assert!(args.windows(2).any(|pair| pair == ["--average-snapshots-per-event", "1.1"]));
         assert!(args.windows(2).any(|pair| pair == ["--max-snapshots-per-event", "4"]));
         assert!(args.windows(2).any(|pair| pair == ["--execution", "manual"]));
@@ -445,7 +442,7 @@ mod tests {
     #[test]
     fn wasi_forwards_the_same_live_settings_for_both_targets_and_stops_only_explicitly() {
         for environment in [Environment::Wasm, Environment::WasmThreads] {
-            let selection = Selection::new(environment, Execution::Manual, Domain::Counter).unwrap();
+            let selection = Selection::new(environment, Execution::Manual, Domain::Hash).unwrap();
             let settings = Settings::parse(
                 [
                     "--snapshots",
@@ -530,7 +527,7 @@ mod monitor_features_tests {
     use super::*;
     #[test]
     fn native_launches_enable_tools_for_each_case_and_execution() {
-        for domain in [Domain::Counter, Domain::Hash, Domain::Movement] {
+        for domain in [Domain::Hash, Domain::Movement] {
             for execution in [Execution::Runtime, Execution::Manual] {
                 let selection = Selection::new(Environment::Terminal, execution, domain).unwrap();
                 let command = if domain == Domain::Movement {

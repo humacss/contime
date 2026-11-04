@@ -1,8 +1,24 @@
 # Live WebAssembly host
 
-Both counter and chain-hash workloads use the same simulator callbacks, Maximum controller, worker-status
-collection and final reference validation as native Runtime and Manual counters.
-All load generation, ConTime processing, retention and validation run inside the
+<!-- launcher:node:start -->
+WebAssembly / Node runs the workload in a standard WASI guest hosted by Node. The shared graphical window runs separately on your computer and displays the guest's reports. Event generation, contime processing and validation remain inside WebAssembly.
+
+Standard WASI uses one caller-driven Manual worker and does not use the browser. Choose it to try the same workload in a portable WebAssembly environment with Node's WASI support.
+
+The launcher builds the guest and presenter before starting them. You need a compatible Node installation and the wasm32-wasip1 Rust target.
+<!-- launcher:node:end -->
+
+<!-- launcher:threads:start -->
+WebAssembly / Wasmtime threads runs the workload in a threaded WASI guest hosted by Wasmtime. The shared graphical window runs separately and displays the guest's reports, while generation, contime processing and validation stay in WebAssembly.
+
+The benchmark supports Runtime with multiple worker threads or a single Manual worker. The game uses Runtime with its fixed demonstration settings. Choose this environment to explore the workload with WebAssembly threads.
+
+You need the wasm32-wasip1-threads Rust target and Wasmtime 36.x LTS. Later Wasmtime versions do not provide the WASI threads interface used by this example.
+<!-- launcher:threads:end -->
+
+The chain-hash workload uses the same simulator callbacks, Maximum controller, worker-status
+collection and final reference validation as its native Runtime and Manual counterparts.
+All load generation, `contime` processing, retention and validation run inside the
 WebAssembly guest. The launcher renders the shared worker-monitor dashboard from
 reported metrics; it does not produce or apply events.
 
@@ -10,18 +26,19 @@ Standard WASI uses one caller-driven Manual worker. Threaded WASI supports Manua
 or Runtime, with configurable Runtime worker count. Startup settings are fixed
 before processing starts. Maximum uses bounded production windows and worker
 reports to adapt offered load independently of query frequency. A numeric rate
-paces events instead. Both modes validate every snapshot before a timed run ends. Chain-hash reverses arrivals within each production group and validates periodically at the selected query frequency, freezing advancement while each full-state query completes so short retention remains safe.
+paces events instead. Both modes validate every snapshot before a timed run ends. Chain-hash reorders a configurable portion of each production group and validates periodically at the selected query frequency, freezing advancement while each full-state query completes so short retention remains safe.
 
 ```sh
 # From the repository root: select the environment, execution and settings.
 cargo run --release --example launcher
 ```
 
-The terminal UI shows target source events/s, cumulative completed source events/s,
-unconfirmed events, and each worker's cumulative inserted/replayed application
-totals and average rates. Arrow/page keys scroll workers. Repeated monitor readings
-do not reset the averaging baseline. q / Escape or Ctrl-C stops the guest; timed
-runs emit a final record only after monitor-confirmed drain and validation.
+The shared graphical view shows produced and confirmed source events, outstanding
+work, queries, snapshot count, worker count and average completed events per second.
+The hash view also displays a short prefix of the latest and verified digests.
+The Reset button restarts the selected workload after it drains and validates;
+q / Escape or Ctrl-C stops the guest. Timed runs emit a final record only after
+monitor-confirmed drain and validation.
 
 Direct or headless runs print text once per second and continue until stopped,
 unless `--duration SECONDS` is supplied. A final `DRAINED (validated)` report means
@@ -63,7 +80,7 @@ an explicit shared-memory growth maximum. The target configuration supplies a
 ## Workload settings
 
 `--help` lists the full shared settings: snapshot count, worker count (Runtime),
-event rate (`max` or a positive integer), average/maximum snapshots per event,
+event rate (`max` or a positive integer), out-of-order percentage, average/maximum snapshots per event,
 query frequency, retention, checkpoint spacing, a pending-work allowance for numeric rates and an
 optional duration. Manual accepts only one worker. `--no-setup` and `--headless`
 are accepted for launcher compatibility. Direct runs use text output.
@@ -73,17 +90,15 @@ unknown/saturated values, and limits each record to 1 MiB. The launcher keeps a
 bounded two-record queue, drains diagnostics and reaps the guest on completion
 or error. A successful final record also requires a successful process exit.
 
-`--domain counter` is the default. `--domain chain-hash` selects the shared hash
-model with the same live load. Finite verification flags (`--rounds` and
+`--domain chain-hash` is the default and selects the shared hash model. Finite verification flags (`--rounds` and
 `--events-per-round`) are no longer accepted by the live command.
 
-The counter model and setup live in [`../../cases/counter`](../../cases/counter); simulator
-callbacks remain in `counter/monitored/generation.rs`. Shared
+Shared
 [`../../support/monitored`](../../support/monitored/README.md) owns the simulator loop,
 worker feedback, execution adapters and validation. `../../support/composition/wasi/workload.rs` supplies
 WASI output, and `../../support/composition/wasi/support.rs` composes modules without terminal dependencies.
-The hash model and simulator callbacks live under `cases/chain_hash/`. Both domains use the same versioned worker protocol; bounded snapshot previews include complete 32-byte hashes. Worker monitoring and application counters are always enabled, including builds without default features.
-No ConTime execution code is changed.
+The hash model and simulator callbacks live under `cases/chain_hash/`. The host uses a versioned worker protocol; bounded snapshot previews include complete 32-byte hashes. Worker monitoring and application counters are always enabled, including builds without default features.
+No `contime` execution code is changed.
 The older controlled `Scenario` remains exported for portable regression tests.
 
 ```sh
@@ -92,14 +107,12 @@ cargo +1.90.0 clippy --all-targets --features runtime -- -D warnings
 ```
 
 These runs include example generation and correctness checks; their totals are
-live diagnostics rather than isolated ConTime throughput measurements.
+live diagnostics rather than isolated `contime` throughput measurements.
 
-## Hash snapshot preview
+## Hash validation
 
-The launcher shows the shared worker monitor for both domains. A bounded preview
-reports produced and verified snapshot counts, values and full hash digests;
-validation still compares every configured snapshot. Direct text output includes
-up to eight verified hashes, with the final preview emitted after final validation.
+The shared graphical view shows throughput and worker activity. Validation compares
+every configured snapshot. Direct text output includes up to eight verified hashes.
 
 ## Snapshot traffic distribution
 
@@ -115,15 +128,15 @@ repeatable selection, independent of timing and backpressure.
 
 ## Client movement
 
-Every live case is available here: `counter`, `chain-hash`, and `client-movement`.
+Both live cases are available here: `chain-hash` and `client-movement`.
 The launcher opens the same Bevy movement window as Native, while the guest runs
 the simulator, delayed network, monitor and query validation. WASD/arrows choose
 a persistent direction; Space stops; q/Esc drains and validates before exit.
-Standard WASI uses Manual; WASI Threads supports Manual and Runtime.
+Standard WASI uses Manual; the Game uses Runtime in WASI Threads.
 
 ```sh
-cargo run --release --example launcher -- --environment wasm --example client-movement
-cargo run --release --example launcher -- --environment wasm-threads --example client-movement --execution runtime
+cargo run --release --example launcher -- --environment wasm --example game
+cargo run --release --example launcher -- --environment wasm-threads --example game
 ```
 
 Guest control input is a private stdin pipe, enabled by the launcher. Node uses
@@ -138,5 +151,6 @@ node --test tests/movement.mjs
 
 Client movement presentation uses the isolated
 [Bevy example](../../support/graphics/README.md), requiring Rust 1.95 for the
-native graphics window. ConTime still runs inside the selected WASI guest with
-its existing Rust 1.90 baseline. Other cases retain the terminal dashboard.
+native graphics window. `contime` still runs inside the selected WASI guest with
+its existing Rust 1.90 baseline. Chain hash uses the same graphical
+presenter across Native, WASI and Browser.

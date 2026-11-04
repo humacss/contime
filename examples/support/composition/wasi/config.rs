@@ -11,7 +11,7 @@ pub(super) struct Options {
 }
 impl Options {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Option<Self>, String> {
-        let mut domain = "counter".to_owned();
+        let mut domain = "chain-hash".to_owned();
         let mut execution = "manual".to_owned();
         let mut metrics_stdio = false;
         let mut controls = None;
@@ -40,8 +40,8 @@ impl Options {
                 _ => common.push(flag),
             }
         }
-        if !["counter", "chain-hash", "client-movement"].contains(&domain.as_str()) {
-            return Err("Domain must be counter, chain-hash or client-movement".into());
+        if !["internal-counter", "chain-hash", "client-movement"].contains(&domain.as_str()) {
+            return Err("Domain must be chain-hash or client-movement".into());
         }
         if !["manual", "runtime"].contains(&execution.as_str()) {
             return Err("Execution must be manual or runtime".into());
@@ -85,7 +85,7 @@ mod tests {
     fn lives_until_stopped_unless_duration_is_explicit() {
         for args in [vec![], vec!["--headless"], vec!["--no-setup"]] {
             let options = parse(&args).unwrap().unwrap();
-            assert_eq!(options.domain, "counter");
+            assert_eq!(options.domain, "chain-hash");
             assert_eq!(options.execution, "manual");
             assert_eq!(options.settings.duration, None);
         }

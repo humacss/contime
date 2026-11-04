@@ -4,12 +4,13 @@ use crate::{
     counter_example::{model, setup::CounterExample},
     definition::{Example, Time},
     support::{
+        Settings,
         monitored::{
+            Options,
             backend::{Backend, Manual},
             control::Controller,
-            reference, Options,
+            reference,
         },
-        Settings,
     },
 };
 use contime::contime_monitor::{WorkerMonitor, WorkerReading};
@@ -44,10 +45,13 @@ pub struct Frame<M: Example = CounterExample> {
     query: Option<Query<M>>,
     generate: Generator<M>,
     reverse: bool,
+    reversed: u64,
     next_query: Duration,
     queries: u64,
+    verified_once: bool,
     query_duration: Duration,
     done: bool,
+    failure: Option<String>,
 }
 impl Frame<CounterExample> {
     pub fn new(settings: &Settings) -> Result<Self, String> {
@@ -67,7 +71,7 @@ impl<M: Example> Frame<M> {
         if let Some(limit) = options.source_limit {
             controller.limit_sources(limit);
         }
-        if reverse {
+        if reverse && options.reorder_percent > 0 {
             controller.reverse_groups();
         }
         Ok(Self {
@@ -88,10 +92,13 @@ impl<M: Example> Frame<M> {
             query: None,
             generate,
             reverse,
+            reversed: 0,
             next_query: Duration::ZERO,
             queries: 0,
+            verified_once: false,
             query_duration: Duration::ZERO,
             done: false,
+            failure: None,
         })
     }
     /// One host turn: at most one existing worker process() call and one simulator batch.
@@ -126,10 +133,19 @@ impl<M: Example> Frame<M> {
                     let mut actual = vec![M::State::default(); self.options.snapshots];
                     let mut seen = vec![false; self.options.snapshots];
                     reference::receive::<M>(states, &mut actual, &mut seen)?;
-                    reference::verify::<M>(&actual, &query.expected)?;
+                    let result = reference::verify::<M>(&actual, &query.expected);
                     self.query_duration = now.saturating_sub(query.started);
                     self.verified = actual;
-                    self.done = query.final_query;
+                    self.verified_once = true;
+                    if let Err(error) = result {
+                        if !self.reverse {
+                            return Err(error);
+                        }
+                        self.failure = Some(error.to_string());
+                        self.done = true;
+                    } else {
+                        self.done = query.final_query;
+                    }
                     self.query = None;
                     return Ok(self.done);
                 }
@@ -146,7 +162,7 @@ impl<M: Example> Frame<M> {
             }
             let applications = reference::record::<M>(&mut events, &mut self.expected, self.options.targets, &mut self.ids)?;
             if self.reverse {
-                events.reverse();
+                self.reversed = self.reversed.saturating_add(reference::reorder(&mut events, self.options.reorder_percent));
             }
             self.backend.submit(events)?;
             self.backend.advance(time)?;
@@ -197,7 +213,15 @@ impl<M: Example> Frame<M> {
             "queued": self.backend.queued(), "queries": self.queries, "query_ms": self.query_duration.as_secs_f64()*1000.0,
             "snapshot_count": self.options.snapshots, "average_targets": self.options.average_scaled.unwrap_or(1000) as f64 /1000.0,
             "max_targets": self.options.targets, "snapshot_skew": self.options.snapshot_skew, "workers": 1,
+            "reversed": if self.reverse { Some(self.reversed) } else { None },
+            "hash_summary": if self.reverse { Some(crate::support::monitored_metrics::HashSummary::compare_workers::<M>(&self.expected, &self.verified, self.failure.is_some(), self.verified_once, Some(1))) } else { None },
+            "failure": self.failure,
             "workers_status": workers,
+            "snapshots": self.expected.iter().zip(&self.verified).take(64).enumerate().map(|(index, (latest, verified))| {
+                let digest = |state: &M::State| M::hash(state).map(|hash| hash.iter().map(|b| format!("{b:02x}")).collect::<String>());
+                serde_json::json!({"id": index + 1, "latest_count": M::count(latest), "verified_count": M::count(verified),
+                    "latest_value": M::value(latest), "verified_value": M::value(verified), "latest_hash": digest(latest), "verified_hash": digest(verified)})
+            }).collect::<Vec<_>>(),
             "hashes": if self.reverse { self.expected.iter().zip(&self.verified).take(20).enumerate().map(|(index, (latest, verified))| {
                 let digest = |state: &M::State| M::hash(state).map(|hash| hash.iter().map(|b| format!("{b:02x}")).collect::<String>());
                 serde_json::json!({"id": index+1, "latest_count": M::count(latest), "latest_hash": digest(latest), "verified_count": M::count(verified), "verified_hash": digest(verified)})
@@ -208,6 +232,16 @@ impl<M: Example> Frame<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_counter_report_includes_snapshot_preview() {
+        let (settings, _) = Settings::parse(["--workers", "1", "--snapshots", "2"].map(str::to_owned), true).unwrap().unwrap();
+        let counter = Frame::new(&settings).unwrap();
+        let report = counter.report();
+        let snapshots = report["snapshots"].as_array().expect("counter snapshot preview");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0]["id"], 1);
+        assert_eq!(snapshots[0]["latest_value"], 0);
+    }
     #[test]
     fn browser_skew_reaches_the_shared_simulator() {
         let (settings, _) = Settings::parse(
@@ -288,6 +322,50 @@ mod hash_tests {
         .0
     }
     #[test]
+    fn verified_counts_start_pending_and_follow_completed_checks() {
+        let mut hash = Frame::<HashExample>::hash(&settings("1000", "64")).unwrap();
+        let initial = hash.report();
+        assert_eq!(initial["hash_summary"]["up_to_date"], 0);
+        assert_eq!(initial["hash_summary"]["pending"], 8);
+        assert_eq!(initial["hash_summary"]["workers"][0]["pending"], 8);
+        for frame in 0..1000 {
+            hash.step(Duration::from_millis(frame), false).unwrap();
+            if hash.verified_once {
+                break;
+            }
+        }
+        assert!(hash.verified_once);
+        let report = hash.report();
+        assert_eq!(report["hash_summary"]["up_to_date"], report["hash_summary"]["workers"][0]["up_to_date"]);
+    }
+    #[test]
+    fn browser_respects_configurable_delivery_order() {
+        for percent in [0, 50, 100] {
+            let mut settings = settings("1000", "64");
+            settings.reorder_percent = percent;
+            let mut hash = Frame::<HashExample>::hash(&settings).unwrap();
+            for frame in 0..100 {
+                for _ in 0..32 {
+                    hash.step(Duration::from_millis(frame * 16), false).unwrap();
+                }
+            }
+            assert!(hash.controller.produced() > 0);
+            assert_eq!(hash.reversed == 0, percent == 0);
+            assert!(hash.queries > 0);
+        }
+    }
+    #[test]
+    fn summary_uses_full_hashes_for_every_snapshot_and_distinguishes_pending() {
+        let mut expected = vec![<HashExample as crate::definition::Example>::State::default(); 100];
+        let mut actual = expected.clone();
+        expected[70].event_count = 1;
+        actual[80].hash[31] = 1;
+        let status = crate::support::monitored_metrics::HashSummary::compare::<HashExample>(&expected, &actual, false);
+        assert_eq!((status.up_to_date, status.pending, status.failed), (98, 1, 1));
+        let failed = crate::support::monitored_metrics::HashSummary::compare::<HashExample>(&expected, &actual, true);
+        assert_eq!((failed.up_to_date, failed.pending, failed.failed), (98, 0, 2));
+    }
+    #[test]
     fn reversed_hashes_validate_all_snapshots_with_short_retention_and_low_rate_pairs() {
         for (rate, pending) in [("1000", "64"), ("1", "2")] {
             let mut hash = Frame::<HashExample>::hash(&settings(rate, pending)).unwrap();
@@ -337,7 +415,7 @@ mod hash_tests {
         reference::verify::<HashExample>(&hash.verified, &captured).unwrap();
     }
     #[test]
-    fn final_hash_mismatch_is_fatal_even_after_monitor_completion() {
+    fn final_hash_mismatch_stops_and_reports_failure_after_monitor_completion() {
         let mut hash = Frame::<HashExample>::hash(&settings("1000", "64")).unwrap();
         hash.next_query = Duration::from_secs(60);
         for frame in 0..20 {
@@ -349,12 +427,12 @@ mod hash_tests {
         assert!(hash.controller.completed() > 0, "queries cannot provide production credit");
         hash.expected[0].hash[31] ^= 1;
         for _ in 0..1000 {
-            match hash.step(Duration::from_millis(320), true) {
-                Err(error) => {
-                    assert!(error.contains("full digest"));
-                    return;
-                }
-                Ok(done) => assert!(!done),
+            if hash.step(Duration::from_millis(320), true).unwrap() {
+                let report = hash.report();
+                assert!(report["failure"].as_str().unwrap().contains("full digest"));
+                assert!(report["hash_summary"]["failed"].as_u64().unwrap() > 0);
+                assert_eq!(hash.step(Duration::from_millis(320), true).unwrap(), true);
+                return;
             }
         }
         panic!("final hash validation did not finish");

@@ -1,10 +1,31 @@
-# Client movement
+# Game: client movement
 
-One event type changes the movement direction of one character snapshot. Client 1
-is yours; the other clients are driven by a simulator iterator. Bot and keyboard direction changes keep
-their original timestamps and pass through the same delayed delivery queue.
-Initial stopped characters are seeded before simulated traffic starts.
-The example includes simple arena-wall collisions; it has no network server or client-side prediction.
+<!-- launcher:overview:start -->
+This interactive example shows why delayed inputs need reconciliation. Five
+characters move through the same arena, with one controlled by you and four
+following square routes. Their direction changes carry the time of the action,
+but simulated network delivery may arrive later or out of order.
+
+The two arenas receive the same inputs. On the left, `contime` applies each input
+at its original timestamp and reconstructs later movement, so a late turn can
+correct the path. On the right, inputs take effect on arrival and earlier movement
+is never revised. Both views may initially overshoot, but only the left corrects
+its history. Faint gray guides show the routes the bots intended to follow.
+
+The input timeline shows each character's actions, their simulated delivery delays
+and arrivals. Colored arrows and dots show direction changes and stops. Faded
+dashed paths show where a previous query disagreed with a later one. A delivery
+animation connects an arriving input to both arenas.
+
+Choose Game in the launcher and select an environment. Use WASD or the arrow keys
+to change your direction, Space to stop, and the Reset button to start again.
+The launcher uses fixed settings: five clients, one bot input per second, and
+1,000 ms average latency with up to 1,000 ms of jitter. Player inputs use the same
+simulated delivery queue. There is no network server or client-side prediction.
+
+<!-- launcher:overview:end -->
+
+The direct commands below open the terminal view and allow additional configuration.
 
 ```sh
 cargo run --release --all-features --example client_movement
@@ -12,17 +33,13 @@ cargo run --release --all-features --example client_movement -- --execution manu
 ```
 
 The direct commands above retain the terminal view. For the shared Bevy graphics,
-choose **Client movement** in the central launcher with Native, WASI, WASI
-Threads or Browser. The browser uses Manual and its processing budget per frame;
-WASI Threads also supports Runtime. The startup form shows
-client count, workers, input/query frequencies, delivery latency/jitter and trail
-and fade durations, with retention and checkpoint spacing in the ConTime group.
-The launcher collects these settings before starting the example; direct launches
-use the same schema and editor. Settings are fixed for the run. Use WASD or arrows to choose
+choose **Game** in the central launcher and select an environment. The game
+uses fixed demonstration settings. The description below the arenas explains the
+comparison; the footer includes a Reset button. Use WASD or arrows to choose
 a persistent direction, Space to stop, and q / Esc / Ctrl-C to quit. Keyboard
 inputs experience the same latency and reordering as bot inputs. Terminal key
 release events are not required. Client count is limited to one through five, including the human-controlled client.
-Use Counter or Chain hash to explore larger workloads.
+Use Benchmark to explore larger workloads.
 
 ## Events, snapshots and the lane
 
@@ -33,7 +50,7 @@ time, then select the new direction. This relationship is the lane; `setup.rs`
 only connects it to example support and the generic execution adapters.
 
 Positions use fixed-point integers. Movement speed defaults to six world units per second. A separate
-integration timestamp preserves the position anchor when ConTime updates snapshot
+integration timestamp preserves the position anchor when `contime` updates snapshot
 metadata during queries or pruning. Rendering projects the accepted direction
 to the query time; it never applies keyboard input directly to a displayed character.
 The player starts at the center of the 96 × 56 world-unit arena. Four bots start
@@ -47,16 +64,15 @@ to see.
 
 ## Late inputs and rendering states
 
-Defaults are five clients, one direction change per bot per second, 500 ms average
-latency with ±500 ms jitter (0–1,000 ms per input), and up to 20 completed query updates per second.
-Native, WASI and browser hosts share these defaults. At the default one-second
-bot cadence, late turns still cause corrections, but the 0–1,000 ms delay range
-does not normally reorder a bot's inputs. To demonstrate that too, use 1,000 ms
-average latency with ±1,000 ms jitter, or increase the input frequency. Delivery is simulated in support; ConTime is unchanged.
+Defaults are five clients, one direction change per bot per second, 1,000 ms average
+latency with ±1,000 ms jitter (0–2,000 ms per input), and up to 20 completed query updates per second.
+Native, WASI and browser hosts share these defaults. Because the delay can exceed
+the one-second bot cadence, a later input can arrive before an earlier input from
+the same client. Delivery is simulated in support; `contime` is unchanged.
 
 Upcoming bot inputs are generated ahead within the timeline's visible future window.
 Their action timestamps stay on the shared ticks; each delivery is scheduled from
-that action time, not from preview generation. Only due inputs enter ConTime.
+that action time, not from preview generation. Only due inputs enter `contime`.
 Stopping discards future actions and drains inputs whose action time has passed.
 The scripted recording keeps its original schedule.
 
@@ -83,7 +99,7 @@ and advancement pause during that query cycle so late arrivals cannot invalidate
 its captured reference; input generation, the simulated network, keyboard input
 and fading continue. The direct terminal view includes worker totals and average
 rates; graphical hosts focus on the arena, timeline and legends.
-This real-time demonstration is not Maximum throughput mode; use Counter for that.
+This real-time demonstration is not a throughput test; use Benchmark for that.
 
 ## Configuration and validation
 
@@ -140,18 +156,14 @@ points to bound transport and drawing; every configured client remains validated
 
 ## Spacing and speed
 
-The launcher's **Client movement** group includes **Client spacing** and
-**Movement speed** in every environment. Defaults are 16 world units between
-starting positions and 6 world units/second. Both accept whole numbers from
-0 to 1,000,000; zero spacing starts clients together and zero speed keeps them
-stationary while inputs and replay validation continue.
+The launcher uses the default spacing of 16 world units and movement speed of
+6 world units per second. For experiments, the direct terminal example accepts
+`--client-spacing` and `--movement-speed`:
 
 ```sh
-cargo run --release --example launcher -- --environment browser --example client-movement -- \
-  --client-spacing 9 --movement-speed 10
+cargo run --release --all-features --example client_movement -- --client-spacing 9 --movement-speed 10
 ```
 
-The same flags work in Native, WASI and WASI Threads. Values are fixed at startup.
 Each movement input carries the run's motion settings so snapshot creation and
 late-event replay use the same origin and speed without global configuration.
 
@@ -162,7 +174,7 @@ A configured input frequency changes the shared tick interval.
 
 Bot generation repeats North/East/South/West square cycles with a distinct phase
 per client; it never sends Stop. Each side lasts one input period. The shared
-graphical presentation compares original-timestamp ConTime replay on the left with
+graphical presentation compares original-timestamp `contime` replay on the left with
 arrival-time-only movement on the right, using the same actual network handoffs.
 Late turns repair the left path; the right path is never revised.
 The player can still stop with Space, and all renderers retain Stop icons.

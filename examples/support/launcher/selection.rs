@@ -10,9 +10,9 @@ impl Environment {
     pub fn label(self) -> &'static str {
         match self {
             Self::Terminal => "Native",
-            Self::Wasm => "WebAssembly / WASI",
-            Self::WasmThreads => "WebAssembly / WASI Threads",
-            Self::Browser => "Browser (WebAssembly)",
+            Self::Wasm => "WebAssembly / Node (WASI)",
+            Self::WasmThreads => "WebAssembly / Wasmtime threads",
+            Self::Browser => "WebAssembly / Browser",
         }
     }
     pub fn wasm_target(self) -> Option<WasmTarget> {
@@ -68,38 +68,33 @@ impl Execution {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Domain {
-    Counter,
     Movement,
     Hash,
 }
 impl Domain {
     pub fn slug(self) -> &'static str {
         match self {
-            Self::Counter => "counter",
             Self::Movement => "client-movement",
             Self::Hash => "chain-hash",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Counter => "Counter",
-            Self::Movement => "Client movement",
-            Self::Hash => "Chain hash verification",
+            Self::Movement => "Game",
+            Self::Hash => "Benchmark",
         }
     }
     pub fn binary(self) -> &'static str {
         match self {
-            Self::Counter => "counter",
             Self::Movement => "client_movement",
             Self::Hash => "chain_hash",
         }
     }
     fn parse(value: &str) -> Result<Self, String> {
         match value {
-            "counter" => Ok(Self::Counter),
-            "client-movement" => Ok(Self::Movement),
-            "chain-hash" => Ok(Self::Hash),
-            _ => Err("Example must be counter, client-movement or chain-hash".into()),
+            "game" | "client-movement" => Ok(Self::Movement),
+            "benchmark" | "chain-hash" => Ok(Self::Hash),
+            _ => Err("Example must be game or benchmark".into()),
         }
     }
 }
@@ -112,7 +107,7 @@ pub struct Selection {
 impl Selection {
     pub fn new(environment: Environment, execution: Execution, domain: Domain) -> Result<Self, String> {
         if !matches!(environment, Environment::Terminal | Environment::WasmThreads) && execution == Execution::Runtime {
-            return Err("Runtime execution requires Native or WebAssembly / WASI Threads".into());
+            return Err("Runtime execution requires Native or WebAssembly / Wasmtime threads".into());
         }
         Ok(Self { environment, execution, domain })
     }
@@ -199,7 +194,7 @@ impl Options {
         } else {
             Execution::Manual
         });
-        let selection = Selection::new(environment, execution, self.domain.unwrap_or(Domain::Counter))?;
+        let selection = Selection::new(environment, execution, self.domain.unwrap_or(Domain::Movement))?;
         self.validate(selection)?;
         Ok(selection)
     }
@@ -210,6 +205,13 @@ impl Options {
         }
         if self.example_args.iter().any(|arg| arg == "--execution") {
             return Err("Choose --execution before the -- separator".into());
+        }
+        Ok(())
+    }
+    /// The Game launcher intentionally uses one fixed demonstration setup.
+    pub fn validate_game(&self) -> Result<(), String> {
+        if self.execution.is_some() || self.budget_ms.is_some() || self.max_steps.is_some() || !self.example_args.is_empty() {
+            return Err("Game uses default settings; choose an environment only".into());
         }
         Ok(())
     }
@@ -234,10 +236,10 @@ impl BrowserSettings {
     }
     pub fn url(&self, base: &str, domain: Domain, settings: &crate::support::Settings) -> String {
         let mut url = format!(
-            "{base}?domain={}&snapshots={}&rate={}&query_hz={}&retention_ms={}&checkpoint_interval={}&average_targets={}&max_targets={}&snapshot_skew={}&max_ms={}&max_steps={}&autostart=1",
+            "{base}?domain={}&snapshots={}&rate={}&query_hz={}&retention_ms={}&checkpoint_interval={}&average_targets={}&max_targets={}&snapshot_skew={}&reorder_percent={}&max_ms={}&max_steps={}&autostart=1",
             domain.slug(), settings.snapshot_count, settings.event_rate.limit().unwrap_or(0), settings.query_hz,
             settings.retention_ms, settings.checkpoint_interval, settings.average_targets,
-            settings.max_targets, settings.snapshot_skew, self.budget_ms, self.max_steps
+            settings.max_targets, settings.snapshot_skew, settings.reorder_percent, self.budget_ms, self.max_steps
         );
         if settings.event_rate.limit().is_some() {
             url.push_str(&format!("&max_pending={}", settings.max_pending));
@@ -255,13 +257,31 @@ mod tests {
         Options::parse(args.iter().map(|s| s.to_string()))
     }
     #[test]
+    fn public_launcher_rejects_the_retired_counter_example() {
+        assert!(parse(&["--example", "counter"]).is_err());
+        for name in ["benchmark", "chain-hash"] {
+            assert_eq!(parse(&["--example", name]).unwrap().defaults().unwrap().domain, Domain::Hash);
+        }
+    }
+    #[test]
+    fn game_accepts_environment_but_not_configuration() {
+        let default = parse(&[]).unwrap();
+        assert_eq!(default.defaults().unwrap().domain, Domain::Movement);
+        assert!(default.validate_game().is_ok());
+        assert_eq!(parse(&["--example", "game"]).unwrap().defaults().unwrap().domain, Domain::Movement);
+        assert!(parse(&["--environment", "browser", "--no-open"]).unwrap().validate_game().is_ok());
+        for args in [vec!["--execution", "manual"], vec!["--budget-ms", "2"], vec!["--", "--clients", "2"]] {
+            assert!(parse(&args).unwrap().validate_game().is_err(), "{args:?}");
+        }
+    }
+    #[test]
     fn browser_pending_capacity_is_forwarded_only_for_numeric_rates() {
         for rate in ["max", "100"] {
             let settings = crate::support::Settings::parse(["--events-per-second", rate, "--max-pending", "64"].map(str::to_owned), true)
                 .unwrap()
                 .unwrap()
                 .0;
-            let url = BrowserSettings { budget_ms: 1.0, max_steps: 1000 }.url("http://localhost/", Domain::Counter, &settings);
+            let url = BrowserSettings { budget_ms: 1.0, max_steps: 1000 }.url("http://localhost/", Domain::Hash, &settings);
             assert_eq!(url.contains("max_pending="), rate != "max");
             if rate != "max" {
                 assert!(url.contains("max_pending=64"));
@@ -271,8 +291,8 @@ mod tests {
     }
     #[test]
     fn capabilities_and_browser_only_limits_are_checked() {
-        assert!(Selection::new(Environment::Browser, Execution::Runtime, Domain::Counter).is_err());
-        for domain in [Domain::Counter, Domain::Hash, Domain::Movement] {
+        assert!(Selection::new(Environment::Browser, Execution::Runtime, Domain::Hash).is_err());
+        for domain in [Domain::Hash, Domain::Movement] {
             for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads, Environment::Browser] {
                 assert!(Selection::new(environment, Execution::Manual, domain).is_ok());
             }
@@ -281,7 +301,7 @@ mod tests {
             }
         }
         for execution in [Execution::Runtime, Execution::Manual] {
-            assert!(Selection::new(Environment::WasmThreads, execution, Domain::Counter).is_ok());
+            assert!(Selection::new(Environment::WasmThreads, execution, Domain::Hash).is_ok());
         }
         for args in [vec!["--budget-ms", "NaN"], vec!["--max-steps", "0"], vec!["--rounds", "8"], vec!["--events-per-round", "32"]] {
             assert!(parse(&args).is_err(), "{args:?}");
@@ -316,7 +336,7 @@ mod tests {
         ])
         .unwrap();
         let (settings, _) = crate::support::Settings::parse(options.example_args.clone(), true).unwrap().unwrap();
-        let url = options.browser().url("http://localhost/", Domain::Counter, &settings);
+        let url = options.browser().url("http://localhost/", Domain::Hash, &settings);
         for expected in ["snapshots=8", "query_hz=3", "rate=0", "snapshot_skew=90", "max_ms=0.5", "average_targets=1.0", "autostart=1"] {
             assert!(url.contains(expected), "{expected}: {url}");
         }

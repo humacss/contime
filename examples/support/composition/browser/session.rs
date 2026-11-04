@@ -16,6 +16,11 @@ struct Options {
     max_targets: usize,
     #[serde(default)]
     snapshot_skew: usize,
+    #[serde(default = "default_reorder")]
+    reorder_percent: usize,
+}
+fn default_reorder() -> usize {
+    100
 }
 fn settings(json: &str) -> Result<Settings, String> {
     let o: Options = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -23,6 +28,7 @@ fn settings(json: &str) -> Result<Settings, String> {
     for (key, value) in [
         ("--snapshots", o.snapshots.to_string()),
         ("--snapshot-skew", o.snapshot_skew.to_string()),
+        ("--reorder-percent", o.reorder_percent.to_string()),
         ("--workers", "1".to_string()),
         ("--events-per-second", if o.rate == 0 { "max".into() } else { o.rate.to_string() }),
         ("--query-hz", o.query_hz.to_string()),
@@ -279,13 +285,14 @@ mod movement_tests {
         let json = serde_json::json!({"clients":5,"client_spacing":18,"movement_speed":8,
             "input_hz":1,"query_hz":20,"average_latency_ms":1000,"jitter_ms":1000,
             "trail_ms":5000,"fade_ms":5000,"retention_ms":10000,"checkpoint_interval":128,
-            "showcase":true}).to_string();
+            "showcase":true})
+        .to_string();
         let mut session = Session::new(&json, "client-movement").unwrap();
         let mut saw_reordered = false;
         let mut saw_revised = false;
         for tick in 0..1800 {
-            let frame: serde_json::Value = serde_json::from_str(
-                &session.frame(tick as f64 * 16.0, 1.0, 64, tick >= 1700, || 0.0).unwrap()).unwrap();
+            let frame: serde_json::Value =
+                serde_json::from_str(&session.frame(tick as f64 * 16.0, 1.0, 64, tick >= 1700, || 0.0).unwrap()).unwrap();
             let report: crate::support::movement_report::Report = serde_json::from_value(frame["movement"].clone()).unwrap();
             report.validate().unwrap();
             saw_reordered |= report.network.iter().any(|input| input.reordered);
@@ -297,16 +304,19 @@ mod movement_tests {
     fn arrival_pulses_do_not_wait_for_a_slow_query() {
         let config = serde_json::json!({"clients":2,"input_hz":10,"query_hz":1,
             "average_latency_ms":0,"jitter_ms":0,"trail_ms":2000,"fade_ms":500,
-            "retention_ms":3000,"checkpoint_interval":4}).to_string();
+            "retention_ms":3000,"checkpoint_interval":4})
+        .to_string();
         let mut session = Session::new(&config, "client-movement").unwrap();
         let mut visible_before_query = false;
         for tick in 0..50 {
-            let frame: serde_json::Value = serde_json::from_str(
-                &session.frame(tick as f64 * 16.0, 1.0, 32, false, || 0.0).unwrap()).unwrap();
+            let frame: serde_json::Value =
+                serde_json::from_str(&session.frame(tick as f64 * 16.0, 1.0, 32, false, || 0.0).unwrap()).unwrap();
             let scene = &frame["movement"];
-            let latest = scene["trails"].as_array().unwrap().iter()
-                .filter_map(|p| p["time_ns"].as_u64()).max().unwrap_or(0);
-            visible_before_query |= scene["arrivals"].as_array().unwrap().iter()
+            let latest = scene["trails"].as_array().unwrap().iter().filter_map(|p| p["time_ns"].as_u64()).max().unwrap_or(0);
+            visible_before_query |= scene["arrivals"]
+                .as_array()
+                .unwrap()
+                .iter()
                 .any(|a| a["time_ns"].as_u64().unwrap() > latest && a["pulse"].as_f64().unwrap() > 0.0);
         }
         assert!(visible_before_query, "a delivered input must pulse before the next one-second query");
@@ -341,7 +351,6 @@ mod movement_tests {
             assert!(rows.windows(2).all(|pair| pair[0]["action_ns"].as_u64() <= pair[1]["action_ns"].as_u64()));
             saw_waiting |= rows.iter().any(|e| e["arrived_ns"].is_null());
             saw_reordered |= rows.iter().any(|e| e["reordered"] == true);
-
         }
         assert!(saw_waiting && saw_reordered, "timeline must show queued inputs and actual reordered arrivals");
         let movement = &last["movement"];

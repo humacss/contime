@@ -46,12 +46,12 @@ fn reordered_opacity(event: &crate::report::NetworkEvent, now: u64) -> f32 {
     if !event.reordered {
         return 0.0;
     }
-    event.arrived_ns.map_or(0.0, |at| ((1_200_000_000.0 - now.saturating_sub(at) as f32) / 500_000_000.0).clamp(0.0, 1.0))
+    event.arrived_ns.filter(|at| *at <= now).map_or(0.0, |at| ((1_200_000_000.0 - (now - at) as f32) / 500_000_000.0).clamp(0.0, 1.0))
 }
-pub(crate) const RULER: f32 = 51.0;
+pub(crate) const RULER: f32 = 41.0;
 /// Stable rows, top to bottom: player, then the four simulated clients.
 fn client_y(client: usize) -> f32 {
-    75.0 - client.saturating_sub(1) as f32 * 5.0
+    65.0 - client.saturating_sub(1) as f32 * 5.0
 }
 pub(crate) fn delivery_position(report: &Report, event: &crate::report::NetworkEvent, tracks: &crate::tracks::Tracks) -> Vec2 {
     let axis = Axis::new(report.now_ns, report.average_latency_ms, report.jitter_ms);
@@ -69,12 +69,12 @@ pub fn draw(
     let now = axis.x(report.now_ns);
     let muted = Color::srgb(0.50, 0.60, 0.65);
     let bright = Color::srgb(0.78, 0.87, 0.90);
-    labels.push(Vec2::new(-104.0, 82.5), 96.0, "INPUT TIMELINE", Style::Heading, bright);
-    labels.push(Vec2::new(now - 3.5, 80.0), 30.0, "DELIVERY", Style::Legend, bright);
-    gizmos.line_2d(Vec2::new(now, 78.5), Vec2::new(now, RULER - 0.4), bright);
+    labels.push(Vec2::new(-104.0, 72.5), 96.0, "Input timeline", Style::Heading, bright);
+    labels.push(Vec2::new(now - 3.5, 70.0), 30.0, "Delivery", Style::Legend, bright);
+    gizmos.line_2d(Vec2::new(now, 68.5), Vec2::new(now, RULER - 0.4), bright);
     gizmos.line_2d(Vec2::new(-96.0, RULER), Vec2::new(96.0, RULER), muted);
     for x in axis.seconds() {
-        gizmos.line_2d(Vec2::new(x, RULER), Vec2::new(x, 77.0), Color::srgba(0.50, 0.60, 0.65, 0.14));
+        gizmos.line_2d(Vec2::new(x, RULER), Vec2::new(x, 67.0), Color::srgba(0.50, 0.60, 0.65, 0.14));
         gizmos.line_2d(Vec2::new(x, RULER - 0.5), Vec2::new(x, RULER), muted);
     }
     // Every client keeps its own row, even when there are no visible inputs.
@@ -131,7 +131,7 @@ pub fn draw(
             }
             let alpha = reordered_opacity(event, report.now_ns);
             if alpha > 0.0 && entries.complete(event.id) {
-                labels.push(Vec2::new((end + 0.7).min(80.0), y + 1.0), 24.0, "reordered", Style::Status, delivery_color.with_alpha(alpha));
+                labels.push(Vec2::new((end + 0.7).min(74.0), y + 1.0), 38.0, "reordered", Style::Status, delivery_color.with_alpha(alpha));
             }
         } else {
             gizmos.line_2d(tip - Vec2::Y * size, tip + Vec2::Y * size, delivery_color);
@@ -153,9 +153,8 @@ pub fn draw(
         icon(gizmos, p, event.direction, color, scale * tracks.icon_scale(event.id));
     }
     if report.network.is_empty() {
-        labels.push(Vec2::new(-96.0, 68.0), 96.0, "No recent inputs", Style::Caption, muted);
+        labels.push(Vec2::new(-96.0, 58.0), 96.0, "No recent inputs", Style::Caption, muted);
     }
-    labels.push(Vec2::new(-104.0, 46.0), 208.0, "Arrow: move / Dot: stop / Line: delay / Double tick: reordered", Style::Hint, muted);
 }
 #[cfg(test)]
 mod tests {

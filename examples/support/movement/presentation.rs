@@ -74,7 +74,7 @@ pub struct IntendedPath {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Report {
-    /// Shared bot source frequency; absent for scripted or older reports.
+    /// Shared bot source frequency; absent for older reports.
     #[serde(default)]
     pub bot_hz: Option<u64>,
     pub clients: usize,

@@ -32,7 +32,7 @@ impl Settings {
         let args: Vec<String> = args.into_iter().collect();
         let Some((mut settings, no_setup)) = Self::parse(args.clone(), manual)? else {
             println!(
-                "{title}\n\n--execution manual|runtime\n--snapshots N  --workers N (runtime only)\n--snapshot-skew 0..100 (0 = even, 100 = concentrated)\n--average-snapshots-per-event DECIMAL  --max-snapshots-per-event N\n--events-per-second max|N  --query-hz N  --retention-ms N\n--checkpoint-interval N  --max-pending N (numeric rates only)  --duration SECONDS\n--no-setup  --headless  --help\n\nDefaults: one worker per available logical CPU, 1,000 snapshots per worker,\nautomatically managed Maximum production, average 1.0 snapshots/event, maximum 2 (or snapshot count), 20 queries/s, 10 s retention, 128-event checkpoints.\nManual uses one worker. Headless runs default to five seconds.\nUse release builds for performance comparisons; UI and verification have their own cost."
+                "{title}\n\n--execution manual|runtime\n--snapshots N  --workers N (runtime only)\n--snapshot-skew 0..100  --reorder-percent 0..100 (0 = even, 100 = concentrated)\n--average-snapshots-per-event DECIMAL  --max-snapshots-per-event N\n--events-per-second max|N  --query-hz N  --retention-ms N\n--checkpoint-interval N  --max-pending N (numeric rates only)  --duration SECONDS\n--no-setup  --headless  --help\n\nDefaults: one worker per available logical CPU, 1,000 snapshots per worker,\nautomatically managed Maximum production, average 1.0 snapshots/event, maximum 2 (or snapshot count), 20 queries/s, 10 s retention, 128-event checkpoints.\nManual uses one worker. Headless runs default to five seconds.\nUse release builds for performance comparisons; UI and verification have their own cost."
             );
             return Ok(None);
         };
@@ -42,7 +42,7 @@ impl Settings {
                 settings_form::SettingsForm,
             };
             let execution = if manual { Execution::Manual } else { Execution::Runtime };
-            let selection = Selection::new(Environment::Terminal, execution, Domain::Counter).map_err(io::Error::other)?;
+            let selection = Selection::new(Environment::Terminal, execution, Domain::Hash).map_err(io::Error::other)?;
             let options = Options { example_args: args, ..Options::default() };
             let mut form = SettingsForm::new(selection, &options).map_err(io::Error::other)?;
             if !form.run_named(title)? {

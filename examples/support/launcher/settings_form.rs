@@ -11,6 +11,30 @@ use crate::support::{
 };
 use std::io;
 
+fn benchmark_help(id: &str) -> &'static str {
+    let readme = include_str!("../../cases/chain_hash/README.md");
+    let name = id.trim_start_matches('-');
+    let start = format!("<!-- launcher:setting:{name}:start -->");
+    let end = format!("<!-- launcher:setting:{name}:end -->");
+    readme.split_once(&start).and_then(|(_, text)| text.split_once(&end)).map_or("", |(help, _)| help.trim())
+}
+
+fn advanced_setting(id: &str) -> bool {
+    matches!(
+        id,
+        "--checkpoint-interval"
+            | "--average-snapshots-per-event"
+            | "--max-snapshots-per-event"
+            | "--snapshot-skew"
+            | "--max-pending"
+            | "--budget-ms"
+            | "--max-steps"
+    )
+}
+fn applicable(id: &str, execution: Execution, maximum: bool) -> bool {
+    (id != "--workers" || execution != Execution::Manual) && (id != "--max-pending" || !maximum)
+}
+
 pub(crate) struct SettingsForm {
     definitions: Vec<Definition>,
     form: Form,
@@ -24,21 +48,83 @@ impl SettingsForm {
         result.definitions = if selection.domain == Domain::Movement {
             schema::movement(&result.parse_movement(&options.example_args)?)
         } else {
-            schema::common(&result.parse_common(&options.example_args)?, selection.execution == Execution::Manual)
+            schema::common(&result.parse_common(&options.example_args, selection.execution)?, false)
         };
+        if selection.domain != Domain::Movement {
+            let choices = if matches!(selection.environment, Environment::Terminal | Environment::WasmThreads) {
+                vec!["runtime".into(), "manual".into()]
+            } else {
+                vec!["manual".into()]
+            };
+            result.definitions.insert(
+                0,
+                Definition {
+                    id: "--execution",
+                    group: "ConTime",
+                    label: "Execution",
+                    help: "Runtime uses background workers. Manual runs one worker on the calling thread.",
+                    unit: "",
+                    kind: ValueKind::Choice,
+                    choices,
+                    default: selection.execution.slug().into(),
+                },
+            );
+        }
         if selection.environment == Environment::Browser {
             let browser = options.browser();
             result.definitions.extend(schema::browser(browser.budget_ms, browser.max_steps));
+        }
+        if selection.domain == Domain::Hash {
+            result.definitions.sort_by_key(|d| match d.id {
+                "--execution" => 0,
+                "--workers" => 1,
+                "--snapshots" => 2,
+                "--events-per-second" => 3,
+                "--reorder-percent" => 4,
+                "--query-hz" => 5,
+                "--retention-ms" => 6,
+                _ => 7,
+            });
+            for definition in &mut result.definitions {
+                definition.group = if advanced_setting(definition.id) { "Advanced" } else { "Benchmark" };
+            }
+            let index = result.definitions.iter().position(|d| advanced_setting(d.id)).unwrap_or(result.definitions.len());
+            result.definitions.insert(
+                index,
+                Definition {
+                    id: "--advanced",
+                    group: "Benchmark",
+                    label: "Advanced settings",
+                    help: "Show or hide the advanced settings for checkpoints, event distribution, backlog and browser processing.",
+                    unit: "",
+                    kind: ValueKind::Choice,
+                    choices: vec!["Hidden".into(), "Shown".into()],
+                    default: "Shown".into(),
+                },
+            );
         }
         result.form = Form::new(
             result
                 .definitions
                 .iter()
                 .map(|definition| {
-                    let mut field = Field::new(definition.label, definition.help, definition.default.clone(), definition.choices.clone());
+                    let help = if selection.domain == Domain::Hash && definition.id != "--advanced" {
+                        benchmark_help(if definition.id == "--execution" {
+                            if selection.execution == Execution::Manual {
+                                "execution-manual"
+                            } else {
+                                "execution-runtime"
+                            }
+                        } else {
+                            definition.id
+                        })
+                    } else {
+                        definition.help
+                    };
+                    let mut field = Field::new(definition.label, help, definition.default.clone(), definition.choices.clone());
+                    field.numeric = !matches!(definition.kind, ValueKind::Choice);
                     field.decimal = matches!(definition.kind, ValueKind::Decimal { .. } | ValueKind::Average { .. });
                     field.group = Some(definition.group);
-                    field.allowed = Some(format!("Allowed: {}.\n", definition.allowed()));
                     field
                 })
                 .collect(),
@@ -49,8 +135,8 @@ impl SettingsForm {
         result.form = form;
         Ok(result)
     }
-    fn parse_common(&self, args: &[String]) -> Result<Settings, String> {
-        let mut settings = Settings::parse(args.to_vec(), self.selection.execution == Execution::Manual)
+    fn parse_common(&self, args: &[String], execution: Execution) -> Result<Settings, String> {
+        let mut settings = Settings::parse(args.to_vec(), execution == Execution::Manual)
             .map_err(|e| e.to_string())?
             .ok_or("Use launcher --help for usage")?
             .0;
@@ -65,12 +151,19 @@ impl SettingsForm {
     }
     fn arguments_from(&self, form: &Form) -> Result<Vec<String>, String> {
         let mut args = self.options.example_args.clone();
+        let execution = self.execution_from(form);
+        let maximum = self
+            .definitions
+            .iter()
+            .zip(&form.fields)
+            .find(|(d, _)| d.id == "--events-per-second")
+            .is_some_and(|(_, f)| matches!(f.value.as_str(), "Maximum" | "max"));
         for (definition, field) in self.definitions.iter().zip(&form.fields) {
-            if !field.visible {
+            if definition.id == "--advanced" || !applicable(definition.id, execution, maximum) {
                 continue;
             }
             let value = definition.normalize(&field.value)?;
-            if field.changed() && !matches!(definition.id, "--budget-ms" | "--max-steps") {
+            if field.changed() && !matches!(definition.id, "--execution" | "--budget-ms" | "--max-steps") {
                 args.extend([definition.id.into(), value]);
             }
         }
@@ -82,8 +175,21 @@ impl SettingsForm {
     pub fn arguments(&self) -> Result<Vec<String>, String> {
         self.arguments_from(&self.form)
     }
+    fn execution_from(&self, form: &Form) -> Execution {
+        let value = self.definitions.iter().position(|d| d.id == "--execution").map(|i| form.fields[i].value.as_str());
+        if value == Some("manual") {
+            Execution::Manual
+        } else if value == Some("runtime") {
+            Execution::Runtime
+        } else {
+            self.selection.execution
+        }
+    }
+    pub fn selected_execution(&self) -> Execution {
+        self.execution_from(&self.form)
+    }
     pub fn common(&self) -> Result<Settings, String> {
-        self.parse_common(&self.arguments()?)
+        self.parse_common(&self.arguments()?, self.selected_execution())
     }
     pub fn movement(&self) -> Result<Config, String> {
         self.parse_movement(&self.arguments()?)
@@ -105,11 +211,19 @@ impl SettingsForm {
         self.browser_from(&self.form)
     }
     fn validate(&self, form: &mut Form) -> Result<(), String> {
-        // Focus the first invalid visible field and make the next keystroke replace it.
-        for (index, (definition, field)) in self.definitions.iter().zip(&form.fields).enumerate() {
-            if field.visible {
-                if let Err(error) = definition.normalize(&field.value) {
-                    form.focus(index);
+        // Hidden advanced edits remain effective and must still be validated.
+        let execution = self.execution_from(form);
+        let maximum = self
+            .definitions
+            .iter()
+            .zip(&form.fields)
+            .find(|(d, _)| d.id == "--events-per-second")
+            .is_some_and(|(_, f)| matches!(f.value.as_str(), "Maximum" | "max"));
+        for index in 0..self.definitions.len() {
+            let definition = &self.definitions[index];
+            if applicable(definition.id, execution, maximum) {
+                if let Err(error) = definition.normalize(&form.fields[index].value) {
+                    self.reveal_and_focus(form, index);
                     return Err(error);
                 }
             }
@@ -117,17 +231,26 @@ impl SettingsForm {
         let result = self.validate_values(form);
         if let Err(error) = &result {
             if let Some(index) = self.definitions.iter().position(|definition| error.contains(definition.id)) {
-                form.focus(index);
+                self.reveal_and_focus(form, index);
             }
         }
         result
+    }
+    fn reveal_and_focus(&self, form: &mut Form, index: usize) {
+        if advanced_setting(self.definitions[index].id) {
+            if let Some(toggle) = self.definitions.iter().position(|d| d.id == "--advanced") {
+                form.fields[toggle].value = "Shown".into();
+                self.refresh(form);
+            }
+        }
+        form.focus(index);
     }
     fn validate_values(&self, form: &Form) -> Result<(), String> {
         let args = self.arguments_from(form)?;
         if self.selection.domain == Domain::Movement {
             self.parse_movement(&args)?;
         } else {
-            self.parse_common(&args)?;
+            self.parse_common(&args, self.execution_from(form))?;
         }
         self.browser_from(form)?;
         Ok(())
@@ -140,8 +263,17 @@ impl SettingsForm {
             .zip(&form.fields)
             .find(|(d, _)| d.id == "--events-per-second")
             .is_some_and(|(_, f)| matches!(f.value.as_str(), "Maximum" | "max"));
+        let execution = self.execution_from(form);
+        if let Some(index) = self.definitions.iter().position(|d| d.id == "--execution") {
+            form.fields[index].help = match execution {
+                Execution::Runtime => benchmark_help("execution-runtime"),
+                Execution::Manual => benchmark_help("execution-manual"),
+            };
+        }
+        let expanded =
+            self.definitions.iter().zip(&form.fields).find(|(d, _)| d.id == "--advanced").is_none_or(|(_, f)| f.value == "Shown");
         for (definition, field) in self.definitions.iter().zip(&mut form.fields) {
-            field.visible = definition.id != "--max-pending" || !maximum;
+            field.visible = applicable(definition.id, execution, maximum) && (expanded || !advanced_setting(definition.id));
         }
         if !form.fields[form.selected].visible {
             form.selected = form.fields.iter().position(|f| f.visible).unwrap_or(0);
@@ -152,7 +284,7 @@ impl SettingsForm {
         let definitions = if self.selection.domain == Domain::Movement {
             self.parse_movement(&args).map(|c| schema::movement(&c))
         } else {
-            self.parse_common(&args).map(|s| schema::common(&s, self.selection.execution == Execution::Manual))
+            self.parse_common(&args, execution).map(|s| schema::common(&s, false))
         };
         // A temporary invalid value must not overwrite any other edit.
         if let Ok(definitions) = definitions {
@@ -191,29 +323,211 @@ mod tests {
     fn session(environment: Environment, execution: Execution, domain: Domain, args: &[&str]) -> SettingsForm {
         let selection = Selection::new(environment, execution, domain).unwrap();
         let options = Options { example_args: args.iter().map(|s| s.to_string()).collect(), ..Options::default() };
-        SettingsForm::new(selection, &options).unwrap()
+        let mut settings = SettingsForm::new(selection, &options).unwrap();
+        if domain == Domain::Hash {
+            settings.edit("--advanced", "Shown");
+        }
+        settings
+    }
+    #[test]
+    fn benchmark_shows_advanced_settings_and_readme_help_by_default() {
+        let readme = include_str!("../../cases/chain_hash/README.md");
+        for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads, Environment::Browser] {
+            let selection = Selection::new(environment, Execution::Manual, Domain::Hash).unwrap();
+            let form = SettingsForm::new(selection, &Options::default()).unwrap();
+            assert!(form.field("--checkpoint-interval").unwrap().visible);
+            for (definition, field) in form.definitions.iter().zip(&form.form.fields) {
+                if definition.id != "--advanced" {
+                    assert!(!field.help.is_empty() && readme.contains(field.help), "{} must use README help", definition.id);
+                    assert!(
+                        !field.help.contains("--") && !field.help.contains("command line") && !field.help.contains("separator"),
+                        "{} should not show CLI instructions in launcher help",
+                        definition.id
+                    );
+                    assert!(field.allowed.is_none(), "{} should not show an allowed range", definition.id);
+                }
+            }
+        }
+    }
+    #[test]
+    fn selected_benchmark_help_can_be_read_in_full() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        for environment in [Environment::Terminal, Environment::Browser] {
+            let mut settings = session(environment, Execution::Manual, Domain::Hash, &["--events-per-second", "100"]);
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+            for i in 0..settings.form.fields.len() {
+                if !settings.form.fields[i].visible {
+                    continue;
+                }
+                settings.form.focus(i);
+                for _ in 0..20 {
+                    terminal.draw(|frame| settings.form.render(frame, "Benchmark", "start example")).unwrap();
+                    settings.form.handle(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+                }
+                terminal.draw(|frame| settings.form.render(frame, "Benchmark", "start example")).unwrap();
+                let text: String = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect();
+                let compact = |value: &str| value.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                let end = compact(settings.form.fields[i].help);
+                assert!(compact(&text).contains(&end[end.len().saturating_sub(30)..]), "{}", settings.form.fields[i].label);
+                assert!(!text.contains("Allowed:"));
+            }
+        }
+    }
+    #[test]
+    fn reorder_is_a_primary_setting_and_is_forwarded_to_every_host() {
+        use ratatui::crossterm::event::KeyCode::*;
+        for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads, Environment::Browser] {
+            let selection = Selection::new(environment, Execution::Manual, Domain::Hash).unwrap();
+            let mut s = SettingsForm::new(selection, &Options::default()).unwrap();
+            assert!(s.field("--reorder-percent").unwrap().visible);
+            assert_eq!(s.field("--reorder-percent").unwrap().value, "100");
+            press(&mut s, "--reorder-percent", Char('0'));
+            assert_eq!(s.common().unwrap().reorder_percent, 0);
+            assert!(s.arguments().unwrap().windows(2).any(|pair| pair == ["--reorder-percent", "0"]));
+            let url = s.browser().unwrap().url("http://localhost/", Domain::Hash, &s.common().unwrap());
+            assert!(url.contains("reorder_percent=0"));
+            s.edit("--reorder-percent", "101");
+            assert!(validate(&mut s).is_err());
+        }
+    }
+    #[test]
+    fn benchmark_advanced_settings_start_visible_and_keep_edits_when_collapsed() {
+        use ratatui::crossterm::event::KeyCode::*;
+        let selection = Selection::new(Environment::Terminal, Execution::Runtime, Domain::Hash).unwrap();
+        let mut s = SettingsForm::new(selection, &Options::default()).unwrap();
+        for id in ["--execution", "--workers", "--snapshots", "--events-per-second", "--query-hz", "--retention-ms"] {
+            assert!(s.field(id).unwrap().visible, "{id}");
+        }
+        assert!(s.field("--checkpoint-interval").unwrap().visible);
+        for c in "32".chars() {
+            press(&mut s, "--checkpoint-interval", Char(c));
+        }
+        press(&mut s, "--advanced", Left);
+        assert!(!s.field("--checkpoint-interval").unwrap().visible);
+        assert_eq!(s.common().unwrap().checkpoint_interval, 32);
+        press(&mut s, "--advanced", Right);
+        assert_eq!(s.field("--checkpoint-interval").unwrap().value, "32");
+    }
+    #[test]
+    fn collapsed_browser_controls_keep_values_and_never_become_workload_arguments() {
+        use ratatui::crossterm::event::KeyCode::*;
+        let selection = Selection::new(Environment::Browser, Execution::Manual, Domain::Hash).unwrap();
+        let mut s = SettingsForm::new(selection, &Options::default()).unwrap();
+        assert!(s.field("--budget-ms").unwrap().visible);
+        for c in "0.5".chars() {
+            press(&mut s, "--budget-ms", Char(c));
+        }
+        press(&mut s, "--advanced", Left);
+        assert_eq!(s.browser().unwrap().budget_ms, 0.5);
+        assert!(!s.arguments().unwrap().iter().any(|a| a == "--advanced" || a == "--budget-ms"));
+        assert!(validate(&mut s).is_ok());
+    }
+    #[test]
+    fn invalid_collapsed_advanced_setting_reopens_and_receives_focus() {
+        use ratatui::crossterm::event::KeyCode::*;
+        let selection = Selection::new(Environment::Terminal, Execution::Runtime, Domain::Hash).unwrap();
+        let mut s = SettingsForm::new(selection, &Options::default()).unwrap();
+        press(&mut s, "--checkpoint-interval", Char('0'));
+        press(&mut s, "--advanced", Left);
+        assert!(validate(&mut s).is_err());
+        assert!(s.field("--checkpoint-interval").unwrap().visible);
+        assert_eq!(s.definitions[s.form.selected].id, "--checkpoint-interval");
+    }
+    #[test]
+    fn incompatible_collapsed_fanout_reopens_at_the_invalid_setting() {
+        use ratatui::crossterm::event::KeyCode::*;
+        let selection = Selection::new(Environment::Terminal, Execution::Runtime, Domain::Hash).unwrap();
+        let mut s = SettingsForm::new(selection, &Options::default()).unwrap();
+        press(&mut s, "--max-snapshots-per-event", Char('3'));
+        press(&mut s, "--advanced", Left);
+        press(&mut s, "--snapshots", Char('1'));
+        assert!(validate(&mut s).is_err());
+        assert!(s.field("--max-snapshots-per-event").unwrap().visible);
+        assert_eq!(s.definitions[s.form.selected].id, "--max-snapshots-per-event");
+    }
+    #[test]
+    fn execution_help_changes_with_the_selected_mode() {
+        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Hash, &[]);
+        let index = s.definitions.iter().position(|d| d.id == "--execution").unwrap();
+        let runtime = s.form.fields[index].help;
+        assert!(!runtime.contains("--") && !runtime.contains("command line"));
+        s.form.fields[index].value = "manual".into();
+        let mut form = std::mem::replace(&mut s.form, Form::new(Vec::new(), true));
+        s.refresh(&mut form);
+        assert_ne!(runtime, form.fields[index].help);
+        assert!(form.fields[index].help.contains("calling thread"));
+    }
+    #[test]
+    fn execution_in_example_settings_changes_workers_and_selection() {
+        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Hash, &[]);
+        assert_eq!(s.field("--execution").unwrap().value, "runtime");
+        assert!(s.field("--workers").unwrap().visible);
+        s.edit("--execution", "manual");
+        assert!(!s.field("--workers").unwrap().visible);
+        assert_eq!(s.common().unwrap().workers, 1);
+        s.edit("--execution", "runtime");
+        assert!(s.field("--workers").unwrap().visible);
+    }
+    #[test]
+    fn execution_choice_can_be_changed_with_arrow_keys() {
+        use ratatui::crossterm::event::KeyCode;
+        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Hash, &[]);
+        press(&mut s, "--execution", KeyCode::Right);
+        assert_eq!(s.selected_execution(), Execution::Manual);
+        assert!(!s.field("--workers").unwrap().visible);
+        press(&mut s, "--execution", KeyCode::Left);
+        assert_eq!(s.selected_execution(), Execution::Runtime);
+        assert!(s.field("--workers").unwrap().visible);
+    }
+    #[test]
+    fn browser_execution_only_offers_manual() {
+        let s = session(Environment::Browser, Execution::Manual, Domain::Hash, &[]);
+        assert_eq!(s.field("--execution").unwrap().choices, ["manual"]);
     }
     #[test]
     fn groups_are_composed_for_the_selected_case_and_environment() {
         let movement = session(Environment::Terminal, Execution::Manual, Domain::Movement, &[]);
-        assert_eq!(movement.field("--average-latency-ms").unwrap().value, "500");
-        assert_eq!(movement.field("--jitter-ms").unwrap().value, "500");
+        assert_eq!(movement.field("--average-latency-ms").unwrap().value, "1000");
+        assert_eq!(movement.field("--jitter-ms").unwrap().value, "1000");
         assert!(movement.field("--events-per-second").is_none());
         assert!(movement.field("--workers").is_none());
         assert_eq!(movement.field("--clients").unwrap().group, Some("Client movement"));
-        let browser = session(Environment::Browser, Execution::Manual, Domain::Counter, &[]);
-        assert_eq!(browser.field("--budget-ms").unwrap().group, Some("Browser"));
-        assert_eq!(browser.field("--retention-ms").unwrap().group, Some("ConTime"));
+        let browser = session(Environment::Browser, Execution::Manual, Domain::Hash, &[]);
+        assert_eq!(browser.field("--budget-ms").unwrap().group, Some("Advanced"));
+        assert_eq!(browser.field("--retention-ms").unwrap().group, Some("Benchmark"));
+    }
+    #[test]
+    fn runtime_workers_default_to_launcher_parallelism_and_can_be_overridden() {
+        let expected = std::thread::available_parallelism().map_or(1, |n| n.get()).min(1024);
+        for environment in [Environment::Terminal, Environment::WasmThreads] {
+            let selection = Selection::new(environment, Execution::Runtime, Domain::Hash).unwrap();
+            let mut form = SettingsForm::new(selection, &Options::default()).unwrap();
+            assert_eq!(form.common().unwrap().workers, expected);
+            assert_eq!(form.field("--workers").unwrap().value, expected.to_string());
+            let arguments = super::super::launch::settings_arguments(&form.common().unwrap(), true);
+            assert!(arguments.windows(2).any(|pair| pair == ["--workers", &expected.to_string()]));
+
+            let custom = if expected == 2 { 3 } else { 2 };
+            form.edit("--workers", &custom.to_string());
+            assert_eq!(form.common().unwrap().workers, custom);
+            let arguments = super::super::launch::settings_arguments(&form.common().unwrap(), true);
+            assert!(arguments.windows(2).any(|pair| pair == ["--workers", &custom.to_string()]));
+        }
+        for environment in [Environment::Terminal, Environment::Wasm, Environment::WasmThreads, Environment::Browser] {
+            let selection = Selection::new(environment, Execution::Manual, Domain::Hash).unwrap();
+            let form = SettingsForm::new(selection, &Options::default()).unwrap();
+            assert_eq!(form.common().unwrap().workers, 1);
+        }
     }
     #[test]
     fn worker_edits_update_only_automatic_defaults() {
-        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Counter, &[]);
+        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Hash, &[]);
         s.edit("--workers", "3");
         assert_eq!(s.field("--snapshots").unwrap().value, "3000");
         s.edit("--snapshots", "7");
         s.edit("--workers", "2");
         assert_eq!(s.common().unwrap().snapshot_count, 7);
-        let mut explicit = session(Environment::Terminal, Execution::Runtime, Domain::Counter, &["--snapshots", "9"]);
+        let mut explicit = session(Environment::Terminal, Execution::Runtime, Domain::Hash, &["--snapshots", "9"]);
         explicit.edit("--workers", "2");
         assert_eq!(explicit.common().unwrap().snapshot_count, 9);
     }
@@ -258,22 +572,22 @@ mod tests {
     }
     #[test]
     fn grouped_browser_form_keeps_ranges_and_selected_field_visible_at_80_by_24() {
-        let mut s = session(Environment::Browser, Execution::Manual, Domain::Counter, &[]);
+        let mut s = session(Environment::Browser, Execution::Manual, Domain::Hash, &[]);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
         for index in 0..s.form.fields.len() {
             if !s.form.fields[index].visible {
                 continue;
             }
             s.form.selected = index;
-            terminal.draw(|frame| s.form.render(frame, "Counter", "start example")).unwrap();
+            terminal.draw(|frame| s.form.render(frame, "Benchmark", "start example")).unwrap();
             let text: String = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect();
             assert!(text.contains(s.form.fields[index].label), "{}", s.form.fields[index].label);
-            assert!(text.contains("Allowed:") && text.contains("Enter start example") && text.contains("Esc cancel"));
+            assert!(text.contains("Enter start example") && text.contains("Esc cancel"));
         }
     }
     #[test]
     fn numeric_pending_edits_survive_maximum_and_default_changes() {
-        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Counter, &[]);
+        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Hash, &[]);
         s.edit("--events-per-second", "1000");
         assert_eq!(s.field("--max-pending").unwrap().value, "4096");
         s.edit("--max-pending", "17");
@@ -357,10 +671,10 @@ mod tests {
                 "--duration",
                 "315360000",
             ];
-            let form = session(Environment::Terminal, execution, Domain::Counter, &args);
+            let form = session(Environment::Terminal, execution, Domain::Hash, &args);
             let expected = Settings::parse(args.map(str::to_owned), execution == Execution::Manual).unwrap().unwrap().0;
             assert_eq!(format!("{:?}", form.common().unwrap()), format!("{expected:?}"));
-            assert!(form.field("--workers").is_some() == (execution == Execution::Runtime));
+            assert_eq!(form.field("--workers").unwrap().visible, execution == Execution::Runtime);
         }
         let mut s = session(
             Environment::Terminal,
@@ -377,7 +691,7 @@ mod tests {
     #[test]
     fn keyboard_edits_keep_automatic_defaults_until_a_user_selects_the_current_value() {
         use ratatui::crossterm::event::KeyCode::*;
-        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Counter, &["--workers", "2"]);
+        let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Hash, &["--workers", "2"]);
         press(&mut s, "--workers", Right);
         assert_eq!(s.field("--snapshots").unwrap().value, "4000");
         press(&mut s, "--events-per-second", Char('1'));
@@ -420,7 +734,7 @@ mod tests {
             ("--average-snapshots-per-event", "2.1"),
             ("--max-snapshots-per-event", "5"),
         ] {
-            let mut s = session(Environment::Terminal, Execution::Manual, Domain::Counter, &["--snapshots", "4"]);
+            let mut s = session(Environment::Terminal, Execution::Manual, Domain::Hash, &["--snapshots", "4"]);
             s.edit(id, value);
             assert!(validate(&mut s).is_err(), "{id}={value}");
             assert_eq!(s.definitions[s.form.selected].id, id);
@@ -432,7 +746,7 @@ mod tests {
     #[test]
     fn decimal_average_edits_exactly_resets_and_ignores_decimal_on_integers() {
         use ratatui::crossterm::event::KeyCode::*;
-        let mut s = session(Environment::Terminal, Execution::Manual, Domain::Counter, &[]);
+        let mut s = session(Environment::Terminal, Execution::Manual, Domain::Hash, &[]);
         for c in "1.375".chars() {
             press(&mut s, "--average-snapshots-per-event", Char(c));
         }
@@ -449,7 +763,7 @@ mod tests {
         assert_eq!(s.field("--max-snapshots-per-event").unwrap().value, "2");
     }
     #[test]
-    fn every_visible_setting_renders_help_ranges_formatted_values_and_presets() {
+    fn every_visible_setting_renders_help_and_controls_without_choice_lists() {
         for width in [80, 120] {
             let mut s = session(Environment::Terminal, Execution::Runtime, Domain::Hash, &["--events-per-second", "100", "--workers", "3"]);
             let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 24)).unwrap();
@@ -458,22 +772,26 @@ mod tests {
                 terminal.draw(|frame| s.form.render(frame, "Hash", "start example")).unwrap();
                 let text: String = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect();
                 assert!(text.contains(s.form.fields[i].label));
-                for expected in ["Allowed:", "Common values:", "Enter start example", "Esc cancel"] {
+                assert!(!text.contains("Common values:") && !text.contains("Choices:"));
+                let compact = |value: &str| value.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+                let help = compact(s.form.fields[i].help);
+                assert!(compact(&text).contains(&help[..help.len().min(60)]), "{width}: missing help for {}", s.form.fields[i].label);
+                assert!(!text.contains("Allowed:"));
+                for expected in ["Enter start example", "Esc cancel"] {
                     assert!(text.contains(expected), "{width}: {expected}");
                 }
             }
             s.form.selected = s.definitions.iter().position(|d| d.id == "--workers").unwrap();
             terminal.draw(|frame| s.form.render(frame, "Hash", "start example")).unwrap();
             let text: String = terminal.backend().buffer().content().iter().map(|cell| cell.symbol()).collect();
-            assert!(text.contains("1,024") && text.contains("worker threads") && text.contains("– / 11"));
+            assert!(text.contains("histories") && text.contains("– / 11") && !text.contains("Allowed:"));
         }
     }
     #[test]
     fn maximum_rate_presets_and_navigation_skip_hidden_pending_without_losing_focus() {
         use ratatui::crossterm::event::KeyCode::*;
         for execution in [Execution::Manual, Execution::Runtime] {
-            let mut s =
-                session(Environment::Terminal, execution, Domain::Counter, &["--events-per-second", "100", "--max-pending", "12345"]);
+            let mut s = session(Environment::Terminal, execution, Domain::Hash, &["--events-per-second", "100", "--max-pending", "12345"]);
             for _ in 0..2 {
                 press(&mut s, "--events-per-second", Char('m'));
                 assert_eq!(s.definitions[s.form.selected].id, "--events-per-second");

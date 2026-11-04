@@ -218,3 +218,25 @@ fn manual_hash_uses_worker_monitor_feedback_and_reversed_simulator_delivery() {
         assert!(summary.queries > 1);
     }
 }
+
+#[test]
+fn ordering_setting_changes_delivery_without_changing_validation() {
+    for percent in [0, 50, 100] {
+        let options = monitored::Options {
+            snapshots: 4,
+            targets: 1,
+            rate: 1000,
+            maximum: false,
+            reorder_percent: percent,
+            headless: true,
+            duration: Some(Duration::from_millis(150)),
+            ..monitored::Options::default()
+        };
+        let summary =
+            monitored::run_manual_with_options::<setup::HashExample, _, _>(options, generation::events, monitored::Delivery::ReverseGroups)
+                .unwrap();
+        assert!(summary.events > 0);
+        assert_eq!(summary.events, summary.completed);
+        assert_eq!(summary.reversed == 0, percent == 0);
+    }
+}

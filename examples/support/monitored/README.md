@@ -4,7 +4,7 @@ Used by native/WASI counters and hashes in both supported execution modes. Brows
 Manual backend and reference checks through a frame-budgeted adapter. Models and
 simulator callbacks stay in their case folders. Monitoring, workload control and
 presentation live in support; generic execution and host lifecycle live under
-`../../environments`. ConTime itself is not modified.
+`../../environments`. `contime` itself is not modified.
 
 | File | Responsibility |
 | --- | --- |
@@ -96,9 +96,9 @@ Finite portable regression scenarios independently cover replay and retention.
 Run focused verification from the repository root:
 
 ```sh
-cargo test --all-features --example counter --example chain_hash
+cargo test --all-features --test counter_internal --example chain_hash
 cargo test --example launcher --example chain_hash
-cargo clippy --all-features --example counter --example chain_hash -- -D warnings
+cargo clippy --all-features --test counter_internal --example chain_hash -- -D warnings
 ```
 
 ## WASI presentation boundary

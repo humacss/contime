@@ -23,14 +23,14 @@ export function readSettings(values) {
         return Object.freeze(result);
     }
     const result = { ...values, rate: parseRate(values.rate) };
-    const limits = { snapshot_skew: [0, 100], snapshots: [1, 1000000], query_hz: [1, 1000], retention_ms: [1, 86400000],
+    const limits = { reorder_percent: [0, 100], snapshot_skew: [0, 100], snapshots: [1, 1000000], query_hz: [1, 1000], retention_ms: [1, 86400000],
         checkpoint_interval: [1, 1000000000], max_pending: [1, 10000000], max_targets: [1, 1000000], max_steps: [1, 100000] };
     if (result.rate === 0) {
         delete result.max_pending;
         delete limits.max_pending;
     }
     for (const [key, [min, max]] of Object.entries(limits)) {
-        const value = Number(values[key] ?? (key === "snapshot_skew" ? 0 : NaN));
+        const value = Number(values[key] ?? (key === "snapshot_skew" ? 0 : key === "reorder_percent" ? 100 : NaN));
         if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`Invalid ${key}`);
         result[key] = value;
     }
@@ -42,15 +42,15 @@ export function readSettings(values) {
         throw new Error('Average targets must be between 1 and maximum targets; maximum targets cannot exceed snapshots');
     }
     result.average_targets = String(values.average_targets);
-    if (!['counter', 'chain-hash'].includes(result.domain)) throw new Error('Invalid domain');
+    if (result.domain !== 'chain-hash') throw new Error('Invalid domain');
     return Object.freeze(result);
 }
 
 // The launcher supplies startup values through the URL; direct loads use defaults.
 export function startupSettings(params) {
-    const defaults = {showcase:'0',domain:'counter',snapshots:1000,rate:'Maximum',query_hz:20,retention_ms:10000,
-        checkpoint_interval:128,max_pending:20000,average_targets:'1.0',max_targets:2,snapshot_skew:0,
+    const defaults = {showcase:'0',domain:'chain-hash',snapshots:1000,rate:'Maximum',query_hz:20,retention_ms:10000,
+        checkpoint_interval:128,max_pending:20000,average_targets:'1.0',max_targets:2,snapshot_skew:0,reorder_percent:100,
         max_ms:2,max_steps:256,clients:5,client_spacing:16,movement_speed:6,input_hz:1,
-        average_latency_ms:500,jitter_ms:500,trail_ms:5000,fade_ms:5000};
+        average_latency_ms:1000,jitter_ms:1000,trail_ms:5000,fade_ms:5000};
     return readSettings(Object.fromEntries(Object.entries(defaults).map(([key,value]) => [key,params.get(key) ?? value])));
 }

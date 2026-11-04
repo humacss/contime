@@ -71,3 +71,43 @@ fn validation_rejects_count_value_digest_duplicates_unknown_and_missing_states()
         assert!(check(unknown, &wanted).is_err());
     }
 }
+
+#[test]
+fn configurable_reordering_preserves_events_and_respects_endpoints() {
+    let source: Vec<_> = (0..10).collect();
+    let mut ordered = source.clone();
+    assert_eq!(reorder(&mut ordered, 0), 0);
+    assert_eq!(ordered, source);
+    let mut partial = source.clone();
+    assert_eq!(reorder(&mut partial, 50), 4);
+    assert_eq!(partial, [4, 3, 2, 1, 0, 5, 6, 7, 8, 9]);
+    let mut reversed = source.clone();
+    assert_eq!(reorder(&mut reversed, 100), 9);
+    assert_eq!(reversed, (0..10).rev().collect::<Vec<_>>());
+    let mut single = vec![7];
+    assert_eq!(reorder(&mut single, 100), 0);
+}
+
+#[test]
+fn verification_is_partitioned_by_worker_and_waits_for_a_completed_check() {
+    use crate::support::monitored_metrics::HashSummary;
+    let mut expected = vec![Counter::default(); 5];
+    expected[0].event_count = 1;
+    expected[1].event_count = 1;
+    expected[2].event_count = 1;
+    let mut actual = expected.clone();
+    actual[1].event_count = 0;
+    actual[2].hash[0] = 1;
+    let before = HashSummary::compare_workers::<HashExample>(&expected, &actual, false, false, Some(2));
+    assert_eq!((before.up_to_date, before.pending, before.failed), (0, 5, 0));
+    let failed = HashSummary::compare_workers::<HashExample>(&expected, &actual, true, true, Some(2));
+    assert_eq!((failed.up_to_date, failed.pending, failed.failed), (3, 0, 2));
+    let workers = failed.workers.unwrap();
+    assert_eq!((workers[0].up_to_date, workers[0].failed), (1, 1));
+    assert_eq!((workers[1].up_to_date, workers[1].failed), (2, 1));
+    let pending = HashSummary::compare_workers::<HashExample>(&expected, &expected, false, true, Some(2));
+    assert_eq!((pending.up_to_date, pending.pending, pending.failed), (5, 0, 0));
+    expected[1].event_count += 1;
+    let stale = HashSummary::compare_workers::<HashExample>(&expected, &actual, false, true, Some(2));
+    assert_eq!(stale.workers.unwrap()[0].pending, 1);
+}

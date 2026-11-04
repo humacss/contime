@@ -11,9 +11,10 @@ pub(crate) enum Kind {
     AverageTargets,
     MaxTargets,
     SnapshotSkew,
+    Reorder,
 }
 impl Kind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::SnapshotCount,
         Self::Workers,
         Self::Rate,
@@ -24,6 +25,7 @@ impl Kind {
         Self::AverageTargets,
         Self::MaxTargets,
         Self::SnapshotSkew,
+        Self::Reorder,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -37,6 +39,7 @@ impl Kind {
             Self::AverageTargets => "Avg snapshots/event",
             Self::MaxTargets => "Max snapshots/event",
             Self::SnapshotSkew => "Snapshot skew",
+            Self::Reorder => "Out-of-order delivery",
         }
     }
     pub fn flag(self) -> &'static str {
@@ -51,6 +54,7 @@ impl Kind {
             Self::AverageTargets => "--average-snapshots-per-event",
             Self::MaxTargets => "--max-snapshots-per-event",
             Self::SnapshotSkew => "--snapshot-skew",
+            Self::Reorder => "--reorder-percent",
         }
     }
     pub fn unit(self) -> &'static str {
@@ -58,6 +62,7 @@ impl Kind {
             Self::SnapshotCount => "snapshots",
             Self::Workers => "workers",
             Self::SnapshotSkew => "0–100",
+            Self::Reorder => "%",
             Self::Rate => "events/s",
             Self::Queries => "queries/s",
             Self::Retention => "ms",
@@ -70,7 +75,7 @@ impl Kind {
         (
             if self == Self::AverageTargets {
                 1000
-            } else if self == Self::SnapshotSkew {
+            } else if matches!(self, Self::SnapshotSkew | Self::Reorder) {
                 0
             } else {
                 1
@@ -78,7 +83,7 @@ impl Kind {
             match self {
                 Self::SnapshotCount => 1_000_000,
                 Self::Workers => 1024,
-                Self::SnapshotSkew => 100,
+                Self::SnapshotSkew | Self::Reorder => 100,
                 Self::Rate | Self::Checkpoints => 1_000_000_000,
                 Self::Queries => 1000,
                 Self::Retention => 86_400_000,
@@ -91,7 +96,7 @@ impl Kind {
     pub fn common(self) -> &'static [u64] {
         match self {
             Self::SnapshotCount => &[1, 2, 4, 8, 16, 64, 256, 1000, 10000, 100000, 1000000],
-            Self::SnapshotSkew => &[0, 10, 25, 50, 75, 90, 99, 100],
+            Self::SnapshotSkew | Self::Reorder => &[0, 10, 25, 50, 75, 90, 99, 100],
             Self::Workers => &[1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
             Self::Rate => &[1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000],
             Self::Queries => &[1, 5, 10, 20, 30, 60, 120, 240, 500, 1000],
@@ -104,30 +109,17 @@ impl Kind {
     }
     pub fn explanation(self) -> &'static str {
         match self {
-            Self::SnapshotSkew => "Traffic concentration across snapshots. 0 keeps statistically even traffic; higher values favor lower snapshot IDs. 100 uses the lowest IDs required by each event. Average/max targets per event stay unchanged.",
-            Self::AverageTargets => "Average distinct snapshots affected by each source event. Decimals allow occasional shared events. Must not exceed the maximum.",
-            Self::MaxTargets => "Largest number of distinct snapshots affected by one event. Must not exceed the snapshot count. Higher values increase work per source event. Numeric rates require enough pending capacity.",
-            Self::SnapshotCount => {
-                "Independent snapshots, such as counters or sensors, each with its own ID. Each snapshot and its state history stay on one worker. More snapshots let workers share the load."
-            }
-            Self::Workers => {
-                "Background worker threads that process snapshots. This excludes the router, producer and UI threads. More workers help only when there is enough independent work; more threads can also add overhead."
-            }
-            Self::Rate => {
-                "Maximum adjusts production from worker status, independently of state queries. Type an events-per-second cap for a controlled load, or press m for Maximum. This is a total rate across all workers."
-            }
-            Self::Queries => {
-                "Maximum frequency of state queries for display or verification. Monitored counters validate only at completion; monitored hashes check completed windows. Queries validate state; worker readings provide production progress."
-            }
-            Self::Retention => {
-                "How much past history is kept as time advances. 10,000 ms is 10 seconds. Longer windows use more memory; events older than the retained window can be rejected."
-            }
-            Self::Checkpoints => {
-                "About how many events separate saved snapshot states in each snapshot's history. Events at the same timestamp stay together. Smaller spacing saves more checkpoints; larger spacing can require more replay when querying."
-            }
-            Self::Pending => {
-                "For numeric event rates, caps unconfirmed source events. Progress comes from worker reports, independently of snapshot queries. One source event may target several snapshots. Larger limits allow more backlog and memory use."
-            }
+            Self::SnapshotCount => "Choose how many independent hash histories the benchmark can update. More histories can spread work across workers, but also use more memory.",
+            Self::Workers => "Choose how many background worker threads process histories. More workers can help when there is enough independent work, but they also add overhead.",
+            Self::Rate => "Choose how quickly events are generated. Maximum adjusts the offered load using worker progress; a number sets a fixed total rate across workers.",
+            Self::Queries => "Set the maximum number of verification queries per second. Checks run at completed work boundaries and compare every hash with its expected history.",
+            Self::Retention => "Choose how long past events remain available for replay and queries. A longer window retains more history and generally uses more memory.",
+            Self::Checkpoints => "Choose approximately how many events separate saved states in each history. More frequent checkpoints use more memory but can reduce replay work.",
+            Self::Pending => "For a fixed event rate, limit how many submitted events can wait for worker confirmation. A larger limit allows more backlog and memory use.",
+            Self::AverageTargets => "Choose the average number of different histories each event affects. A value above one sends some events to multiple histories; it cannot exceed the maximum.",
+            Self::MaxTargets => "Limit how many different histories one event can affect. The limit cannot exceed the snapshot count and must cover the chosen average.",
+            Self::Reorder => "Reverse this percentage of each event group. Zero keeps events in order; 100 reverses the whole group. Small groups may reverse at least two events.",
+            Self::SnapshotSkew => "Control how unevenly events are distributed. Zero spreads them evenly on average; higher values concentrate work on fewer histories.",
         }
     }
 }
@@ -146,6 +138,7 @@ pub fn common(settings: &crate::support::Settings, manual: bool) -> Vec<Definiti
         settings.average_targets.scaled(),
         settings.max_targets as u64,
         settings.snapshot_skew as u64,
+        settings.reorder_percent as u64,
     ];
     // Group order is explicit; no caller depends on display labels or row indices.
     [
@@ -154,6 +147,7 @@ pub fn common(settings: &crate::support::Settings, manual: bool) -> Vec<Definiti
         Kind::Checkpoints,
         Kind::SnapshotCount,
         Kind::Rate,
+        Kind::Reorder,
         Kind::Queries,
         Kind::AverageTargets,
         Kind::MaxTargets,

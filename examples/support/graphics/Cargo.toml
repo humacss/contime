@@ -24,3 +24,6 @@ opt-level = 1
 [profile.release]
 opt-level = 2
 lto = "thin"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"

@@ -100,7 +100,7 @@ impl Driver {
         let (unreconciled_positions, mut unreconciled_trails) = self.arrival_state.view(displayed, self.config.trail_ms);
         limited |= limit_trails(&mut trails, &mut unreconciled_trails);
         Report {
-            bot_hz: (!self.showcase).then_some(self.config.input_hz),
+            bot_hz: Some(if self.showcase { 1 } else { self.config.input_hz }),
             clients: self.config.clients,
             client_spacing: self.config.client_spacing,
             movement_speed: self.config.movement_speed,

@@ -13,60 +13,54 @@ native workloads. Portable hosts keep their platform-specific build configuratio
 including Manual-only processing in a browser. Library defaults remain Runtime only.
 Add `--release` when you want an optimized launcher build.
 
-Choose an environment, execution mode, example, and live settings. One grouped startup form combines the applicable definitions:
+Choose an example first, then an environment. The selected option is explained below the choices. The selected example shows its overview from the Game or Benchmark README. Use Page Up and Page Down to scroll if needed. Benchmark measures throughput while verifying order-sensitive hash chains. **Game** is selected by default and starts
+immediately with fixed demonstration settings. Native and WASI Threads use Runtime;
+standard WASI and Browser use Manual. Benchmark offers an execution
+mode choice within its workload settings.
 
-- **ConTime:** worker count, history retention, checkpoint spacing. Manual uses
-  one worker and hides its control.
-- **Traffic and verification:** snapshot count, target distribution, event rate,
-  query frequency, and pending work for numeric rates, for Counter and Chain hash.
-- **Client movement:** clients, spacing, movement speed, input/query frequency, average latency, jitter,
-  trail and fading, instead of throughput/fanout settings.
-- **Browser:** frame processing time and step limits, shown only for that host.
-
-Each field shows its allowed range, unit, help and numbered presets. Custom
-numeric values are supported; presets are shortcuts, not restrictions. Long
+Each field explains its purpose. Benchmark setting descriptions come from the
+[Benchmark README](../../cases/chain_hash/README.md#benchmark-settings), which also
+documents their command-line options. Custom numeric values are supported; presets
+are shortcuts, not restrictions. Invalid values are explained when you start the run. Long
 forms scroll to keep the selected setting visible. Settings are fixed once the
 example starts.
 
 Use ↑/↓ or Tab to select a setting, ←/→ to change it, or type a numeric value.
-The first choice is the default. Execution follows the environment default until
-you explicitly select it; explicit choices are retained when supported and
-restored when you return to a compatible environment.
+The first choice is the default. Benchmark uses the environment’s
+default execution mode until you choose another in its configuration.
 Enter continues or starts; Esc cancels; `r` restores the initial value. Help and
-common values appear for the selected field. Maximum event rate follows the
+the selected setting’s description appears below the form. Maximum event rate follows the
 highest numeric preset, and `m` selects it directly.
 
 | Environment | Execution | Examples |
 | --- | --- | --- |
-| Native terminal | Runtime or Manual | Counter, client movement, chain hash |
-| Standalone WASI (`wasm32-wasip1`, Node) | Manual | Counter, client movement, chain hash |
-| Standalone WASI threads (`wasm32-wasip1-threads`, Wasmtime 36.x LTS) | Runtime or Manual | Counter, client movement, chain hash |
-| Browser | Manual | Counter, client movement, chain hash |
+| Native | Runtime or Manual | Game, Benchmark |
+| WebAssembly / Node (WASI) | Manual | Game, Benchmark |
+| WebAssembly / Wasmtime threads | Runtime or Manual | Game, Benchmark |
+| WebAssembly / Browser | Manual | Game, Benchmark |
 
-Counter event and snapshot definitions are shared across all four environments. Runs
+Benchmark event and snapshot definitions are shared across all four environments. Runs
 continue until stopped unless a duration is supplied. Application definitions
-stay under `examples/cases/counter/`, `examples/cases/client_movement/`, and
+stay under `examples/cases/client_movement/` and
 `examples/cases/chain_hash/`; the launcher
-contains no domain logic. The ConTime library is unchanged by host selection.
+contains no domain logic. The `contime` library is unchanged by host selection.
 
 All live native, WASI and browser cases use simulator callbacks and worker-monitor
-feedback. The terminal dashboard shows cumulative inserted/replayed totals and cumulative
-average rates per worker. Counter and hash Maximum production uses worker status
-to adjust offered load; movement uses a configured per-client input cadence.
-The launcher enables the required monitoring features automatically.
-Hash and movement hosts also inspect and validate snapshot state. WASI hash
-comparisons are a labelled preview of at most 64 snapshots with full digests;
-the guest validates the complete population.
-For WASI, the launcher owns terminal drawing and keyboard input; the worker and
-live workload remain inside WebAssembly. Press q, Esc or Ctrl-C to stop the
-WASI host. Explicit-duration runs drain their work and shut down normally.
-Headless and redirected runs keep their human-readable text output.
+feedback. The same Bevy presentation displays the movement comparison or the
+hash metrics in every environment. Benchmark Maximum production
+uses worker status to adjust offered load; movement uses a configured per-client
+input cadence. Hash validation covers all snapshots. The graphical dashboard shows
+throughput and worker activity. Reset restarts the workload after validation.
+Headless and direct terminal runs keep their text output.
 
-Counter/hash settings are collected before launch and forwarded to the selected host.
-Movement is configured in that same form and starts without a second prompt.
-Its retention grows with latency until explicitly edited; explicit values are
-validated against the delay and trail. Worker-dependent workload defaults follow
-worker edits until their own values are explicitly set.
+Benchmark settings are collected before launch and forwarded to the selected host.
+Execution, workers, snapshot count, event rate, out-of-order delivery, query frequency and retention are
+visible by default. The **Advanced** section is also shown by default, with checkpoint
+spacing, fanout, traffic skew, backlog and browser processing limits. Use **Advanced
+settings** to hide or show it. Hiding the section preserves its values, and the same
+options remain available on the command line.
+Game starts without a settings form. Worker-dependent defaults for Benchmark
+follow worker edits until their values are explicitly set.
 Browser settings are passed in its URL, start automatically, and remain fixed
 through pause, restart, and completion. Relaunch to change them.
 
@@ -81,14 +75,14 @@ requesting a browser window. Only browser assets are served.
 `--dry-run` prints the launch plan without building or starting it and skips
 interactive setup. `--no-setup` uses supplied settings and defaults directly.
 
-Common example settings follow the final `--` for every environment:
+For Benchmark, common example settings follow the final `--`:
 
 ```sh
-cargo run --example launcher -- --environment browser --example counter --dry-run
-cargo run --release --example launcher -- --environment native --execution manual --no-setup -- --headless --duration 2 --snapshots 8 --events-per-second 1000
-cargo run --release --example launcher -- --environment wasm --example counter --no-setup -- --snapshots 8 --events-per-second 1000
-cargo run --release --example launcher -- --environment wasm-threads --execution runtime --no-setup -- --workers 4 --snapshots 64 --duration 2
-cargo run --release --example launcher -- --environment browser --no-setup --budget-ms 1 --max-steps 1000 -- --snapshots 8 --events-per-second max --query-hz 20
+cargo run --example launcher -- --environment browser --example benchmark --dry-run
+cargo run --release --example launcher -- --environment native --example benchmark --execution manual --no-setup -- --headless --duration 2 --snapshots 8 --events-per-second 1000
+cargo run --release --example launcher -- --environment wasm --example benchmark --no-setup -- --snapshots 8 --events-per-second 1000
+cargo run --release --example launcher -- --environment wasm-threads --example benchmark --execution runtime --no-setup -- --workers 4 --snapshots 64 --duration 2
+cargo run --release --example launcher -- --environment browser --example benchmark --no-setup --budget-ms 1 --max-steps 1000 -- --snapshots 8 --events-per-second max --query-hz 20
 ```
 
 `terminal` is an alias for `native`. The environment selects its build target
@@ -99,11 +93,10 @@ The budget is soft because a single complete operation can exceed it.
 
 Common flags include `--snapshots`, `--workers`,
 `--average-snapshots-per-event`, `--max-snapshots-per-event`,
-`--events-per-second`, `--query-hz`, `--retention-ms`, `--checkpoint-interval`,
+`--events-per-second`, `--reorder-percent`, `--query-hz`, `--retention-ms`, `--checkpoint-interval`,
 `--max-pending`, and optional `--duration SECONDS`. Maximum event production
-retains processing and pending-work limits. Native counter/hash `--headless` runs
-default to five seconds when no duration is supplied. Movement runs until stopped
-unless a duration is supplied. Portable hosts need no headless flag to run
+retains processing and pending-work limits. Native chain hash `--headless` runs
+default to five seconds when no duration is supplied. Game runs until stopped. Portable hosts need no headless flag to run
 without a terminal.
 
 ## Tools
@@ -139,16 +132,11 @@ capabilities, `menu.rs` presents host selection, `settings_form.rs` composes and
 startup settings from `support/schema/`,
 `launch.rs` dispatches child hosts, and `server.rs` manages browser serving.
 
-## Snapshot table
+## Worker diagnostics
 
-The interactive terminal dashboard keeps aggregate statistics above a scrollable
-snapshot grid. Snapshot/value column pairs fill the terminal width, with
-borders between cells and right-aligned numbers. Use Up/Down to scroll one grid
-row, Page Up/Page Down to move one screen, and Home/End to reach the first or last snapshots. The table heading
-shows the visible range and total snapshot count. All configured snapshots are
-available in native and both WASI environments; rates cover all snapshots and
-are averaged since startup. Table values come from the latest completed query.
-Headless output and the final printed summary keep a short preview.
+The graphical Benchmark view shows a throughput history and worker
+activity. Use the arrow keys or Page Up and Page Down to browse workers. The
+workload validates all snapshots.
 
 ## Snapshot traffic distribution
 
@@ -174,17 +162,17 @@ Direct movement startup uses the same schema and grouped editor.
 
 ## Client movement in portable hosts
 
-Select **Client movement** with any environment. The same shared driver generates
+Select **Game** with any environment. The same shared driver generates
 late inputs, checks monitor-confirmed historical queries, validates every client,
 and publishes corrected rendering states. All graphical hosts share the isolated
 [Bevy presentation](../graphics/README.md), requiring Rust 1.95 for graphics while
-ConTime remains on Rust 1.90. WASI keeps simulation and validation in WebAssembly
+`contime` remains on Rust 1.90. WASI keeps simulation and validation in WebAssembly
 and receives keyboard commands through an input pipe. Browser uses the same
 renderer compiled to WebAssembly and retains its per-frame processing allowance. Click the map before using WASD,
-arrows or Space. Relaunch to change settings.
+arrows or Space. The launcher uses the same default game settings for each run.
 
 ```sh
-cargo run --release --example launcher -- --environment browser --example client-movement
-cargo run --release --example launcher -- --environment wasm --example client-movement
-cargo run --release --example launcher -- --environment wasm-threads --execution runtime --example client-movement
+cargo run --release --example launcher -- --environment browser --example game
+cargo run --release --example launcher -- --environment wasm --example game
+cargo run --release --example launcher -- --environment wasm-threads --example game
 ```

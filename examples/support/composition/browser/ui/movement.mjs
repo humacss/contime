@@ -2,6 +2,8 @@
 export function createMovementView(bindings) {
     bindings.start_graphics('#movement-map');
     return {
+        takeReset() { return bindings.take_reset?.() ?? false; },
+        drawDashboard(report, domain) { bindings.update_dashboard(JSON.stringify(report), domain); },
         draw(report) {
             const reduced = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
             bindings.update_scene(JSON.stringify(report), reduced);

@@ -5,11 +5,13 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 pub struct State {
     pub report: Option<Arc<Report>>,
+    pub dashboard: Option<Arc<crate::dashboard::Dashboard>>,
     pub running: bool,
     pub resume_epoch: u64,
     pub finished: bool,
     pub reduced_motion: bool,
     pub generation: u64,
+    pub reset_requested: bool,
 }
 
 /// A latest-value slot: presentation never queues or processes application events.
@@ -20,6 +22,9 @@ impl Bridge {
         report.validate()?;
         self.0.lock().unwrap_or_else(|p| p.into_inner()).report = Some(Arc::new(report));
         Ok(())
+    }
+    pub fn publish_dashboard(&self, dashboard: crate::dashboard::Dashboard) {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).dashboard = Some(Arc::new(dashboard));
     }
     pub fn snapshot(&self) -> State {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).clone()
@@ -38,6 +43,12 @@ impl Bridge {
         let mut state = self.0.lock().unwrap_or_else(|p| p.into_inner());
         state.running = false;
         state.finished = true;
+    }
+    pub fn request_reset(&self) {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).reset_requested = true;
+    }
+    pub fn take_reset(&self) -> bool {
+        std::mem::take(&mut self.0.lock().unwrap_or_else(|p| p.into_inner()).reset_requested)
     }
     pub fn reset(&self) {
         let mut state = self.0.lock().unwrap_or_else(|p| p.into_inner());

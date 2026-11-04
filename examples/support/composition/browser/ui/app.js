@@ -8,7 +8,7 @@ const result = window.contimeExample = { done: false, error: null, report: null,
 let BudgetDemo, demo, config, movementView, running = false, animationId = null;
 let wantsToRun = false;
 let activeMs = 0, previousTime = null, overruns = 0, duration = null;
-function status(message) { $('state').textContent = message; $('state').hidden = config?.domain === 'client-movement' && message !== 'Failed'; }
+function status(message) { $('state').textContent = message; $('state').hidden = message !== 'Failed'; }
 function controls() {
     result.paused = !!demo && !running && !result.done && !result.error;
     result.pauseReason = result.paused ? (wantsToRun && document.hidden ? "hidden" : "manual") : null;
@@ -33,49 +33,10 @@ function measure() {
     if (previousTime !== null) activeMs += now - previousTime;
     previousTime = now;
 }
-const integer = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
-function metric(value) { return value === null || value === undefined ? '—' : integer.format(value); }
-function renderWorkers(workers) {
-    const rows = workers.map(worker => {
-        const row = document.createElement('tr');
-        for (const key of ['id', 'snapshots', 'total_inserted', 'total_replayed', 'avg_inserted_per_second', 'avg_replayed_per_second']) {
-            const cell = document.createElement('td');
-            cell.textContent = metric(worker[key]);
-            cell.title = cell.textContent;
-            row.appendChild(cell);
-        }
-        return row;
-    });
-    $('worker-rows').replaceChildren(...rows);
-}
 function render(report) {
-    $('movement-panel').hidden = !report.movement;
-    if (report.movement) {
-        movementView?.draw(report.movement);
-        return; // This case uses only the shared graphical view.
-    }
-    for (const id of metrics) $(id).textContent = metric(id === 'overruns' ? overruns : report[id]);
-    $('visible').textContent = metric(report.completed);
-    $('pending').textContent = metric(report.outstanding);
-    const completed = report.completed;
-    $('throughput').textContent = metric(report.elapsed ? completed / report.elapsed : 0);
-    $('target-rate').textContent = metric(report.target_rate);
-    $('values-panel').hidden = !report.hashes?.length;
-    renderWorkers(report.workers_status);
-    $('query_ms').textContent = `${report.query_ms.toFixed(3)} ms`;
-    $('frame_ms').textContent = `${report.frame_ms.toFixed(3)} ms`;
-    $('elapsed').textContent = `${report.elapsed.toFixed(2)} s`;
-    $('values').replaceChildren(...(report.hashes || []).map(snapshot => {
-        const row = document.createElement('p');
-        const title = document.createElement('strong');
-        title.textContent = `Snapshot ${snapshot.id}`;
-        const latest = document.createElement('code');
-        latest.textContent = `Latest (${metric(snapshot.latest_count)}): ${snapshot.latest_hash}`;
-        const verified = document.createElement('code');
-        verified.textContent = `Verified (${metric(snapshot.verified_count)}): ${snapshot.verified_hash}`;
-        row.append(title, document.createElement('br'), latest, document.createElement('br'), verified);
-        return row;
-    }));
+    $('movement-panel').hidden = false;
+    if (report.movement) movementView?.draw(report.movement);
+    else movementView?.drawDashboard(report, config.domain);
 }
 
 function cancelTick() {
@@ -92,12 +53,13 @@ function syncRunning() {
         if (running) schedule(); else cancelTick();
     }
     if (demo && !result.done && !result.error) status(running ? 'Running' : 'Paused');
+    if (movementView && !document.hidden && !result.error) schedule();
     controls();
 }
 function pause() { wantsToRun = false; syncRunning(); }
 document.addEventListener('visibilitychange', syncRunning);
 window.addEventListener('keydown', (event) => {
-    if (config?.domain !== 'client-movement' || !demo || (event.key.toLowerCase() !== 'p' && event.code !== 'KeyP')
+    if (!demo || (event.key.toLowerCase() !== 'p' && event.code !== 'KeyP')
         || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
     event.preventDefault();
     if (wantsToRun) pause(); else resume();
@@ -105,8 +67,13 @@ window.addEventListener('keydown', (event) => {
 function schedule() { if (animationId === null) animationId = requestAnimationFrame(tick); }
 function tick() {
     animationId = null;
-    if (!running) return;
     if (document.hidden) { syncRunning(); return; }
+    if (movementView?.takeReset()) {
+        $('reset').click();
+        $('start').click();
+        return;
+    }
+    if (!running) { if (movementView) schedule(); return; }
     measure();
     try {
         const stopping = duration !== null && activeMs >= duration * 1000;
@@ -116,6 +83,14 @@ function tick() {
         if (report.overrun) overruns += 1;
         render(report);
         measure();
+        if (report.failure) {
+            wantsToRun = running = false;
+            previousTime = null;
+            result.error = String(report.failure);
+            controls();
+            schedule();
+            return;
+        }
         if (report.done) {
             movementView?.finish();
             wantsToRun = running = false;
@@ -123,6 +98,7 @@ function tick() {
             result.done = true;
             status('Completed · all work drained');
             controls();
+            schedule();
         } else {
             status(stopping ? 'Draining' : 'Running');
             schedule();
@@ -164,10 +140,11 @@ $('reset').addEventListener('click', () => {
 try {
     config = startupSettings(params);
     const movement = config.domain === 'client-movement';
-    $('page').className = movement ? 'movement-example' : '';
-    $('diagnostics').open = !movement;
-    $('diagnostics-title').hidden = !movement;
-    $('run-title').hidden = movement;
+    $('page').className = movement ? 'movement-example movement-game' : 'movement-example';
+    $('diagnostics').open = false;
+    $('diagnostics-title').hidden = true;
+    $('run-title').hidden = true;
+    $('movement-map').setAttribute('aria-label', movement ? 'Movement comparison; WASD or arrows move, Space stops, P pauses or resumes' : config.domain === 'chain-hash' ? 'Chain hash metrics; P pauses or resumes' : 'Counter metrics; P pauses or resumes');
     if (params.has('duration')) {
         duration = Number(params.get('duration'));
         if (!Number.isFinite(duration) || duration <= 0) throw new Error('duration must be a positive number of seconds');
@@ -175,12 +152,10 @@ try {
     controls();
     const bindings = await import('../pkg/contime_browser_example.js');
     await bindings.default(); BudgetDemo = bindings.BudgetDemo;
-    if (config.domain === 'client-movement') {
-        const graphics = await import('../pkg/graphics/contime_graphics_example.js');
-        await graphics.default();
-        movementView = createMovementView(graphics);
-    }
+    const graphics = await import('../pkg/graphics/contime_graphics_example.js');
+    await graphics.default();
+    movementView = createMovementView(graphics);
     status('Ready'); controls();
     // The movement case is a graphical application, so no browser controls are needed.
-    if (movement || params.get('autostart') === '1') $('start').click();
+    $('start').click();
 } catch (error) { fail(error); }

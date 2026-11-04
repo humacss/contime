@@ -3,6 +3,7 @@ use super::{
     launch::{self, CommandSpec},
     selection::Selection,
 };
+use crate::support::Settings;
 use std::{path::Path, sync::atomic::AtomicBool};
 type Failure = Box<dyn std::error::Error>;
 
@@ -65,6 +66,39 @@ pub(super) fn native(root: &Path, selection: Selection, arguments: &[String], dr
         build.show();
     } else {
         println!("Building native movement workload…");
+        build.run()?;
+    }
+    present(root, guest, dry, cancelled)
+}
+
+pub(super) fn native_dashboard(
+    root: &Path,
+    selection: Selection,
+    settings: &Settings,
+    dry: bool,
+    cancelled: &AtomicBool,
+) -> Result<(), Failure> {
+    let cwd = root.join("examples/environments/wasi");
+    let mut build = CommandSpec::new("cargo", &cwd, ["+1.90.0", "build", "--release", "--features", "runtime", "--target-dir"]);
+    build.args.push(cwd.join("target").into_os_string());
+    let mut args: Vec<std::ffi::OsString> = [
+        "--domain",
+        selection.domain.slug(),
+        "--execution",
+        selection.execution.slug(),
+        "--metrics-stdio",
+        "--control-input",
+        "poll",
+        "--no-setup",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    args.extend(launch::settings_arguments(settings, true).into_iter().map(Into::into));
+    let guest = CommandSpec::new(cwd.join("target/release/contime-wasm-example"), &cwd, args);
+    if dry {
+        build.show();
+    } else {
         build.run()?;
     }
     present(root, guest, dry, cancelled)

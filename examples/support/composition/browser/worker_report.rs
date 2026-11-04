@@ -14,7 +14,7 @@ pub fn workers(baseline: Option<&WorkerReading<Time>>, latest: Option<&WorkerRea
                     serde_json::json!({ "id": w.worker_id, "snapshots": w.history_stores,
                 "pending": w.pending_histories, "due": w.due_histories, "target": w.processing_target.0, "horizon": w.admission_horizon.0,
                 "total_inserted": activity.inserted_applications, "total_replayed": activity.replay_applications,
-                "avg_inserted_per_second": activity.inserted_per_second, "avg_replayed_per_second": activity.replay_per_second })
+                "avg_inserted_per_second": activity.inserted_per_second, "avg_replayed_per_second": activity.replay_per_second, "saturated": activity.saturated })
                 })
                 .collect::<Vec<_>>()
         })

@@ -18,6 +18,16 @@ pub trait Observer<M: Example> {
     fn interval(&self) -> Duration {
         Duration::from_millis(50)
     }
+    fn verification_failed(
+        &mut self,
+        _metrics: &Metrics,
+        _reading: Option<&Arc<WorkerReading<Time>>>,
+        _expected: &[M::State],
+        _actual: &[M::State],
+        _error: &str,
+    ) -> Result<(), Failure> {
+        Ok(())
+    }
     fn report(
         &mut self,
         metrics: &Metrics,
@@ -77,16 +87,6 @@ fn poll_validation<M: Example>(pending: &mut Validation<M::State>, expected: &[M
         }
     }
 }
-fn validate<M: Example, B: Backend<M>>(contime: &B, expected: &[M::State], time: Time) -> Result<Vec<M::State>, Failure> {
-    let mut pending = begin_validation::<M, B>(contime, expected.len(), time)?;
-    while !poll_validation::<M>(&mut pending, expected)? {
-        if !contime.process()? {
-            std::thread::sleep(Duration::from_micros(100));
-        }
-        contime.check_rejections()?;
-    }
-    Ok(pending.actual)
-}
 pub fn drive<M, G, It, B, O>(
     contime: &B,
     options: &Options,
@@ -108,7 +108,7 @@ where
     if let Some(limit) = options.source_limit {
         controller.limit_sources(limit);
     }
-    if delivery == Delivery::ReverseGroups {
+    if delivery == Delivery::ReverseGroups && options.reorder_percent > 0 {
         controller.reverse_groups();
     }
     let mut collector = WorkerMonitor::attach(contime);
@@ -122,6 +122,7 @@ where
     let mut next_validation = Duration::ZERO;
     let mut validation = None::<Validation<M::State>>;
     let mut queries = 0_u64;
+    let mut verified_once = false;
     let mut reversed = 0_u64;
     let mut ids = Vec::new();
     let mut applications = 0_u64;
@@ -144,9 +145,30 @@ where
         }
         contime.check_rejections()?;
         if let Some(pending) = validation.as_mut() {
-            if poll_validation::<M>(pending, &expected)? {
-                verified = validation.take().expect("completed validation exists").actual;
-                next_validation = now + Duration::from_secs_f64(1.0 / options.query_hz as f64);
+            match poll_validation::<M>(pending, &expected) {
+                Ok(true) => {
+                    verified = validation.take().expect("completed validation exists").actual;
+                    verified_once = true;
+                    next_validation = now + Duration::from_secs_f64(1.0 / options.query_hz as f64);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    let message = error.to_string();
+                    if message.contains("differs from generated reference") {
+                        let metrics = Metrics {
+                            target_rate: controller.rate(),
+                            produced: controller.produced(),
+                            completed: controller.completed(),
+                            outstanding: controller.outstanding(),
+                            elapsed: now,
+                            reversed: (delivery == Delivery::ReverseGroups).then_some(reversed),
+                            queries,
+                            verified_once: true,
+                        };
+                        observer.verification_failed(&metrics, latest.as_ref(), &expected, &pending.actual, &message)?;
+                    }
+                    return Err(error);
+                }
             }
         }
         // Freeze the canonical prefix/advancement until validation returns, while
@@ -161,8 +183,7 @@ where
             }
             let new_applications = reference::record::<M>(&mut events, &mut expected, options.targets, &mut ids)?;
             if delivery == Delivery::ReverseGroups {
-                reversed += count.saturating_sub(1);
-                events.reverse();
+                reversed = reversed.saturating_add(reference::reorder(&mut events, options.reorder_percent));
             }
             applications += new_applications;
             contime.submit(events)?;
@@ -190,7 +211,36 @@ where
         if stopping && controller.outstanding() == 0 && validation.is_none() {
             collector.cancel();
             let elapsed = clock.elapsed();
-            verified = validate::<M, B>(contime, &expected, last_time)?;
+            let mut final_validation = begin_validation::<M, B>(contime, expected.len(), last_time)?;
+            loop {
+                match poll_validation::<M>(&mut final_validation, &expected) {
+                    Ok(true) => break,
+                    Ok(false) => {
+                        if !contime.process()? {
+                            std::thread::sleep(Duration::from_micros(100));
+                        }
+                        contime.check_rejections()?;
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        if message.contains("differs from generated reference") {
+                            let metrics = Metrics {
+                                target_rate: controller.rate(),
+                                produced: controller.produced(),
+                                completed: controller.completed(),
+                                outstanding: controller.outstanding(),
+                                elapsed,
+                                reversed: (delivery == Delivery::ReverseGroups).then_some(reversed),
+                                queries: queries + 1,
+                                verified_once: true,
+                            };
+                            observer.verification_failed(&metrics, latest.as_ref(), &expected, &final_validation.actual, &message)?;
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            verified = final_validation.actual;
             let summary = Summary {
                 events: controller.produced(),
                 completed: controller.completed(),
@@ -210,6 +260,7 @@ where
                     elapsed: summary.elapsed,
                     reversed: (delivery == Delivery::ReverseGroups).then_some(summary.reversed),
                     queries: summary.queries,
+                    verified_once: true,
                 },
                 latest.as_ref(),
                 &expected,
@@ -236,6 +287,7 @@ where
             elapsed: now,
             reversed: (delivery == Delivery::ReverseGroups).then_some(reversed),
             queries,
+            verified_once,
         };
         if now >= next_draw {
             observer.report(&metrics, latest.as_ref(), &expected, &verified, false)?;

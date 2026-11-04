@@ -142,8 +142,9 @@ name = "readme"
 path = "examples/readme.rs"
 required-features = ["runtime", "macros"]
 
-[[example]]
-name = "counter"
+# The counter workload remains available to internal tests, not as a public example.
+[[test]]
+name = "counter_internal"
 path = "examples/support/entrypoints/counter.rs"
 required-features = ["runtime", "manual", "monitor", "simulator", "macros"]
 

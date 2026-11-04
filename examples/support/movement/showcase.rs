@@ -18,7 +18,7 @@ pub fn input(index: u64, motion: Motion) -> (MovementInput, u64) {
         4 => [West, North, East, South][second as usize % 4],
         _ => [North, West, South, East][second as usize % 4],
     };
-    let time = Time(second * 1_000_000_000 + (client - 1) * 200_000_000 + 1);
+    let time = Time(second * 1_000_000_000 + 1);
     let delay_ms = [1700, 150, 700, 1150, 1550, 200, 900, 450][(phase + client as usize * 2) % 8];
     (MovementInput { id: u128::from(index + 6), client_id: client.into(), time, direction, motion }, delay_ms)
 }
@@ -27,6 +27,13 @@ pub fn input(index: u64, motion: Motion) -> (MovementInput, u64) {
 mod tests {
     use super::*;
     use crate::movement_example::model::{Character, SECOND};
+    #[test]
+    fn every_bot_turns_on_the_same_one_second_tick() {
+        for second in 0..10 {
+            let times: Vec<_> = (1..5).map(|bot| input(second * 5 + bot, Motion::default()).0.time.0).collect();
+            assert!(times.iter().all(|&time| time == second * 1_000_000_000 + 1), "{times:?}");
+        }
+    }
     #[test]
     fn choreography_is_repeatable_stays_inside_walls_and_keeps_bots_moving() {
         let motion = Motion { client_spacing: 18, movement_speed: 8 };

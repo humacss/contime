@@ -1,6 +1,6 @@
 //! Equal-scale views of the same input deliveries; geometry never affects state.
 use crate::report::Report;
-pub const OFFSET: f64 = 52.0;
+pub const OFFSET: f64 = 50.0;
 
 pub fn panels(report: &Report) -> (Report, Report) {
     let mut left = report.clone();

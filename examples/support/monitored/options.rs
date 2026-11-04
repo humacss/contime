@@ -14,6 +14,7 @@ pub struct Options {
     pub query_hz: usize,
     pub average_scaled: Option<u64>,
     pub snapshot_skew: usize,
+    pub reorder_percent: usize,
     pub source_limit: Option<u64>,
 }
 impl Default for Options {
@@ -31,6 +32,7 @@ impl Default for Options {
             query_hz: 20,
             average_scaled: None,
             snapshot_skew: 0,
+            reorder_percent: 100,
             source_limit: None,
         }
     }
@@ -51,6 +53,7 @@ impl Options {
             query_hz: settings.query_hz,
             average_scaled: Some(settings.average_targets.scaled()),
             snapshot_skew: settings.snapshot_skew,
+            reorder_percent: settings.reorder_percent,
             source_limit: settings.event_rate.limit().map(|_| settings.max_pending as u64),
         }
     }
@@ -67,6 +70,7 @@ impl Options {
             || !(1..=1_000).contains(&self.query_hz)
             || self.average_scaled.is_some_and(|average| average < 1_000 || average > self.targets as u64 * 1_000)
             || self.snapshot_skew > 100
+            || self.reorder_percent > 100
             || self.source_limit == Some(0)
             || !(1..=1_000_000_000).contains(&self.rate)
         {

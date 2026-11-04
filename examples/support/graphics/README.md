@@ -1,8 +1,8 @@
-# Bevy movement presentation
+# Shared Bevy presentation
 
-One Bevy 0.19 renderer displays the queried movement scene for Native, WASI, threaded
-WASI and Browser. This is an example-only workspace using Rust 1.95; it does not add
-Bevy or a newer Rust requirement to ConTime's published crates.
+One Bevy 0.19 renderer displays the movement scene and hash dashboard
+for Native, WASI, threaded WASI and Browser. This is an example-only workspace using Rust 1.95; it does not add
+Bevy or a newer Rust requirement to `contime`'s published crates.
 
 ## Reconciliation comparison
 
@@ -13,16 +13,16 @@ movement has no prescribed route and therefore no player guide. These static
 guides come from the example's own input patterns and motion rules; they never
 replace queried paths or affect processing.
 
-**With ConTime** on the left
+**With `contime`** on the left
 shows actual queried state: late turns can temporarily overshoot, then repair the
 historical path. Dashed segments in the same client color retain those revisions while fading away. **Without reconciliation**
 on the right changes direction at actual delivery time and keeps earlier movement
 unchanged. Both receive exactly the same delivered inputs, start in the same places,
 and share colors, speed, walls and display smoothing. The right-hand state belongs
-to the example workload, not the renderer, and never affects ConTime or validation.
+to the example workload, not the renderer, and never affects `contime` or validation.
 
-The four bots start in separate quadrants and repeat square routes with staggered
-turns and client-specific phases. Their alternating loop alignments leave space
+The four bots start in separate quadrants and repeat square routes with synchronized
+one-second turns and client-specific phases. Their alternating loop alignments leave space
 between routes.
 Their corrected square loops remain closed after late inputs arrive; arrival-time
 loops deform. The keyboard-controlled client still appears in both views. Turn rate
@@ -33,7 +33,7 @@ stay separate. The recording ends when the final Stop is visible in both views,
 with a brief hold on the centered player and the unreconciled offset. See the [recording instructions](../../../guides/usage/README.md#reproduce-the-reconciliation-recording).
 
 The renderer knows positions, paths, corrections and arena bounds. It does not generate
-events, process ConTime work or decide whether state is correct. The selected workload
+events, process `contime` work or decide whether state is correct. The selected workload
 owns the simulator, worker monitor and independent validation. Markers ease toward
 queried positions without predicting ahead. The icon under each character shows the
 queried heading (an arrow), or a dot for Stop. It does not infer direction from
@@ -68,7 +68,7 @@ Delivery line. Dimmer delay lines show waiting inputs; brighter lines show arriv
 double delivery tick marks an older action arriving after a newer action from the same
 client. A brief “reordered” label explains the mark, then fades while the double tick
 remains. A quiet dot on the delay line preserves scheduled due time when actual handoff
-occurs later. The display shows the simulated network, not ConTime's internal worker
+occurs later. The display shows the simulated network, not `contime`'s internal worker
 queue.
 
 Completed query updates use a bounded presentation buffer of 450 ms. Two
@@ -77,7 +77,7 @@ timeline delivery point into both arenas. The left tracer lands at the input's
 historical position; the right lands where that input actually arrived. Both
 arenas reveal the matching query update when those tracers land, so the turn and
 path correction do not precede the arrow. This adds visual latency only: input
-delivery, ConTime processing, queries and validation continue normally.
+delivery, `contime` processing, queries and validation continue normally.
 
 Each flight keeps the destination of its own queued query; later corrections do
 not move it toward an arena update that is still waiting. Very short deliveries
@@ -102,12 +102,12 @@ shade of the same hue, while current paths use a darker shade. Replaced paths us
 
 All labels use Bevy UI text with an embedded Inter font, shared by desktop and
 browser builds. Font sizes are in logical screen pixels, independently of the
-camera's world scale and the line width used for paths. Headings use 18–24 px,
-captions 14–16 px, legends 12–14 px and brief arrival notices 12 px. Compact titles below 900 px
-and concise captions below 640 px keep both arenas side by side. Supplementary
-legends and reordered words hide below 640 px; double delivery ticks remain. UI nodes provide
-wrapping and reusable placement anchored to the arena/timeline geometry; no HTML
-labels or network font requests are needed. The Inter font and its SIL Open Font
+camera's world scale and the line width used for paths. Headings use 15–20 px,
+captions 14–16 px, legends 12–14 px and brief arrival notices 12 px. Arena titles
+stay side by side on smaller screens. Reordered notices appear next to the relevant
+delivery tick and fade while the double tick remains. UI nodes provide wrapping and
+reusable placement anchored to the arena and timeline geometry; no HTML labels or
+network font requests are needed. The Inter font and its SIL Open Font
 License are in `assets/fonts/`.
 
 ## Run
@@ -118,10 +118,23 @@ From the repository root:
 cargo run --release --example launcher
 ```
 
-Choose Client movement and any environment. Native and both WASI choices open a
+Choose any live case and environment. Native and both WASI choices open a
 Bevy desktop window. Browser compiles the same presentation to WebAssembly and
 embeds it in the page. Runtime/Manual selection still chooses how the workload
-runs. Counter and Chain hash retain their terminal dashboards.
+runs. The benchmark compares confirmed throughput in green with the submission
+target in blue. The same graph shows outstanding events in amber and workload
+memory in violet. Event rates and the outstanding-event count share the left
+scale, while memory uses the right scale. Hover to inspect a
+sampled time. Click a reading to keep it selected as the chart moves, or click
+outside the chart to release it. A pinned reading stays visible after it leaves
+the chart. Each scale follows its visible values.
+The chart expands to use the available width and unused worker-row space. The table
+shows worker activity and verified hashes as counts and percentages, both overall
+and per worker. A verification mismatch stops the workload and stays visible. The
+memory figure is the workload process's current resident memory,
+not the renderer or the whole machine. It is available on macOS and Linux native
+hosts; browser and unsupported hosts show it as unavailable. Use the arrow keys
+or Page Up and Page Down to browse workers.
 
 Install Rust 1.95 for presentation and its browser target when needed:
 
@@ -145,13 +158,13 @@ stop, then waits for the workload to drain and validate. A successful exit needs
 both the final validated report and a successful workload process exit. Errors
 retain a bounded diagnostic tail. The presenter reaps its child on cleanup.
 
-Browser movement starts automatically, with startup settings fixed for the run.
+Browser cases start automatically, with startup settings fixed for the run.
 Press P to pause or resume; a Paused label appears in the game. Hiding the tab
 automatically pauses its simulation clock, work and animations. Returning resumes
 only an automatically paused run; a manual pause stays paused. Pending deliveries
 and operation deadlines retain their remaining simulation time.
-Reload to restart, or close the page to stop. Counter and Chain hash retain their
-browser controls and diagnostics. Reduced-motion preferences disable marker transitions.
+Use Reset to restart, or close the page to stop. All cases use this same
+graphical interface in the browser. Reduced-motion preferences disable marker transitions.
 
 ## Code
 

@@ -16,8 +16,8 @@ use std::{
         Arc,
     },
 };
-const HELP: &str = "ConTime example launcher\n\nRun without arguments to select environment, execution, example and common live settings.\n\n--environment native|wasm|wasm-threads|browser\n--execution runtime|manual\n--example counter|client-movement|chain-hash\n--dry-run       show the launch plan\n--no-setup      skip interactive forms\n--no-open       serve browser without opening it\n--list          show supported combinations\n\nCommon settings follow -- for every environment, for example:\n-- --snapshots 8 --events-per-second 1000 --query-hz 20 --duration 2\nRuntime accepts --workers N; Manual uses one worker.\nRuns continue until stopped unless an explicit duration is selected.\nBrowser only: --budget-ms 0.01_TO_1000, --max-steps 1_TO_100000\nAliases before --: --workers N, --rate max_OR_N\n\nMovement graphics use an isolated Bevy example with Rust 1.95.0. Portable workload builds use Rust 1.90.0. Threaded WASI requires Wasmtime 36.x LTS\n(selected with WASMTIME); browser bindings need wasm-bindgen-cli (WASM_BINDGEN).\nwasm-bindgen checks compatibility during binding generation.\nMissing tools are reported, never installed automatically.";
-const MATRIX:&str="Native: Runtime or Manual; Counter, Client movement, Chain hash\nStandalone WASI (Node): Manual; Counter, Client movement, Chain hash\nStandalone WASI threads (Wasmtime 36.x LTS): Manual or Runtime; Counter, Client movement, Chain hash\nBrowser: Manual; Counter, Client movement, Chain hash";
+const HELP: &str = "ConTime example launcher\n\nRun without arguments to select an example and environment. Game uses fixed settings; other examples offer configuration.\n\n--environment native|wasm|wasm-threads|browser\n--execution runtime|manual\n--example game|benchmark\n--dry-run       show the launch plan\n--no-setup      skip interactive forms\n--no-open       serve browser without opening it\n--list          show supported combinations\n\nBenchmark settings follow --, for example:\n--example benchmark -- --snapshots 8 --events-per-second 1000 --reorder-percent 50 --query-hz 20 --duration 2\nRuntime accepts --workers N; Manual uses one worker.\nRuns continue until stopped unless an explicit duration is selected.\nBrowser only: --budget-ms 0.01_TO_1000, --max-steps 1_TO_100000\nAliases before --: --workers N, --rate max_OR_N\n\nLive graphics use an isolated Bevy example with Rust 1.95.0. Portable workload builds use Rust 1.90.0. Threaded WASI requires Wasmtime 36.x LTS\n(selected with WASMTIME); browser bindings need wasm-bindgen-cli (WASM_BINDGEN).\nwasm-bindgen checks compatibility during binding generation.\nMissing tools are reported, never installed automatically.";
+const MATRIX: &str = "Native: Runtime or Manual; Game, Benchmark\nWebAssembly / Node (WASI): Manual; Game, Benchmark\nWebAssembly / Wasmtime threads: Manual or Runtime; Game, Benchmark\nWebAssembly / Browser: Manual; Game, Benchmark";
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let options = Options::parse(std::env::args().skip(1))?;
     if options.help || options.example_args.iter().any(|a| matches!(a.as_str(), "--help" | "-h")) {
@@ -30,18 +30,30 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let interactive = io::stdin().is_terminal() && io::stdout().is_terminal() && !options.no_setup && !options.dry_run;
     println!("ConTime / Example launcher");
-    let Some(selection) = menu::selection(&options, interactive)? else {
+    let Some(mut selection) = menu::selection(&options, interactive)? else {
         return Ok(());
     };
-    println!("\n{} / {} / {}", selection.environment.label(), selection.execution.slug(), selection.domain.label());
-    if let Some(target) = selection.environment.wasm_target() {
-        println!("Target: {}", target.triple());
+    if selection.domain == Domain::Movement {
+        options.validate_game()?;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     options.validate(selection)?;
     let mut setup = settings_form::SettingsForm::new(selection, &options)?;
-    if interactive && !options.example_args.iter().any(|a| matches!(a.as_str(), "--headless" | "--no-setup")) && !setup.run()? {
+    if selection.domain != Domain::Movement
+        && interactive
+        && !options.example_args.iter().any(|a| matches!(a.as_str(), "--headless" | "--no-setup"))
+        && !setup.run()?
+    {
         return Ok(());
+    }
+    selection.execution = setup.selected_execution();
+    if selection.domain == Domain::Movement {
+        println!("\n{} / {}", selection.environment.label(), selection.domain.label());
+    } else {
+        println!("\n{} / {} / {}", selection.environment.label(), selection.execution.slug(), selection.domain.label());
+    }
+    if let Some(target) = selection.environment.wasm_target() {
+        println!("Target: {}", target.triple());
     }
     // One launcher invocation owns exactly one run and its cancellation policy.
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -78,6 +90,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let settings = setup.common()?;
     match selection.environment {
+        Environment::Terminal if !settings.headless => graphics::native_dashboard(root, selection, &settings, options.dry_run, &cancelled),
         Environment::Terminal => launch::native(launch::native_command(root, selection, &settings), options.dry_run, &cancelled),
         Environment::Wasm | Environment::WasmThreads => launch::wasi(root, selection, &settings, None, options.dry_run, &cancelled),
         Environment::Browser => {

@@ -4,41 +4,16 @@
 create a counter event with a unique ID and timestamp, then assign its distinct
 snapshot destinations using the configured fanout and traffic skew.
 
-The live counter entry point is
-[`counter.rs`](../../../support/entrypoints/counter.rs). It combines the counter
-model with the [shared monitored host](../../../support/monitored/README.md).
-Runtime and Manual use the same generation, Maximum controller, worker monitor,
-and final validation. WASI and browser compositions reuse these components too.
-
-Run from the repository root:
-
-```sh
-cargo run --release --example launcher
-cargo run --release --all-features --example counter
-```
-
-Startup settings are fixed for a run. These headless commands skip the form:
-
-```sh
-# Maximum throughput, two workers, shared events and concentrated traffic.
-cargo run --release --all-features --example counter -- \
-  --workers 2 --snapshots 1000 --average-snapshots-per-event 1.5 \
-  --max-snapshots-per-event 3 --snapshot-skew 90 --headless --duration 5
-
-# Fixed-rate comparison with the same monitor-confirmed completion feedback.
-cargo run --release --all-features --example counter -- \
-  --events-per-second 100000 --headless --duration 5
-```
-
-See [shared support](../../../support/monitored/README.md) for Maximum adaptation,
-source-event versus snapshot-application counts, validation, and shutdown.
-The [counter guide](../README.md) explains the event and snapshot model.
+The counter workload is retained for internal testing and benchmarking. It uses
+the shared monitored host and can exercise Runtime and Manual processing without
+being offered in the public launcher. See the [counter guide](../README.md) for
+the model and [shared support](../../../support/monitored/README.md) for its controller.
 
 ## Verification
 
 ```sh
-cargo test --all-features --example counter
-cargo clippy --all-features --example counter -- -D warnings
+cargo test --all-features --test counter_internal
+cargo clippy --all-features --test counter_internal -- -D warnings
 ```
 
 Tests preserve fixed/Maximum production, multiple workers and destinations,

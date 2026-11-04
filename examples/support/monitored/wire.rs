@@ -17,6 +17,8 @@ pub struct Sample {
     pub snapshot_count: usize,
     pub snapshots: Vec<SnapshotPair>,
     pub movement: Option<crate::support::movement_report::Report>,
+    pub hash_summary: Option<crate::support::monitored_metrics::HashSummary>,
+    pub failure: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +30,10 @@ struct Record {
     snapshots: Vec<SnapshotPair>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     movement: Option<crate::support::movement_report::Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hash_summary: Option<crate::support::monitored_metrics::HashSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failure: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +67,16 @@ impl Sample {
     ) -> Self {
         Self {
             movement: None,
+            hash_summary: M::hash(&M::State::default()).map(|_| {
+                crate::support::monitored_metrics::HashSummary::compare_workers::<M>(
+                    expected,
+                    verified,
+                    false,
+                    metrics.verified_once,
+                    reading.map(|r| r.workers.len()),
+                )
+            }),
+            failure: None,
             metrics: metrics.clone(),
             reading: reading.cloned(),
             done,
@@ -104,7 +120,9 @@ impl Sample {
                 done: self.done,
                 snapshot_count: self.snapshot_count,
                 snapshots: self.snapshots.clone(),
-                movement: self.movement.clone()
+                movement: self.movement.clone(),
+                hash_summary: self.hash_summary.clone(),
+                failure: self.failure.clone()
             })
             .expect("integer metrics serialize")
         )
@@ -118,7 +136,11 @@ impl Sample {
         if record.snapshot_count > 1_000_000
             || record.snapshots.len() > MAX_SNAPSHOT_PREVIEW
             || record.snapshots.len() > record.snapshot_count
-            || record.snapshots.iter().enumerate().any(|(i, s)| s.id != i + 1 || s.verified_count > s.produced_count)
+            || record
+                .snapshots
+                .iter()
+                .enumerate()
+                .any(|(i, s)| s.id != i + 1 || (record.failure.is_none() && s.verified_count > s.produced_count))
             || (record.done
                 && record.snapshots.iter().any(|s| {
                     s.produced_count != s.verified_count || s.produced_value != s.verified_value || s.produced_hash != s.verified_hash
@@ -178,6 +200,8 @@ impl Sample {
             .transpose()?;
         Ok(Self {
             movement: record.movement,
+            hash_summary: record.hash_summary,
+            failure: record.failure,
             metrics: record.metrics,
             reading,
             done: record.done,
@@ -190,9 +214,44 @@ impl Sample {
 mod tests {
     use super::*;
     #[test]
+    fn failure_record_preserves_summary_and_allows_mismatched_snapshot_counts() {
+        let mut sample = Sample {
+            metrics: Metrics { reversed: Some(1), ..Metrics::default() },
+            reading: None,
+            done: false,
+            snapshot_count: 1,
+            snapshots: vec![SnapshotPair {
+                id: 1,
+                produced_count: 1,
+                verified_count: 2,
+                produced_value: 1,
+                verified_value: 2,
+                produced_hash: Some([1; 32]),
+                verified_hash: Some([2; 32]),
+            }],
+            movement: None,
+            hash_summary: Some(crate::support::monitored_metrics::HashSummary {
+                up_to_date: 0,
+                pending: 0,
+                failed: 1,
+                workers: Some(vec![crate::support::monitored_metrics::WorkerHashSummary { up_to_date: 0, pending: 0, failed: 1 }]),
+            }),
+            failure: Some("Snapshot 1 differs".into()),
+        };
+        let decoded = Sample::decode(&sample.encode()).unwrap();
+        let summary = decoded.hash_summary.unwrap();
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.workers.unwrap()[0].failed, 1);
+        assert_eq!(decoded.failure.as_deref(), Some("Snapshot 1 differs"));
+        sample.failure = None;
+        assert!(Sample::decode(&sample.encode()).is_err());
+    }
+    #[test]
     fn worker_transport_preserves_large_counts_unknown_replay_and_observation_clock() {
         let sample = Sample {
             movement: None,
+            hash_summary: None,
+            failure: None,
             snapshot_count: 0,
             snapshots: Vec::new(),
             done: false,
@@ -204,6 +263,7 @@ mod tests {
                 elapsed: Duration::from_secs(4),
                 reversed: None,
                 queries: 0,
+                verified_once: false,
             },
             reading: Some(Arc::new(WorkerReading {
                 started_at: Duration::from_secs(2),
@@ -252,6 +312,8 @@ mod preview_tests {
         };
         let mut sample = Sample {
             movement: None,
+            hash_summary: None,
+            failure: None,
             metrics: Metrics::default(),
             reading: None,
             done: true,

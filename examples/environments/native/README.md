@@ -1,8 +1,16 @@
 # Native environment
 
+<!-- launcher:native:start -->
+Native runs the example directly on your computer and opens the shared graphical window. It is a good starting point for trying the game or measuring the benchmark without a WebAssembly host.
+
+The benchmark can use Runtime, which distributes independent histories across background worker threads, or Manual, which processes work on the calling thread. The game uses the environment's default execution mode and fixed demonstration settings.
+
+The launcher builds the workload and graphical presenter locally. Results include the example's generation, validation and presentation overhead, so they are not the same as isolated library benchmarks.
+<!-- launcher:native:end -->
+
 `host.rs` owns native process cancellation and terminal lifetime. It runs an
 injected callback and has no case registry, event generation, monitoring or
-validation policy. Shared `../execution.rs` starts Runtime or Manual ConTime
+validation policy. Shared `../execution.rs` starts Runtime or Manual `contime`
 instances from execution configuration and supplied event/snapshot contracts.
 
 Case-specific Cargo entry points live in
@@ -13,6 +21,6 @@ shared host turn.
 
 Client movement launched through the central launcher uses the shared
 [Bevy presentation](../../support/graphics/README.md), with the portable workload
-compiled natively. ConTime runs in the selected Runtime or Manual mode; only
+compiled natively. `contime` runs in the selected Runtime or Manual mode; only
 queried scene reports cross into the graphics process. Direct terminal and
-headless movement entry points remain available. Other cases retain terminal UI.
+headless entry points remain available for both cases.

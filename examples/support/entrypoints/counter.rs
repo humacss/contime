@@ -1,4 +1,6 @@
 //! Compose the counter with the shared simulator/monitor Runtime host or Manual host.
+// Test support includes independent model modules to exercise separate hosts.
+#![cfg_attr(test, allow(clippy::duplicate_mod))]
 #[path = "../../cases/counter/monitored/generation.rs"]
 mod generation;
 #[path = "../../cases/counter/model.rs"]

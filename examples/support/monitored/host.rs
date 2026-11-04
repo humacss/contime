@@ -122,7 +122,7 @@ fn print_summary(summary: &Summary, delivery: Delivery) {
     );
     if delivery == Delivery::ReverseGroups {
         println!(
-            "{} reversed arrivals; {} full-state validation queries",
+            "{} reordered transitions; {} full-state validation queries",
             format::number(summary.reversed),
             format::number(summary.queries)
         );

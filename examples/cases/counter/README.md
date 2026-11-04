@@ -27,7 +27,7 @@ updates are independent, including when the snapshots belong to different worker
 A `Counter` stores its identity (`id`), state time (`time`), accumulated total
 (`value`), and number of represented event applications (`events`). The last
 field helps validate the result; it is not a count of worker replay attempts.
-ConTime creates a snapshot when its first event is inserted. `create` initializes
+`contime` creates a snapshot when its first event is inserted. `create` initializes
 it at zero; `apply_events` applies the first event and subsequent events.
 
 ## Connecting the lane
@@ -43,7 +43,7 @@ example tools through `CounterExample`. The environment uses those types to
 construct `ConTime<CounterChanged, Counter, ()>` or its Manual equivalent.
 There is no additional lane-registration step in this example.
 
-The `Example` trait is part of the diagnostic harness, not a ConTime requirement.
+The `Example` trait is part of the diagnostic harness, not a `contime` requirement.
 Its `record` hook builds separate expected state for validation; its inspection
 hooks let shared presentation read IDs, totals and counts. Runtime startup,
 Manual processing, monitoring and UI remain outside the case definition.
@@ -71,34 +71,16 @@ that retrying an event does not apply it twice.
 cargo run --example readme --features macros
 ```
 
-For the configurable live dashboard:
-
-```sh
-cargo run --release --all-features --example counter
-cargo run --release --all-features --example counter -- --execution manual
-```
-
-Choose settings before startup; q, Escape or Ctrl-C stops production and validates
-final state. Use the [launcher](../../support/launcher/README.md) for native,
-WASI and browser execution, or the [example guide](../../README.md) for common
-settings, defaults and measurement semantics. The native composition entry point
-is [`support/entrypoints/counter.rs`](../../support/entrypoints/counter.rs).
-
-```sh
-cargo run --release --all-features --example counter -- \
-  --no-setup --headless --duration 5 --snapshots 1000 --workers 4 \
-  --events-per-second 100000 --average-snapshots-per-event 1.1 \
-  --max-snapshots-per-event 2 --snapshot-skew 90
-```
+The counter workload is retained as an internal test and benchmark fixture.
+The public launcher offers the Game and Chain hash examples.
 
 The [Manual walkthrough](manual.md) demonstrates `process()` without background
-threads. The [focused monitor/simulator command](monitored/README.md) uses the
-same model and host with a smaller direct command-line interface.
+threads. See the [simulator callbacks](monitored/README.md) for the internal workload.
 
 ## Check
 
 ```sh
-cargo test --all-features --example counter
+cargo test --all-features --test counter_internal
 ```
 
 Tests cover late arrivals after earlier queries, retained duplicate IDs,

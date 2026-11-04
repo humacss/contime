@@ -7,6 +7,7 @@ pub enum ValueKind {
     Decimal { min: f64, max: f64 },
     Average { max: u64 },
     Rate,
+    Choice,
 }
 #[derive(Clone)]
 pub struct Definition {
@@ -23,6 +24,7 @@ impl Definition {
     pub fn normalize(&self, value: &str) -> Result<String, String> {
         let invalid = || format!("{}: {}", self.label, self.allowed());
         match self.kind {
+            ValueKind::Choice => self.choices.iter().find(|choice| choice.as_str() == value).cloned().ok_or_else(invalid),
             ValueKind::Integer { min, max } => {
                 value.parse::<u64>().ok().filter(|n| (min..=max).contains(n)).map(|n| n.to_string()).ok_or_else(invalid)
             }
@@ -41,6 +43,7 @@ impl Definition {
     pub fn allowed(&self) -> String {
         let number = crate::support::number;
         match self.kind {
+            ValueKind::Choice => self.choices.join(" or "),
             ValueKind::Integer { min, max } => format!("whole number {}–{} {}", number(min), number(max), self.unit),
             ValueKind::Decimal { min, max } => format!("{min}–{max} {}", self.unit),
             ValueKind::Average { max } => format!("1–{} snapshots/event; up to three decimal places", Average::from_scaled(max)),
