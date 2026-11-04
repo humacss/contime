@@ -1,4 +1,4 @@
-//! Static module composition and optional time and ID helpers over ordinary traits.
+#![doc = include_str!("../README.md")]
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, DeriveInput};
 mod attributes;
@@ -26,6 +26,8 @@ mod registration;
 /// discovered automatically. Inferred snapshots use their definition path to
 /// locate metadata; use the original qualified path or explicit event metadata
 /// for opaque snapshot aliases.
+///
+/// See the [crate-level guide](crate) for a complete example and module composition.
 #[proc_macro_derive(ContimeModule, attributes(contime, contime_module))]
 pub fn module(input: TokenStream) -> TokenStream {
     expansion::result(module::derive(parse_macro_input!(input as DeriveInput)))
@@ -45,6 +47,8 @@ pub fn __contime_collect_module(input: TokenStream) -> TokenStream {
 /// The optional map returns u128 and requires a struct-level selector. Field
 /// shorthand cannot be combined with a selector or map. Time/identity helpers
 /// are independent, preserve generics, and add no payload Send/Sync bounds.
+///
+/// See the [crate-level guide](crate) for an event example.
 #[proc_macro_derive(ContimeEvent, attributes(contime))]
 pub fn event(input: TokenStream) -> TokenStream {
     expansion::result(helpers::event(parse_macro_input!(input as DeriveInput)))
@@ -70,6 +74,8 @@ pub fn event(input: TokenStream) -> TokenStream {
 /// An opaque &Self identity function remains supported without mapping; automatic
 /// registration instead requires explicit identity fields. Earlier singular emitter
 /// callbacks remain available with manual creation, separately from inferred events.
+///
+/// See the [crate-level guide](crate) for registration and application examples.
 #[proc_macro_derive(ContimeSnapshot, attributes(contime))]
 pub fn snapshot(input: TokenStream) -> TokenStream {
     expansion::result(helpers::snapshot(parse_macro_input!(input as DeriveInput)))
