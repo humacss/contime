@@ -904,3 +904,57 @@ fn counted_replay_includes_late_reconstruction_and_excludes_queries_and_pruning(
     assert_eq!(worker.status(0).counters, Some(before));
     assert_eq!(observed.try_iter().count(), 2);
 }
+
+#[test]
+fn status_tracks_history_creation_rescheduling_and_target_advances() {
+    let (input, messages) = unbounded();
+    let (steps, _observed) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let mut worker =
+        contime_worker::MessageWorker::<Message, TestStore>::new(&messages, &registrations, (), Context { steps, gate: None }, None);
+    worker.handle(Message::Listen(Listen));
+    assert_eq!((worker.status(0).history_stores, worker.status(0).metadata_only), (0, 1));
+    apply(&input, &[(7, 1, 10), (8, 2, 20), (9, 3, 30)]);
+    worker.handle(messages.try_recv().unwrap());
+    let status = worker.status(0);
+    assert_eq!((status.history_stores, status.metadata_only, status.pending_histories, status.due_histories), (3, 0, 3, 0));
+    worker.handle(Message::Advance(Advance(20, unbounded().0)));
+    assert_eq!(worker.status(0).due_histories, 2);
+    worker.handle(Message::Advance(Advance(5, unbounded().0)));
+    assert_eq!(worker.status(0).due_histories, 2, "backwards target must not change status");
+    apply(&input, &[(9, 4, 15), (9, 4, 15)]);
+    worker.handle(messages.try_recv().unwrap());
+    assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (3, 3));
+    assert!(worker.step());
+    assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (2, 2));
+    while worker.step() {}
+    assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (1, 0));
+    worker.handle(Message::Advance(Advance(30, unbounded().0)));
+    assert_eq!(worker.status(0).due_histories, 1);
+    while worker.step() {}
+    assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (0, 0));
+}
+
+#[test]
+fn repeated_scheduling_keeps_earliest_time_and_replays_all_accepted_events() {
+    let (input, messages) = unbounded();
+    let (steps, observed) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let mut worker =
+        contime_worker::MessageWorker::<Message, TestStore>::new(&messages, &registrations, (), Context { steps, gate: None }, None);
+    apply(&input, &[(7, 1, 20), (7, 2, 30), (7, 3, 20), (7, 3, 20), (8, 4, 25)]);
+    worker.handle(messages.try_recv().unwrap());
+    assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (2, 0));
+    worker.handle(Message::Advance(Advance(20, unbounded().0)));
+    assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (2, 1));
+    apply(&input, &[(8, 5, 10), (8, 6, 15), (8, 6, 15)]);
+    worker.handle(messages.try_recv().unwrap());
+    assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (2, 2));
+    worker.handle(Message::Advance(Advance(30, unbounded().0)));
+    while worker.step() {}
+    let final_states: Vec<_> = observed.try_iter().collect();
+    let last = |id| final_states.iter().rfind(|s| s.id == id).unwrap().ids.clone();
+    assert_eq!(last(7), [1, 3, 2]);
+    assert_eq!(last(8), [5, 6, 4]);
+    assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (0, 0));
+}

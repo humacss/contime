@@ -77,6 +77,7 @@ where
     input: Option<&'a Receiver<M>>,
     registrations: Option<&'a Receiver<crossbeam_channel::Sender<bool>>>,
     snapshots: AHashMap<u128, StoreSlot<S>>,
+    history_stores: usize,
     listeners: NotificationCollections<S::Time, <M::SnapshotListen as SnapshotListenInput>::Listener>,
     activity_listeners: Vec<crossbeam_channel::Sender<bool>>,
     store_config: S::Config,
@@ -85,6 +86,7 @@ where
     horizon: S::Time,
     pending_prunes: VecDeque<PendingPrune<S::Time, <M::Advance as AdvanceInput>::Completion>>,
     schedule: BTreeSet<(S::Time, u128)>,
+    due_histories: usize,
     pending: AHashMap<u128, S::Time>,
     coordination: Option<Coordination<S::Time>>,
     fence_round: Option<u64>,
@@ -146,12 +148,14 @@ where
             input,
             registrations,
             snapshots: AHashMap::new(),
+            history_stores: 0,
             listeners: NotificationCollections::new(),
             activity_listeners: Vec::new(),
             current_time: S::Time::minimum(),
             horizon: S::Time::minimum(),
             pending_prunes: VecDeque::new(),
             schedule: BTreeSet::new(),
+            due_histories: 0,
             pending: AHashMap::new(),
             coordination,
             fence_round: None,
@@ -263,7 +267,22 @@ where
             }
             WorkInputKind::Advance(advance) => {
                 let (target_time, completion) = advance.into_parts();
-                self.current_time = self.current_time.clone().max(target_time);
+                if target_time > self.current_time {
+                    // Only scheduled timestamps crossed by this advance can become due.
+                    // If the target covers the entire schedule, its length is enough.
+                    if self.schedule.last().is_some_and(|(time, _)| time <= &target_time) {
+                        self.due_histories = self.schedule.len();
+                    } else {
+                        self.due_histories += self
+                            .schedule
+                            .range((
+                                Excluded((self.current_time.clone(), u128::MAX)),
+                                std::ops::Bound::Included((target_time.clone(), u128::MAX)),
+                            ))
+                            .count();
+                    }
+                    self.current_time = target_time;
+                }
                 drop(completion);
             }
             WorkInputKind::Fence { round, router } => self.fence(round, router),
@@ -282,17 +301,17 @@ where
 
     /// Captures existing orchestration state without invoking store operations.
     ///
-    /// Scans history slots and the due prefix of the replay schedule. This does
-    /// not drive replay, prune, reconstruct snapshots, or publish notifications.
+    /// Reads worker-local gauges without scanning stores or the replay schedule.
+    /// This does not drive replay, prune, reconstruct snapshots, or publish notifications.
     /// The supplied identifier is copied unchanged; an inline host may use zero.
     pub fn status(&self, worker_id: usize) -> WorkerStatus<S::Time> {
-        let history_stores = self.snapshots.values().filter(|slot| slot.store.is_some()).count();
+        let history_stores = self.history_stores;
         WorkerStatus {
             worker_id,
             history_stores,
             metadata_only: self.snapshots.len() - history_stores,
             pending_histories: self.pending.len(),
-            due_histories: self.schedule.iter().take_while(|(time, _)| time <= &self.current_time).count(),
+            due_histories: self.due_histories,
             processing_target: self.current_time.clone(),
             admission_horizon: self.horizon.clone(),
             pending_prune_passes: self.pending_prunes.len(),
@@ -325,7 +344,11 @@ where
             let (snapshot_id, input) = route.into_parts();
             let time = S::event_time(&input);
             let slot = self.snapshots.entry(snapshot_id).or_insert_with(StoreSlot::metadata_only);
+            let new_store = slot.store.is_none();
             let store = slot.store.get_or_insert_with(|| S::create(snapshot_id, &self.store_config, &self.horizon));
+            if new_store {
+                self.history_stores += 1;
+            }
             let result = store.insert(input, &self.horizon);
             rejections.extend(result.rejections);
             if result.changed {
@@ -345,8 +368,17 @@ where
     }
 
     fn schedule_at(&mut self, snapshot_id: u128, time: S::Time) {
+        if self.pending.get(&snapshot_id).is_some_and(|previous| *previous == time) {
+            return;
+        }
         if let Some(previous) = self.pending.insert(snapshot_id, time.clone()) {
+            if previous <= self.current_time {
+                self.due_histories -= 1;
+            }
             self.schedule.remove(&(previous, snapshot_id));
+        }
+        if time <= self.current_time {
+            self.due_histories += 1;
         }
         self.schedule.insert((time, snapshot_id));
     }
@@ -389,6 +421,7 @@ where
             .next()
             .map_or_else(|| self.current_time.clone(), |(next, _)| next.clone().min(self.current_time.clone()));
         self.schedule.pop_first();
+        self.due_histories -= 1;
         self.pending.remove(&snapshot_id);
         let slot = self.snapshots.get_mut(&snapshot_id).expect("scheduled history exists");
         let store = slot.store.as_mut().expect("scheduled store exists");

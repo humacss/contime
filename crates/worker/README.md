@@ -12,7 +12,7 @@ Insertion completion precedes replay, while pruning completion follows every
 captured history’s forwarding and pruning hooks.
 
 `contime-worker` owns incremental replay scheduling and the blocking message
-receive loop. It depends on no other ConTime crate. Runtime supplies concrete
+receive loop. It depends on no other `contime` crate. Runtime supplies concrete
 messages and wraps Core's shared storage adapter;
 Runtime owns the background threads. Manual drives the same worker directly.
 
@@ -83,7 +83,9 @@ metadata, counts pending and currently due histories, and reports the accepted
 processing target, admission horizon, queued pruning passes, and awaited
 coordination round. Due work can still be blocked by pruning or coordination.
 The horizon records accepted admission policy, not completed pruning. These
-are history gauges, not retained-event counts.
+are history gauges, not retained-event counts. Status reads worker-local counts
+without scanning histories or the replay schedule. When a target advances across
+some, but not all, scheduled timestamps, the worker counts those newly due entries.
 
 The optional `monitor` feature adds cumulative event-to-history application
 counts to `WorkerStatus::counters`. The standalone development crate disables it
@@ -161,7 +163,7 @@ Tables report the **median time per benchmark iteration**, with its bootstrap
 95% confidence interval. Rates are derived from that median only where the
 benchmark declares a throughput unit; that unit may be source events, target
 applications, snapshots, bytes, or bookkeeping calls. It is not automatically
-ConTime's event-processing capacity. Thread-startup and allocation boundaries
+`contime`'s event-processing capacity. Thread-startup and allocation boundaries
 remain those defined in each benchmark source.
 
 Feature variants were measured in separate sequential runs, not interleaved
