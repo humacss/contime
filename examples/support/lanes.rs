@@ -17,7 +17,7 @@ macro_rules! single_lane {
         }
         impl contime::Input for $event {
             fn event_id(&self) -> u128 {
-                contime::module::Event::event_id(self)
+                contime::EventId::event_id(self)
             }
             fn snapshot_ids(&self, emit: &mut impl FnMut(u128)) {
                 <$snapshot>::event_set().snapshot_ids(contime::EventRef::new(self), emit);

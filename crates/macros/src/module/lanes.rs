@@ -85,7 +85,28 @@ pub(super) fn generate(mut state: State) -> syn::Result<TokenStream> {
             fn contains_event_type(_id: ::std::any::TypeId)->bool {false #( || _id == ::std::any::TypeId::of::<#et>())*}
         }
         impl #root::checkpoints::Event for #en {type Time=#time;fn time(&self)->Self::Time{match #event_match {#(Self::#ev(event)=>#root::checkpoints::Event::time(event),)*}}}
-        impl #root::Input for #en {fn event_id(&self)->u128 {match #event_match{#(Self::#ev(event)=>#root::module::Event::event_id(event),)*}}fn snapshot_ids(&self,_emit:&mut impl FnMut(u128)){#(Self::#sets().snapshot_ids(#root::module::EventSource::event_ref(self),_emit);)*}}
+        impl #root::Input for #en {
+            const TRACKS_DUPLICATE_ADMISSIONS: bool = true;
+            #[inline(always)] fn has_custom_duplicate_policies()->bool {
+                use #root::module::EventPolicyTypeDispatch as _;
+                false #( || (&#root::module::EventPolicyType::<#et>(::std::marker::PhantomData)).is_custom() )*
+            }
+            fn event_id(&self)->u128 {match #event_match{#(Self::#ev(event)=>#root::EventId::event_id(event),)*}}
+            fn snapshot_ids(&self,_emit:&mut impl FnMut(u128)){#(Self::#sets().snapshot_ids(#root::module::EventSource::event_ref(self),_emit);)*}
+            fn duplicate_policy_key(&self)->::std::any::TypeId { match #event_match {#(Self::#ev(_)=>::std::any::TypeId::of::<#et>(),)*} }
+            #[inline(always)] fn track_duplicate_admissions(&self)->bool {use #root::module::EventPolicyDispatch as _; match #event_match {#(Self::#ev(event)=>(&#root::module::EventPolicyBridge(event)).policy_track(),)*}}
+            fn create_duplicate_context(&self)->Box<dyn ::std::any::Any> {use #root::module::EventPolicyDispatch as _; match #event_match {#(Self::#ev(event)=>(&#root::module::EventPolicyBridge(event)).policy_context(),)*}}
+            fn admit_duplicate_context(&self, context:&mut dyn ::std::any::Any) {use #root::module::EventPolicyDispatch as _;match #event_match {#(Self::#ev(event)=>(&#root::module::EventPolicyBridge(event)).policy_admit(context),)*}}
+            fn prune_duplicate_context(&self, context:&mut dyn ::std::any::Any) {use #root::module::EventPolicyDispatch as _;match #event_match {#(Self::#ev(event)=>(&#root::module::EventPolicyBridge(event)).policy_prune(context),)*}}
+            fn select_duplicate(&self,context:&mut dyn ::std::any::Any)->Option<#root::DuplicateDecision<Self>> {
+                use #root::module::EventPolicyDispatch as _;
+                match #event_match {#(Self::#ev(event)=>(&#root::module::EventPolicyBridge(event)).policy_select(context).map(|decision| match decision {
+                    #root::DuplicateDecision::KeepExisting => #root::DuplicateDecision::KeepExisting,
+                    #root::DuplicateDecision::ReplaceExisting { existing_time, event } => #root::DuplicateDecision::ReplaceExisting { existing_time, event: Self::#ev(event) },
+                }),)*}
+            }
+
+        }
         impl #root::checkpoints::Snapshot for #sn {type Time=#time;fn time(&self)->&Self::Time{match #snapshot_match {#(Self::#sv(snapshot)=>#root::checkpoints::Snapshot::time(snapshot),)*}}fn set_time(&mut self,_time:Self::Time){match #snapshot_match {#(Self::#sv(snapshot)=>#root::checkpoints::Snapshot::set_time(snapshot,_time),)*}}}
         impl #root::checkpoints::ApplyEvents<#en> for #sn {
             fn create(_snapshot_id:u128,_event:&#en)->Self {#(if let Some(snapshot)=#en::#sets().create(_snapshot_id,#root::module::EventSource::event_ref(_event)){return Self::#sv(snapshot);})* panic!("event does not route to requested snapshot")}

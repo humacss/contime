@@ -35,6 +35,38 @@ impl<S: Snapshot, H> SnapshotStore<S, H> {
 }
 
 impl<S: Snapshot, H: EventStore<Time = S::Time>> SnapshotStore<S, H> {
+    /// Edit a consumer-owned event history and invalidate affected checkpoints.
+    ///
+    /// `affected_from` must be at or before every changed event position. The
+    /// callback must maintain `EventStore` ordering and return true whenever
+    /// the canonical events exposed by `EventStore` change. It may update
+    /// noncanonical metadata and return false when playback is unchanged. An
+    /// edit before the horizon is rejected before the callback is invoked.
+    /// Queries do not invoke this callback.
+    pub fn edit_history(&mut self, affected_from: S::Time, edit: impl FnOnce(&mut H) -> bool) -> Result<bool, NoCheckpoint> {
+        if affected_from < self.store.horizon {
+            return Err(NoCheckpoint);
+        }
+        let changed = edit(&mut self.store.events);
+        if changed {
+            self.store.invalidate_from(&affected_from);
+        }
+        Ok(changed)
+    }
+
+    /// Edits history and invalidates checkpoints from the returned affected time.
+    ///
+    /// The editor must ensure any changed timestamp is at or after the retained
+    /// horizon before modifying history. Returning `None` leaves checkpoints intact.
+    pub fn edit_history_with_result<R>(&mut self, edit: impl FnOnce(&mut H) -> (R, Option<S::Time>)) -> R {
+        let (result, affected) = edit(&mut self.store.events);
+        if let Some(time) = affected {
+            debug_assert!(time >= self.store.horizon, "history edit crossed the retained horizon");
+            self.store.invalidate_from(&time);
+        }
+        result
+    }
+
     /// Earliest possible application when resuming dirty history. Includes any
     /// unchanged prefix reconstructed from the selected checkpoint. Does not clone
     /// or apply the snapshot; `None` means no remaining event application in the

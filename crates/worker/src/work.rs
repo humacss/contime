@@ -356,7 +356,8 @@ where
                 {
                     inserted += 1;
                 }
-                let pending = self.pending.get(&snapshot_id).cloned().map_or(time.clone(), |old| old.min(time));
+                let affected = store.affected_time(&time);
+                let pending = self.pending.get(&snapshot_id).cloned().map_or(affected.clone(), |old| old.min(affected));
                 self.schedule_at(snapshot_id, pending);
             }
         }
@@ -463,7 +464,20 @@ where
         if self.fence_routers.len() == coordination.router_count {
             self.reported_round = Some(round);
             self.awaiting_resolution = Some(round);
-            let earliest = self.pending.keys().filter_map(|id| self.snapshots[id].store.as_ref()?.earliest_replay_time()).min();
+            // A changed selection can remove the event that originally made
+            // this timestamp dirty. Keep the scheduled boundary even if the
+            // next retained event is later or no event remains to replay.
+            let earliest = self
+                .pending
+                .iter()
+                .map(|(id, scheduled)| {
+                    self.snapshots[id]
+                        .store
+                        .as_ref()
+                        .and_then(|store| store.earliest_replay_time())
+                        .map_or_else(|| scheduled.clone(), |next| next.min(scheduled.clone()))
+                })
+                .min();
             (coordination.report)(round, earliest);
         }
     }

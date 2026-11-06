@@ -70,19 +70,24 @@ impl<S: Snapshot, H: EventStore<Time = S::Time>> Store<S, H> {
             return Insert::BeforeHorizon;
         }
         let result = self.events.insert(event);
-        if result == Insert::Inserted && time <= self.dirty {
-            let before = self.checkpoints.partition_point(|checkpoint| checkpoint.snapshot.time() < &time);
-            if let Some(index) = before.checked_sub(1) {
-                self.dirty = self.checkpoints[index].snapshot.time().clone();
-            } else {
-                // Only the original, pre-event checkpoint can be valid here.
-                // Drop same-time stale slots so an inclusive boundary cannot
-                // select them. This also handles minimum time without T - 1.
-                self.checkpoints.truncate(1);
-                self.dirty = self.checkpoints[0].snapshot.time().clone();
-            }
+        if result == Insert::Inserted {
+            self.invalidate_from(&time);
         }
         result
+    }
+
+    pub(super) fn invalidate_from(&mut self, time: &S::Time) {
+        if time > &self.dirty {
+            return;
+        }
+        let before = self.checkpoints.partition_point(|checkpoint| checkpoint.snapshot.time() < time);
+        if let Some(index) = before.checked_sub(1) {
+            self.dirty = self.checkpoints[index].snapshot.time().clone();
+        } else {
+            // Only the original, pre-event checkpoint can be valid here.
+            self.checkpoints.truncate(1);
+            self.dirty = self.checkpoints[0].snapshot.time().clone();
+        }
     }
 
     /// Removes obsolete storage, preserving the forwarded checkpoint and all

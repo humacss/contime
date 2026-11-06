@@ -48,9 +48,9 @@ beyond that target remain stored for future live processing, while older history
 outside the retention window is eventually pruned from memory and can no longer be
 queried.
 
-For the same admitted events, state at a given time is deterministic regardless of
-arrival order. See [how `contime` works](guides/how-it-works/README.md) for queries,
-checkpoints, workers, and retention.
+For a given retained event history, state at a given time is deterministic. See
+[how `contime` works](guides/how-it-works/README.md) for queries, checkpoints,
+workers, and retention.
 
 The demo above shows this in action: `contime` corrects the path on the left, while
 the right applies inputs on arrival and its path drifts.
@@ -81,12 +81,12 @@ responsibility.
 
 ## Using `contime`
 
-`contime` 0.1.2 requires Rust 1.90 or newer. Local Runtime worker threads are enabled
+`contime` 0.2.0 requires Rust 1.90 or newer. Local Runtime worker threads are enabled
 by default; enable the optional macros for the helpers shown here:
 
 ```toml
 [dependencies]
-contime = { version = "0.1.2", features = ["macros"] }
+contime = { version = "0.2.0", features = ["macros"] }
 ```
 
 The [list example](examples/readme.rs) defines a `Value` event and a `List`
@@ -161,7 +161,7 @@ cargo run --example readme --features macros
 
 `contime` routes independent snapshot histories across local worker threads and uses
 checkpoints to reduce repeated replay. On an Apple M3 Pro, the public API
-benchmark processed **about 5.0 million simple counter events per second with one
+benchmark processed **about 5.34 million simple counter events per second with one
 worker**, submitting events individually.
 This includes submission, routing and processing, excluding event construction and
 runtime startup.
@@ -171,14 +171,15 @@ of 1,000 events, recorded:
 
 | Worker threads | Total throughput |
 | ---: | ---: |
-| 1 | 4.0 million events/s |
-| 2 | 8.1 million events/s |
-| 4 | 16.3 million events/s |
+| 1 | 5.40 million events/s |
+| 2 | 10.42 million events/s |
+| 4 | 21.97 million events/s |
 
-These release-mode benchmarks were recorded on 2026-11-04 with Rust 1.90.0,
-unpinned threads and normal desktop background activity. They were measured at
-revision `f75043f`, before the current worker changes, and use finite workloads
-rather than sustained example throughput.
+These release-mode benchmarks were recorded on 2026-11-06 with Rust 1.90.0,
+unpinned threads and normal desktop background activity. They measure the 0.2.0
+working tree and use finite workloads rather than sustained example throughput.
+The public API figure uses 20 Criterion samples; the scaling figures use 10
+verified runs per worker count.
 
 End-to-end examples currently achieve lower throughput than these benchmarks. They
 include work the benchmarks do not fully exercise, such as event generation, queries

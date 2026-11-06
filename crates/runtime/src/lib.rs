@@ -28,6 +28,7 @@ pub extern crate contime_worker;
 #[doc(hidden)]
 pub extern crate self as contime_runtime;
 mod batching;
+#[cfg(test)]
 mod checkpoint;
 mod coordinator;
 mod frontier;
@@ -37,6 +38,7 @@ mod instance;
 mod listen;
 mod message;
 mod module;
+mod policy_checkpoint;
 pub use crate::contime_core::module::Module;
 pub use module::ModuleConTime;
 #[cfg(test)]

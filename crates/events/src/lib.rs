@@ -34,4 +34,6 @@ mod iteration;
 mod query;
 mod types;
 
-pub use self::types::{Event, EventHistory, EventHistoryIter, EventHistoryRangeIter, EventKey, Insert, PruneResult};
+pub use self::types::{
+    Event, EventHistory, EventHistoryIter, EventHistoryRangeIter, EventKey, Insert, PolicyCall, PolicyDecision, PolicyInsert, PruneResult,
+};

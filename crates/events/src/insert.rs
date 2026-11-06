@@ -1,4 +1,4 @@
-use crate::contime_events::{Event, EventHistory, EventKey, Insert};
+use crate::contime_events::{Event, EventHistory, EventKey, Insert, PolicyCall, PolicyDecision, PolicyInsert};
 
 impl Insert {
     /// Returns whether canonical history changed.
@@ -21,30 +21,100 @@ where
     /// tail enter the late-event tree. Identity is independent of timestamp:
     /// a retained event ID always makes a later insertion a no-op.
     pub fn insert(&mut self, event: E) -> Insert {
+        match self.insert_inner(event, |_, _| Ok(PolicyDecision::KeepExisting)) {
+            PolicyInsert::Inserted => Insert::Inserted,
+            PolicyInsert::Duplicate => Insert::Duplicate,
+            PolicyInsert::BeforeHorizon => Insert::BeforeHorizon,
+            _ => unreachable!("default duplicate policy never replaces an event"),
+        }
+    }
+    /// Inserts with callbacks for admission and duplicate decisions.
+    pub fn insert_with_policy<F>(&mut self, event: E, admission_horizon: E::Time, mut policy: F) -> PolicyInsert<E::Time>
+    where
+        F: FnMut(PolicyCall, &E) -> Result<PolicyDecision<E>, ()>,
+    {
+        if event.time() < admission_horizon {
+            return PolicyInsert::BeforeHorizon;
+        }
+        self.insert_inner(event, |call, event| {
+            let decision = policy(call, event)?;
+            match decision {
+                PolicyDecision::ReplaceExisting { ref event, ref existing_time }
+                    if *existing_time < admission_horizon || event.time() < admission_horizon =>
+                {
+                    Err(())
+                }
+                other => Ok(other),
+            }
+        })
+    }
+    #[inline]
+    fn insert_inner<F>(&mut self, event: E, mut policy: F) -> PolicyInsert<E::Time>
+    where
+        F: FnMut(PolicyCall, &E) -> Result<PolicyDecision<E>, ()>,
+    {
         let key = EventKey::from_event(&event);
         if key.time < self.horizon {
-            return Insert::BeforeHorizon;
+            return PolicyInsert::BeforeHorizon;
         }
-
-        let event_id = event.event_id();
-        if !self.retained_ids.insert(event_id) {
-            return Insert::Duplicate;
+        let id = event.event_id();
+        if !self.retained_ids.insert(id) {
+            return self.on_duplicate(event, id, policy);
         }
+        // A default policy is a no-op; custom policies can initialize their context.
+        if policy(PolicyCall::Admission, &event).is_err() {
+            self.retained_ids.remove(&id);
+            return PolicyInsert::InvalidSelection;
+        }
+        self.record_change(&key);
+        self.insert_unique(key, event);
+        PolicyInsert::Inserted
+    }
+    fn on_duplicate<F>(&mut self, incoming: E, id: u128, mut policy: F) -> PolicyInsert<E::Time>
+    where
+        F: FnMut(PolicyCall, &E) -> Result<PolicyDecision<E>, ()>,
+    {
+        let (selected, old_time) = match policy(PolicyCall::Duplicate, &incoming) {
+            Ok(PolicyDecision::KeepExisting) => return PolicyInsert::Duplicate,
+            Ok(PolicyDecision::ReplaceExisting { event, existing_time }) => (event, existing_time),
+            Err(()) => return PolicyInsert::InvalidSelection,
+        };
+        let new_time = selected.time();
+        if selected.event_id() != id || old_time < self.horizon || new_time < self.horizon {
+            return PolicyInsert::InvalidSelection;
+        }
+        let old_key = EventKey { time: old_time.clone(), event_id: id };
+        let index = self.ordered.partition_point(|(key, _)| key < &old_key);
+        if self.ordered.get(index).is_some_and(|(key, _)| *key == old_key) {
+            self.ordered.remove(index);
+        } else if self.late.remove(&old_key).is_none() {
+            return PolicyInsert::InvalidSelection;
+        }
+        let affected_from = old_time.min(new_time.clone());
+        let key = EventKey::from_event(&selected);
+        if !self.dirty || affected_from < self.dirty_time {
+            self.dirty_time = affected_from.clone();
+        }
+        self.dirty = true;
+        self.insert_unique(key, selected);
+        PolicyInsert::Replaced { affected_from, selected_time: new_time }
+    }
 
-        let was_empty = self.is_empty();
-        if was_empty || !self.dirty || key.time < self.dirty_time {
+    #[inline]
+    fn record_change(&mut self, key: &EventKey<E::Time>) {
+        if self.is_empty() || !self.dirty || key.time < self.dirty_time {
             self.dirty_time = key.time.clone();
         }
         self.dirty = true;
-
-        if self.ordered.back().is_none_or(|(latest, _event)| key > *latest) {
+    }
+    #[inline]
+    fn insert_unique(&mut self, key: EventKey<E::Time>, event: E) {
+        if self.ordered.back().is_none_or(|(latest, _)| key > *latest) {
             self.ordered.push_back((key, event));
         } else {
             let previous = self.late.insert(key, event);
             debug_assert!(previous.is_none(), "a unique retained event ID produced a duplicate canonical key");
         }
-
-        Insert::Inserted
     }
 }
 
@@ -232,5 +302,144 @@ mod tests {
         });
 
         criterion.final_summary();
+    }
+}
+
+#[cfg(test)]
+mod policy_replacement_tests {
+    use crate::contime_events::{Event, EventHistory, PolicyCall, PolicyDecision, PolicyInsert};
+    #[derive(Clone)]
+    struct TestEvent {
+        id: u128,
+        time: i64,
+    }
+    impl Event for TestEvent {
+        type Time = i64;
+        fn event_id(&self) -> u128 {
+            self.id
+        }
+        fn time(&self) -> i64 {
+            self.time
+        }
+    }
+    fn admit(call: PolicyCall, _: &TestEvent) -> Result<PolicyDecision<TestEvent>, ()> {
+        match call {
+            PolicyCall::Admission => Ok(PolicyDecision::KeepExisting),
+            PolicyCall::Duplicate => panic!("new ID"),
+        }
+    }
+    fn replace(old: i64, call: PolicyCall, incoming: &TestEvent) -> Result<PolicyDecision<TestEvent>, ()> {
+        match call {
+            PolicyCall::Duplicate => Ok(PolicyDecision::ReplaceExisting { event: incoming.clone(), existing_time: old }),
+            PolicyCall::Admission => panic!("expected duplicate"),
+        }
+    }
+    #[test]
+    fn duplicate_keep_never_reads_the_existing_event() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        struct Tracked {
+            id: u128,
+            reads: Arc<AtomicUsize>,
+        }
+        impl Event for Tracked {
+            type Time = i64;
+            fn time(&self) -> i64 {
+                10
+            }
+            fn event_id(&self) -> u128 {
+                self.reads.fetch_add(1, Ordering::Relaxed);
+                self.id
+            }
+        }
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut h = EventHistory::new();
+        h.insert_with_policy(Tracked { id: 1, reads: reads.clone() }, 0, |_, _| Ok(PolicyDecision::KeepExisting));
+        let before = reads.load(Ordering::Relaxed);
+        let incoming = Tracked { id: 1, reads: Arc::new(AtomicUsize::new(0)) };
+        assert!(matches!(h.insert_with_policy(incoming, 0, |_, _| Ok(PolicyDecision::KeepExisting)), PolicyInsert::Duplicate));
+        assert_eq!(reads.load(Ordering::Relaxed), before);
+    }
+    #[test]
+    fn replacement_uses_context_time_without_scanning_stored_events() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        #[derive(Clone)]
+        struct Tracked {
+            id: u128,
+            time: i64,
+            reads: Arc<AtomicUsize>,
+        }
+        impl Event for Tracked {
+            type Time = i64;
+            fn time(&self) -> i64 {
+                self.time
+            }
+            fn event_id(&self) -> u128 {
+                self.reads.fetch_add(1, Ordering::Relaxed);
+                self.id
+            }
+        }
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut h = EventHistory::new();
+        h.insert_with_policy(Tracked { id: 1, time: 20, reads: reads.clone() }, 0, |_, _| Ok(PolicyDecision::KeepExisting));
+        let before = reads.load(Ordering::Relaxed);
+        let incoming = Tracked { id: 1, time: 10, reads: Arc::new(AtomicUsize::new(0)) };
+        let result =
+            h.insert_with_policy(incoming, 0, |_, event| Ok(PolicyDecision::ReplaceExisting { event: event.clone(), existing_time: 20 }));
+        assert!(matches!(result, PolicyInsert::Replaced { affected_from: 10, .. }));
+        assert_eq!(reads.load(Ordering::Relaxed), before);
+    }
+    #[test]
+    fn invalid_existing_time_does_not_remove_the_canonical_event() {
+        let mut h = EventHistory::new();
+        h.insert_with_policy(TestEvent { id: 1, time: 20 }, 0, admit);
+        let result = h.insert_with_policy(TestEvent { id: 1, time: 10 }, 0, |_, event| {
+            Ok(PolicyDecision::ReplaceExisting { event: event.clone(), existing_time: 15 })
+        });
+        assert!(matches!(result, PolicyInsert::InvalidSelection));
+        assert_eq!(h.iter().map(|(_, event)| (event.id, event.time)).collect::<Vec<_>>(), [(1, 20)]);
+    }
+    #[test]
+    fn ordered_event_replaced_by_earlier_occurrence() {
+        let mut h = EventHistory::new();
+        assert!(matches!(h.insert_with_policy(TestEvent { id: 1, time: 20 }, 0, admit), PolicyInsert::Inserted));
+        h.insert_with_policy(TestEvent { id: 2, time: 30 }, 0, admit);
+        let result = h.insert_with_policy(TestEvent { id: 1, time: 10 }, 0, |c, e| replace(20, c, e));
+        assert!(matches!(result, PolicyInsert::Replaced { affected_from: 10, .. }));
+        assert_eq!(h.iter().map(|(_, e)| (e.id, e.time)).collect::<Vec<_>>(), [(1, 10), (2, 30)]);
+    }
+    #[test]
+    fn late_event_replaced_by_later_occurrence() {
+        let mut h = EventHistory::new();
+        h.insert_with_policy(TestEvent { id: 1, time: 20 }, 0, admit);
+        h.insert_with_policy(TestEvent { id: 2, time: 10 }, 0, admit);
+        let result = h.insert_with_policy(TestEvent { id: 2, time: 30 }, 0, |c, e| replace(10, c, e));
+        assert!(matches!(result, PolicyInsert::Replaced { affected_from: 10, .. }));
+        assert_eq!(h.iter().map(|(_, e)| (e.id, e.time)).collect::<Vec<_>>(), [(1, 20), (2, 30)]);
+    }
+    #[test]
+    fn pruned_id_is_admitted_as_new() {
+        let mut h = EventHistory::new();
+        h.insert_with_policy(TestEvent { id: 1, time: 10 }, 0, admit);
+        h.prune_before(&20);
+        assert!(matches!(h.insert_with_policy(TestEvent { id: 1, time: 20 }, 20, admit), PolicyInsert::Inserted));
+    }
+    #[test]
+    fn invalid_replacement_keeps_original() {
+        let mut h = EventHistory::new();
+        h.insert_with_policy(TestEvent { id: 1, time: 20 }, 0, admit);
+        assert!(matches!(
+            h.insert_with_policy(TestEvent { id: 1, time: 30 }, 0, |_, _| Ok(PolicyDecision::ReplaceExisting {
+                event: TestEvent { id: 2, time: 30 },
+                existing_time: 20
+            })),
+            PolicyInsert::InvalidSelection
+        ));
+        assert_eq!(h.iter().map(|(_, e)| (e.id, e.time)).collect::<Vec<_>>(), [(1, 20)]);
     }
 }

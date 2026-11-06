@@ -34,6 +34,24 @@ where
         wrapper: W,
         policy: P,
     ) -> Result<Self, crate::contime_runtime::StartError> {
+        Self::start_with_worker_factory(config, policy, |checkpoints, activity, coordination| {
+            WorkerProcess::new(checkpoints, wrapper.clone()).with_activity(activity).with_coordination(coordination)
+        })
+    }
+
+    fn start_with_worker_factory<P, V>(
+        config: ConTimeConfig<I::Time>,
+        policy: P,
+        mut make_worker: impl FnMut(
+            crate::contime_runtime::checkpoints::CheckpointConfig,
+            crossbeam_channel::Receiver<crossbeam_channel::Sender<bool>>,
+            crate::contime_worker::Coordination<I::Time>,
+        ) -> V,
+    ) -> Result<Self, crate::contime_runtime::StartError>
+    where
+        P: crate::contime_runtime::ProgressPolicy<I::Time>,
+        V: crate::contime_runtime::Worker<Input = crate::contime_runtime::WorkerMessage<I, S>, Error = std::convert::Infallible>,
+    {
         if !crate::contime_worker::AdvanceTime::is_valid_retention(&config.history_retention) {
             return Err(crate::contime_runtime::StartError::InvalidRetention);
         }
@@ -57,18 +75,22 @@ where
             .collect();
         let workers = (0..config.worker_count)
             .map(|index| {
-                let worker = WorkerProcess::new(config.checkpoints, wrapper.clone()).with_activity(activity());
+                let registrations = activity();
                 let reports = input.clone();
                 let pruned = input.clone();
-                worker.with_coordination(crate::contime_worker::Coordination {
-                    router_count: config.router_count,
-                    report: Box::new(move |round, minimum| {
-                        let _ = reports.send(crate::contime_runtime::RouterMessage::Report { round, worker: index, minimum });
-                    }),
-                    pruned: Box::new(move |horizon| {
-                        let _ = pruned.send(crate::contime_runtime::RouterMessage::Pruned { worker: index, horizon });
-                    }),
-                })
+                make_worker(
+                    config.checkpoints,
+                    registrations,
+                    crate::contime_worker::Coordination {
+                        router_count: config.router_count,
+                        report: Box::new(move |round, minimum| {
+                            let _ = reports.send(crate::contime_runtime::RouterMessage::Report { round, worker: index, minimum });
+                        }),
+                        pruned: Box::new(move |horizon| {
+                            let _ = pruned.send(crate::contime_runtime::RouterMessage::Pruned { worker: index, horizon });
+                        }),
+                    },
+                )
             })
             .collect();
         let (runtime, worker_inputs) = crate::contime_runtime::ThreadTopology::start_with_worker_inputs(routers, workers)?;

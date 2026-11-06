@@ -7,6 +7,7 @@ pub(super) struct Options {
     pub id: Option<Expr>,
     pub map: Option<Expr>,
     pub events: Vec<Registration>,
+    pub manual_duplicate_policy: bool,
 }
 pub(super) struct Registration {
     pub ty: Type,
@@ -61,6 +62,18 @@ pub(super) fn read(input: &DeriveInput, snapshot: bool) -> syn::Result<Options> 
                     return Err(syn::Error::new_spanned(value, "id and map must be function paths or noncapturing closures"));
                 }
                 *slot = Some(value);
+            } else if meta.path.is_ident("duplicate_policy") {
+                if snapshot {
+                    return Err(meta.error("duplicate policies belong on events"));
+                }
+                if result.manual_duplicate_policy {
+                    return Err(meta.error("duplicate duplicate_policy option"));
+                }
+                let name: syn::Ident = meta.value()?.parse()?;
+                if name != "manual" {
+                    return Err(meta.error("expected manual"));
+                }
+                result.manual_duplicate_policy = true;
             } else if meta.path.is_ident("time") {
                 return Err(meta.error("put #[contime(time)] on the timestamp field, not the struct"));
             } else {

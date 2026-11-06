@@ -34,6 +34,22 @@ help: you can convert a `u64` to an `i64` and panic if the converted value doesn
  4 | #[derive(Clone,Default,ContimeSnapshot.try_into().unwrap())]
    |                                       ++++++++++++++++++++
 
+error[E0271]: type mismatch resolving `<MixedEventLanes as Event>::Time == u64`
+  --> tests/modules/ui/inferred_module_time.rs:4:24
+   |
+ 4 | #[derive(Clone,Default,ContimeSnapshot)]
+   |                        ^^^^^^^^^^^^^^^ type mismatch resolving `<MixedEventLanes as Event>::Time == u64`
+...
+14 | #[derive(ContimeModule)]
+   |          ------------- in this macro invocation
+   |
+note: expected this to be `u64`
+  --> tests/modules/ui/inferred_module_time.rs:14:10
+   |
+14 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` which comes from the expansion of the derive macro `ContimeModule` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0308]: mismatched types
   --> tests/modules/ui/inferred_module_time.rs:4:24
    |

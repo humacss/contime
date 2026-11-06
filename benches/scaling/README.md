@@ -51,6 +51,70 @@ The latency probe queries the final timestamp while processing catches up.
 Frequent queries can repeatedly reconstruct unprocessed event tails, so this is
 a query-stress workload. Its completion rate is not baseline application throughput.
 
+## 0.2.0 throughput — context-based decisions
+
+On 2026-11-06, the context-based policy implementation was compared with the
+previous implementation using the same public API harness and dependencies on an
+Apple M3 Pro (macOS 26.3.1, Rust 1.90.0). Each variant ran 10 samples per worker
+count in alternating order and verified final counts and ordered hashes. This
+workload contains unique IDs and does not measure custom-policy tracking.
+
+| Workers | Median wall time | Range | Throughput |
+| ---: | ---: | ---: | ---: |
+| 1 | 96.994 ms | 95.944–109.309 ms | 5.40 M events/s |
+| 2 | 50.309 ms | 49.786–50.880 ms | 10.42 M events/s |
+| 4 | 23.864 ms | 23.361–25.343 ms | 21.97 M events/s |
+
+The previous implementation measured 106.017, 54.661, and 25.889 ms. The
+benchmarks use finite workloads, unpinned threads and normal background activity;
+they are not sustained throughput guarantees.
+
+## 0.2.0 throughput — existing history
+
+On 2026-11-06, the current history implementation was measured against the previous
+history path and the earlier tree-based duplicate-policy path on an Apple M3 Pro
+(macOS 26.3.1, Rust 1.90.0). The public API workload used 524,288 events, batches
+of 1,000, 64 histories and one response channel. Each variant ran 10 samples per
+worker count in alternating order and verified final counts and ordered hashes.
+The same dependencies and harness were used in temporary builds. Threads were
+unpinned and background activity was present.
+
+| Workers | Existing history median | Range | Throughput |
+| ---: | ---: | ---: | ---: |
+| 1 | 106.907 ms | 104.487–116.911 ms | 4.90 M events/s |
+| 2 | 54.750 ms | 54.373–55.610 ms | 9.58 M events/s |
+| 4 | 26.063 ms | 25.218–27.375 ms | 20.12 M events/s |
+
+Events had unique IDs, so these
+measure the ordinary insertion path, not duplicate-policy decisions. For the same
+runs, the previous history control had median wall times of 108.816, 55.889, and
+25.798 ms; the tree-based policy path had 141.993, 70.778, and 32.711 ms.
+
+## 0.2.0 throughput — 2026-11-06
+
+Measured the 0.2.0 working tree on an Apple M3 Pro (macOS 26.3.1, Rust 1.90.0)
+using the public API workload: 524,288 events in batches of 1,000 across 64
+snapshot histories, with zero extra arithmetic rounds and one response channel.
+Five runs per worker count verified final counts and ordered hashes. Rates are
+computed from median wall time; ranges cover the five samples. Event preparation,
+final verification and shutdown are excluded. Threads were unpinned and normal
+desktop background activity was present.
+
+| Workers | Median wall time | Range | Throughput |
+| ---: | ---: | ---: | ---: |
+| 1 | 140.608 ms | 139.821–160.096 ms | 3.73 M events/s |
+| 2 | 70.250 ms | 68.990–73.865 ms | 7.46 M events/s |
+| 4 | 32.296 ms | 32.067–32.910 ms | 16.23 M events/s |
+
+```sh
+cargo +1.90.0 build --release --manifest-path benches/scaling/Cargo.toml --bin contime-scaling-bench
+benches/scaling/target/release/contime-scaling-bench 524288 0 1000 5 full 1
+```
+
+The harness was copied to temporary storage and its local dependency pointed at
+the current working tree; its lockfile was updated offline for 0.2.0. These are
+finite-work measurements, not a sustained throughput guarantee.
+
 ## 0.1.2 throughput — 2026-11-04
 
 Measured the committed 0.1.2 code at `f75043f` in an isolated checkout on an

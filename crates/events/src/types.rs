@@ -71,6 +71,46 @@ pub enum Insert {
     BeforeHorizon,
 }
 
+/// The point at which a history invokes a policy callback.
+#[derive(Clone, Copy)]
+pub enum PolicyCall {
+    /// An event with a new ID is being admitted.
+    Admission,
+    /// An occurrence with an existing ID arrived.
+    Duplicate,
+}
+/// The callback's decision and, for a replacement, the existing event's time.
+pub enum PolicyDecision<E: Event> {
+    /// Keep the existing event.
+    KeepExisting,
+    /// Replace it using the known time of the existing occurrence.
+    ReplaceExisting {
+        /// The replacement event.
+        event: E,
+        /// The current canonical timestamp, maintained in the policy context.
+        existing_time: E::Time,
+    },
+}
+/// Outcome of admission with a duplicate policy.
+#[derive(Debug, Eq, PartialEq)]
+pub enum PolicyInsert<T> {
+    /// A new event was retained.
+    Inserted,
+    /// The policy kept the existing event.
+    Duplicate,
+    /// The canonical event was replaced; replay must start at this time.
+    Replaced {
+        /// Earliest timestamp affected by the replacement.
+        affected_from: T,
+        /// Timestamp of the replacement event.
+        selected_time: T,
+    },
+    /// The incoming event predates the admission horizon.
+    BeforeHorizon,
+    /// The policy selected an invalid replacement.
+    InvalidSelection,
+}
+
 /// The number of events removed from each internal event store.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PruneResult {

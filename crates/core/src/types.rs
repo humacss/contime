@@ -39,6 +39,39 @@ pub trait Input:
     /// a route, including duplicates; emitting no IDs drops the input from routing.
     /// Histories share immutable event ownership and deduplicate retained event IDs.
     fn snapshot_ids(&self, emit: &mut impl FnMut(u128));
+    #[doc(hidden)]
+    const TRACKS_DUPLICATE_ADMISSIONS: bool = false;
+    #[doc(hidden)]
+    #[inline(always)]
+    fn has_custom_duplicate_policies() -> bool
+    where
+        Self: Sized,
+    {
+        Self::TRACKS_DUPLICATE_ADMISSIONS
+    }
+    #[doc(hidden)]
+    fn duplicate_policy_key(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<Self>()
+    }
+    #[doc(hidden)]
+    fn track_duplicate_admissions(&self) -> bool {
+        false
+    }
+    #[doc(hidden)]
+    fn create_duplicate_context(&self) -> Box<dyn std::any::Any> {
+        Box::new(())
+    }
+    #[doc(hidden)]
+    fn admit_duplicate_context(&self, _context: &mut dyn std::any::Any) {}
+    #[doc(hidden)]
+    fn prune_duplicate_context(&self, _context: &mut dyn std::any::Any) {}
+    #[doc(hidden)]
+    fn select_duplicate(&self, _context: &mut dyn std::any::Any) -> Option<crate::contime_core::module::DuplicateDecision<Self>>
+    where
+        Self: Sized,
+    {
+        Some(crate::contime_core::module::DuplicateDecision::KeepExisting)
+    }
 }
 
 /// An immutable event shared by its routed snapshot histories.
@@ -59,6 +92,8 @@ pub enum RejectionReason {
     BeforeSafeTime,
     /// Internally generated work precedes the timestamp of its causal source.
     BeforeSourceTime,
+    /// A duplicate policy chose a placement that cannot be retained.
+    InvalidDuplicateSelection,
 }
 
 /// One rejected insertion, identified independently of any response transport.

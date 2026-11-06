@@ -8,6 +8,14 @@ Core adapts this workspace member into each snapshot history and connects it
 to checkpoint storage. The event store itself remains independent of those
 crates and knows nothing about their execution topology.
 
+## Duplicate policies
+
+`EventHistory` keeps the first retained event for each ID by default. Its policy
+insertion can replace the canonical event when supplied its existing timestamp,
+without retaining a list of duplicate timestamps. The consumer decides what
+information to retain in its policy context. Events before the retention
+horizon are forgotten, so duplicate detection is bounded by retained history.
+
 ## API guide
 
 Implement [`Event`](https://github.com/humacss/contime/blob/main/crates/events/src/types.rs) for the owned event value or shared handle you
@@ -72,6 +80,17 @@ this lets downstream consumers distinguish later changes from the conservative
 clean-history boundary.
 
 ## Benchmark snapshot
+
+
+
+A removed candidate-list prototype measured on 2026-11-06; this historical
+result does not describe the current implementation. It processed 1,000 IDs with two
+timestamps each, selecting the earlier timestamp for each ID. On an arm64 Mac
+(macOS 26.3.1; CPU model unavailable in this environment), Rust 1.90.0 and
+Criterion 0.5.1 measured a median of 206.75 µs (95% confidence interval
+206.27–207.69 µs, 100 samples). Setup was excluded. Command:
+`cargo test --release -p contime-events candidates::benchmarks::benchmark_candidate_insertion_and_selection -- --ignored --nocapture`.
+This is an isolated measurement, not managed-runtime throughput.
 
 Horizon-pruning results recorded on 2026-09-01:
 

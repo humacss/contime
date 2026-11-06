@@ -117,7 +117,8 @@ pub use crate::contime_core as core;
 pub mod module;
 pub mod prelude;
 pub use crate::contime_core::module::{
-    ApplyContext, EventId, EventRef, EventSetBuilder, Module, SnapshotApply, SnapshotCreate, SnapshotEvents, SnapshotId,
+    ApplyContext, DuplicateDecision, Event, EventDuplicatePolicy, EventId, EventRef, EventSetBuilder, Module, SnapshotApply,
+    SnapshotCreate, SnapshotEvents, SnapshotId,
 };
 pub use crate::contime_core::{checkpoints, lanes, AdvanceTime, Input, RejectionReason};
 #[cfg(feature = "runtime")]

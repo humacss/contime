@@ -958,3 +958,98 @@ fn repeated_scheduling_keeps_earliest_time_and_replays_all_accepted_events() {
     assert_eq!(last(8), [5, 6, 4]);
     assert_eq!((worker.status(0).pending_histories, worker.status(0).due_histories), (0, 0));
 }
+
+// A custom policy can move a previously processed event to a later timestamp.
+struct MovingStore {
+    inner: TestStore,
+    affected: u64,
+}
+impl SnapshotStore<Event> for MovingStore {
+    type Config = ();
+    type Context = Context;
+    type Time = u64;
+    type Snapshot = Snapshot;
+    type Rejection = u128;
+    fn create(id: u128, config: &(), horizon: &u64) -> Self {
+        Self { inner: TestStore::create(id, config, horizon), affected: *horizon }
+    }
+    fn insert(&mut self, event: Event, horizon: &u64) -> EventInsert<u128> {
+        if let Some(old) = self.inner.events.iter_mut().find(|old| old.id == event.id) {
+            self.affected = old.time.min(event.time);
+            *old = event;
+            self.inner.processed = self.affected.checked_sub(1);
+            EventInsert { changed: true, rejections: vec![] }
+        } else {
+            self.affected = event.time;
+            self.inner.insert(event, horizon)
+        }
+    }
+    fn event_time(event: &Event) -> u64 {
+        event.time
+    }
+    fn affected_time(&self, _: &u64) -> u64 {
+        self.affected
+    }
+    fn earliest_replay_time(&self) -> Option<u64> {
+        self.inner.earliest_replay_time()
+    }
+    fn process_until(&mut self, time: &u64, context: &mut Context) {
+        self.inner.process_until(time, context)
+    }
+    fn query(&mut self, time: u64, context: &mut Context) -> Option<Box<Snapshot>> {
+        self.inner.query(time, context)
+    }
+    fn query_events(&self, from: &u64, to: &u64) -> Vec<Event> {
+        self.inner.query_events(from, to)
+    }
+    fn forward(&mut self, horizon: &u64, context: &mut Context) {
+        self.inner.forward(horizon, context)
+    }
+    fn prune(&mut self) {
+        self.inner.prune()
+    }
+}
+#[test]
+fn moving_an_applied_event_to_the_future_replays_from_its_old_time() {
+    let (input, receiver) = unbounded();
+    let (steps, observed) = unbounded();
+    let worker = std::thread::spawn(move || {
+        work_messages::<_, MovingStore>(receiver, (), Context { steps, gate: None }, crossbeam_channel::never(), None)
+    });
+    assert_eq!(apply(&input, &[(7, 1, 10)]).recv_timeout(Duration::from_secs(5)), Err(crossbeam_channel::RecvTimeoutError::Disconnected));
+    advance(&input, 15);
+    assert_eq!(receive(&observed).ids, vec![1]);
+    assert_eq!(apply(&input, &[(7, 1, 20)]).recv_timeout(Duration::from_secs(5)), Err(crossbeam_channel::RecvTimeoutError::Disconnected));
+    let replay = receive(&observed);
+    assert!(replay.ids.is_empty());
+    drop(input);
+    worker.join().unwrap();
+}
+
+#[test]
+fn fenced_progress_reports_the_old_time_of_a_moved_event() {
+    let (input, messages) = unbounded();
+    let (steps, _observed) = unbounded();
+    let (reports, report_rx) = unbounded();
+    let registrations = crossbeam_channel::never();
+    let coordination = Coordination {
+        router_count: 1,
+        report: Box::new(move |round, time| reports.send((round, time)).unwrap()),
+        pruned: Box::new(|_| {}),
+    };
+    let mut worker = contime_worker::MessageWorker::<Message, MovingStore>::new(
+        &messages,
+        &registrations,
+        (),
+        Context { steps, gate: None },
+        Some(coordination),
+    );
+    apply(&input, &[(7, 1, 10)]);
+    worker.handle(messages.try_recv().unwrap());
+    worker.handle(Message::Advance(Advance(15, unbounded().0)));
+    assert!(worker.step());
+    apply(&input, &[(7, 1, 20)]);
+    worker.handle(messages.try_recv().unwrap());
+    worker.handle(Message::Fence(1, 0));
+    assert_eq!(report_rx.try_recv().unwrap(), (1, Some(10)));
+}

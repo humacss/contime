@@ -34,6 +34,22 @@ help: you can convert a `u64` to an `i64` and panic if the converted value doesn
 63 | #[derive(ContimeModule.try_into().unwrap())]
    |                       ++++++++++++++++++++
 
+error[E0271]: type mismatch resolving `<AppEventLanes as Event>::Time == u64`
+  --> tests/modules/ui/nested_module_time.rs:63:10
+   |
+63 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ type mismatch resolving `<AppEventLanes as Event>::Time == u64`
+...
+67 | #[derive(ContimeModule)]
+   |          ------------- in this macro invocation
+   |
+note: expected this to be `u64`
+  --> tests/modules/ui/nested_module_time.rs:67:10
+   |
+67 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` which comes from the expansion of the derive macro `ContimeModule` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0308]: mismatched types
   --> tests/modules/ui/nested_module_time.rs:63:10
    |

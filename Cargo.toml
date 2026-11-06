@@ -1,6 +1,6 @@
 [package]
 name = "contime"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.90"
 autobenches = false
@@ -193,3 +193,8 @@ required-features = ["runtime", "time"]
 name = "module_application"
 harness = false
 required-features = ["runtime", "macros", "time"]
+
+[[example]]
+name = "duplicate_policy"
+path = "examples/duplicate_policy.rs"
+required-features = ["macros", "runtime", "time"]

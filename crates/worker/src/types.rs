@@ -362,6 +362,13 @@ pub trait SnapshotStore<I>: Sized {
     fn insert(&mut self, input: I, admission_horizon: &Self::Time) -> EventInsert<Self::Rejection>;
     /// Timestamp of an input, used by the worker to schedule changed histories.
     fn event_time(input: &I) -> Self::Time;
+    /// Earliest time affected by the most recent changed insertion.
+    ///
+    /// A store that moves an existing event must include its old timestamp.
+    /// The default covers ordinary insertion and preserves existing stores.
+    fn affected_time(&self, input_time: &Self::Time) -> Self::Time {
+        input_time.clone()
+    }
     /// Earliest remaining replay application, including any unchanged prefix
     /// reconstructed from the selected checkpoint after invalidation.
     /// `None` means no accepted event remains to replay, including future events.

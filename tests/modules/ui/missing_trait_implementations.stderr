@@ -55,10 +55,154 @@ note: required by a bound in `contime::EventSetBuilder::<S>::event`
    |     pub fn event<E: EventId<Time = S::Time> + 'static>(
    |                     ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `EventSetBuilder::<S>::event`
 
+error[E0599]: the method `is_custom` exists for reference `&EventPolicyType<MissingEvent>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_trait_implementations.rs:32:10
+   |
+ 3 | struct MissingEvent {
+   | ------------------- doesn't satisfy `MissingEvent: EventDuplicatePolicy` or `MissingEvent: EventId`
+...
+32 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ method cannot be called on `&EventPolicyType<MissingEvent>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `MissingEvent: EventDuplicatePolicy`
+           which is required by `&EventPolicyType<MissingEvent>: EventPolicyTypeDispatch`
+           `MissingEvent: EventId`
+           which is required by `&&EventPolicyType<MissingEvent>: EventPolicyTypeDispatch`
+note: the traits `EventDuplicatePolicy` and `EventId` must be implemented
+  --> src/_symlinks/core/src/module.rs
+   |
+   | pub trait EventId: checkpoints::Event {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | pub trait EventDuplicatePolicy: EventId {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0277]: the trait bound `MissingEvent: EventId` is not satisfied
   --> tests/modules/ui/missing_trait_implementations.rs:32:10
    |
 32 | #[derive(ContimeModule)]
    |          ^^^^^^^^^^^^^ the trait `EventId` is not implemented for `MissingEvent`
    |
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `policy_track` exists for reference `&EventPolicyBridge<'_, MissingEvent>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_trait_implementations.rs:32:10
+   |
+ 3 | struct MissingEvent {
+   | ------------------- doesn't satisfy `MissingEvent: EventDuplicatePolicy` or `MissingEvent: EventId`
+...
+32 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ method cannot be called on `&EventPolicyBridge<'_, MissingEvent>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `MissingEvent: EventDuplicatePolicy`
+           which is required by `&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+           `MissingEvent: EventId`
+           which is required by `&&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+note: the traits `EventDuplicatePolicy` and `EventId` must be implemented
+  --> src/_symlinks/core/src/module.rs
+   |
+   | pub trait EventId: checkpoints::Event {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | pub trait EventDuplicatePolicy: EventId {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `policy_context` exists for reference `&EventPolicyBridge<'_, MissingEvent>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_trait_implementations.rs:32:10
+   |
+ 3 | struct MissingEvent {
+   | ------------------- doesn't satisfy `MissingEvent: EventDuplicatePolicy` or `MissingEvent: EventId`
+...
+32 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ method cannot be called on `&EventPolicyBridge<'_, MissingEvent>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `MissingEvent: EventDuplicatePolicy`
+           which is required by `&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+           `MissingEvent: EventId`
+           which is required by `&&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+note: the traits `EventDuplicatePolicy` and `EventId` must be implemented
+  --> src/_symlinks/core/src/module.rs
+   |
+   | pub trait EventId: checkpoints::Event {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | pub trait EventDuplicatePolicy: EventId {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `policy_admit` exists for reference `&EventPolicyBridge<'_, MissingEvent>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_trait_implementations.rs:32:10
+   |
+ 3 | struct MissingEvent {
+   | ------------------- doesn't satisfy `MissingEvent: EventDuplicatePolicy` or `MissingEvent: EventId`
+...
+32 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ method cannot be called on `&EventPolicyBridge<'_, MissingEvent>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `MissingEvent: EventDuplicatePolicy`
+           which is required by `&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+           `MissingEvent: EventId`
+           which is required by `&&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+note: the traits `EventDuplicatePolicy` and `EventId` must be implemented
+  --> src/_symlinks/core/src/module.rs
+   |
+   | pub trait EventId: checkpoints::Event {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | pub trait EventDuplicatePolicy: EventId {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `policy_prune` exists for reference `&EventPolicyBridge<'_, MissingEvent>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_trait_implementations.rs:32:10
+   |
+ 3 | struct MissingEvent {
+   | ------------------- doesn't satisfy `MissingEvent: EventDuplicatePolicy` or `MissingEvent: EventId`
+...
+32 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ method cannot be called on `&EventPolicyBridge<'_, MissingEvent>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `MissingEvent: EventDuplicatePolicy`
+           which is required by `&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+           `MissingEvent: EventId`
+           which is required by `&&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+note: the traits `EventDuplicatePolicy` and `EventId` must be implemented
+  --> src/_symlinks/core/src/module.rs
+   |
+   | pub trait EventId: checkpoints::Event {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | pub trait EventDuplicatePolicy: EventId {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: the method `policy_select` exists for reference `&EventPolicyBridge<'_, MissingEvent>`, but its trait bounds were not satisfied
+  --> tests/modules/ui/missing_trait_implementations.rs:32:10
+   |
+ 3 | struct MissingEvent {
+   | ------------------- doesn't satisfy `MissingEvent: EventDuplicatePolicy` or `MissingEvent: EventId`
+...
+32 | #[derive(ContimeModule)]
+   |          ^^^^^^^^^^^^^ method cannot be called on `&EventPolicyBridge<'_, MissingEvent>` due to unsatisfied trait bounds
+   |
+   = note: the following trait bounds were not satisfied:
+           `MissingEvent: EventDuplicatePolicy`
+           which is required by `&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+           `MissingEvent: EventId`
+           which is required by `&&EventPolicyBridge<'_, MissingEvent>: EventPolicyDispatch<MissingEvent>`
+note: the traits `EventDuplicatePolicy` and `EventId` must be implemented
+  --> src/_symlinks/core/src/module.rs
+   |
+   | pub trait EventId: checkpoints::Event {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | pub trait EventDuplicatePolicy: EventId {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: this error originates in the macro `::contime::__contime_collect_module` (in Nightly builds, run with -Z macro-backtrace for more info)

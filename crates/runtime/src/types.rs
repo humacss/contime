@@ -246,6 +246,7 @@ where
 
 pub(crate) use crate::contime_core::CheckpointStorageConfig;
 
+#[cfg(test)]
 pub(crate) struct CheckpointStorage<I: crate::contime_runtime::ThreadInput, S: crate::contime_checkpoints::Snapshot<Time = I::Time>, W> {
     pub(crate) snapshot_id: u128,
     pub(crate) inner: crate::contime_core::CheckpointStorage<I, S, W>,

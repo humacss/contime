@@ -12,7 +12,7 @@ use crate::contime_api::manual::Message;
 pub use crate::contime_core::InsertionRejection;
 use crate::contime_core::{
     checkpoints::{ApplyEvents, ApplyWrapper, CheckpointConfig, Snapshot},
-    CheckpointStorage, CheckpointStorageConfig, Input, SharedEvent,
+    CheckpointStorageConfig, EventPolicyStorage, Input, SharedEvent,
 };
 pub use crate::contime_manual::{FrameBudget, FrameReport, ManualConTime as WorkerDriver, ProcessError, StopReason};
 use crate::contime_worker::RoutedInput;
@@ -50,7 +50,7 @@ where
     S: Snapshot<Time = I::Time> + ApplyEvents<I> + 'static,
     W: ApplyWrapper<S, I> + 'static,
 {
-    driver: WorkerDriver<Request<I, S>, CheckpointStorage<I, S, W>>,
+    driver: WorkerDriver<Request<I, S>, EventPolicyStorage<I, S, W>>,
     rejections: Rc<RefCell<Vec<InsertionRejection>>>,
 }
 impl<I, S, W> RawManualConTime<I, S, W>

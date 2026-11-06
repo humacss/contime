@@ -5,7 +5,7 @@ use crate::contime_runtime::checkpoints::{ApplyEvents, ApplyWrapper, CheckpointC
 
 use crossbeam_channel::Receiver;
 
-use crate::contime_runtime::types::{CheckpointStorage, CheckpointStorageConfig};
+use crate::contime_runtime::types::CheckpointStorageConfig;
 use crate::contime_runtime::{WorkerMessage, WorkerProcess};
 
 impl<I, S, W> WorkerProcess<I, S, W>
@@ -45,13 +45,10 @@ where
 
     fn run(self, input: Receiver<Self::Input>) -> Result<(), Self::Error> {
         let checkpoint_config = CheckpointStorageConfig { checkpoints: self.checkpoints };
-        crate::contime_worker::work_messages::<WorkerMessage<I, S>, CheckpointStorage<I, S, W>>(
-            input,
-            checkpoint_config,
-            self.wrapper,
-            self.activity,
-            self.coordination,
-        );
+        crate::contime_worker::work_messages::<
+            WorkerMessage<I, S>,
+            crate::contime_runtime::policy_checkpoint::EventPolicyCheckpoint<I, S, W>,
+        >(input, checkpoint_config, self.wrapper, self.activity, self.coordination);
         Ok(())
     }
 }

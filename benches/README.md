@@ -29,6 +29,42 @@ cargo +1.90.0 test --release --workspace --all-features --lib benchmark_ -- --ig
 Run benchmark suites sequentially. Keep compiler, dependencies, features and
 workload settings consistent when comparing measurements.
 
+## Public API counter benchmark — context-based decisions
+
+On 2026-11-06, the 0.2.0 working tree processed approximately **5.34 million
+events/s** on an Apple M3 Pro (macOS 26.3.1, Rust 1.90.0) in
+`core/send_end_to_end/1000_batches/1_events_each`. Criterion reported 187.14 µs
+per 1,000 events (186.26–188.21 µs interval, 20 samples). The workload uses
+unique IDs and the default policy. Event construction and runtime startup are
+excluded; threads were unpinned with normal background activity. Run the command
+in the following record.
+
+## Public API counter benchmark — existing history
+
+On 2026-11-06, the 0.2.0 working tree with duplicate policies using the existing
+history processed approximately **5.58 million events/s** on an Apple M3 Pro
+(macOS 26.3.1, Rust 1.90.0) in `core/send_end_to_end/1000_batches/1_events_each`.
+Criterion reported 179.06 µs per 1,000 events (177.79–180.82 µs interval,
+20 samples). Event construction and runtime startup are excluded; threads were
+unpinned and ordinary background activity was present. Run using the command in
+the following historical record.
+
+## Public API counter benchmark — 2026-11-06
+
+The 0.2.0 working tree processed approximately **4.93 million events/s** on an
+Apple M3 Pro (macOS 26.3.1, Rust 1.90.0) in
+`core/send_end_to_end/1000_batches/1_events_each`, with one worker. Criterion
+reported 202.84 µs per 1,000 events (202.07–203.46 µs interval, 20 samples).
+Event construction and runtime startup are outside timing. Threads were unpinned
+and normal desktop background activity was present.
+
+```sh
+cargo +1.90.0 bench -p contime --bench apply -- core/send_end_to_end/1000_batches/1_events_each
+```
+
+This is a finite workload, not sustained application throughput. The earlier
+0.1.2 result below remains a historical measurement.
+
 ## Public API counter benchmark — 2026-11-04
 
 On an Apple M3 Pro with Rust 1.90.0, the committed 0.1.2 code at `f75043f`

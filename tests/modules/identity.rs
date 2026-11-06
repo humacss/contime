@@ -48,7 +48,7 @@ fn supplied_and_computed_ids_are_returned_verbatim_without_hashing() {
     for id in [0, 42, u128::MAX] {
         let event = Explicit { time: -10, id, payload: Payload(3) };
         assert_eq!(event.event_id(), id);
-        assert_eq!(contime::module::Event::event_id(&event), id);
+        assert_eq!(contime::EventId::event_id(&event), id);
         assert_eq!(event.payload.0, 3);
     }
     let event = Computed { time: 0, sequence: 7 };

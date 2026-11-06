@@ -38,6 +38,7 @@ pub(crate) fn event(input: DeriveInput) -> syn::Result<TokenStream> {
             }
         });
     }
+    let has_identity = field_id.is_some() || options.id.is_some();
     if let Some(member) = field_id {
         let function = syn::parse_quote!(|value| value.#member);
         output.extend(identity::event(&input, &function));
@@ -49,6 +50,21 @@ pub(crate) fn event(input: DeriveInput) -> syn::Result<TokenStream> {
         } else {
             output.extend(identity::event(&input, function));
         }
+    }
+    if has_identity && !options.manual_duplicate_policy {
+        let root = crate::expansion::root();
+        let name = &input.ident;
+        let mut generics = input.generics.clone();
+        generics.make_where_clause().predicates.push(parse_quote!(Self: #root::EventId));
+        let (ig, tg, wc) = generics.split_for_impl();
+        output.extend(quote! {
+            impl #ig #root::EventDuplicatePolicy for #name #tg #wc {
+                type Context = ();
+                const TRACK_ADMISSIONS: bool = false;
+                const CUSTOM_POLICY: bool = false;
+                fn create_context() -> Self::Context {}
+            }
+        });
     }
     Ok(output)
 }
